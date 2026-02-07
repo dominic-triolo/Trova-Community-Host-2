@@ -276,21 +276,24 @@ export async function runPipeline(runId: number): Promise<void> {
       ...(classified.meetup || []),
       ...(classified.eventbrite || []),
       ...(classified.facebook_page || []),
-    ].slice(0, Math.min(50, params.maxDiscoveredUrls));
+    ].slice(0, Math.min(100, params.maxDiscoveredUrls));
 
     let extractedLeads: any[] = [];
 
     if (websiteUrls.length > 0) {
-      const extractBatchSize = 25;
+      const extractBatchSize = 10;
+      const totalBatches = Math.ceil(websiteUrls.length / extractBatchSize);
+
       for (let i = 0; i < websiteUrls.length; i += extractBatchSize) {
         const batch = websiteUrls.slice(i, i + extractBatchSize);
+        const batchNum = Math.floor(i / extractBatchSize) + 1;
         try {
-          await appendAndSave(`Extracting data from ${batch.length} websites (batch ${Math.floor(i / extractBatchSize) + 1})`);
+          await appendAndSave(`Extracting data from ${batch.length} websites (batch ${batchNum}/${totalBatches})`);
 
           const items = await runActorAndGetResults("apify~web-scraper", {
             startUrls: batch.map((u) => ({ url: u })),
-            maxRequestsPerCrawl: params.maxCrawlPagesPerSite * batch.length,
-            maxCrawlingDepth: 1,
+            maxRequestsPerCrawl: batch.length,
+            maxCrawlingDepth: 0,
             pageFunction: `async function pageFunction(context) {
               const { request, log, jQuery } = context;
               const $ = jQuery;
@@ -307,16 +310,19 @@ export async function runPipeline(runId: number): Promise<void> {
                 links: links.slice(0, 100),
               };
             }`,
-          }, 180000);
+          }, 300000);
 
           for (const item of items) {
             extractedLeads.push(item);
           }
 
-          await appendAndSave(`Extracted ${items.length} pages in this batch`);
+          await appendAndSave(`Extracted ${items.length} pages in batch ${batchNum}`);
         } catch (err: any) {
-          await appendAndSave(`[ERROR] Web extraction failed: ${err.message}`);
+          await appendAndSave(`[ERROR] Web extraction batch ${batchNum} failed: ${err.message}`);
         }
+
+        const progress = 35 + Math.round((batchNum / totalBatches) * 20);
+        await appendAndSave(`Progress update`, progress);
       }
     }
 
