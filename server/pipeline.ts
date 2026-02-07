@@ -210,7 +210,7 @@ export async function runPipeline(runId: number): Promise<void> {
       try {
         await appendAndSave(`Running Google Search batch ${batchIdx + 1}/${queryBatches.length} (${batch.length} queries)`);
 
-        const items = await runActorAndGetResults("apify/google-search-scraper", {
+        const items = await runActorAndGetResults("apify~google-search-scraper", {
           queries: batch.join("\n"),
           maxPagesPerQuery: 1,
           resultsPerPage: params.maxGoogleResultsPerQuery,
@@ -287,7 +287,7 @@ export async function runPipeline(runId: number): Promise<void> {
         try {
           await appendAndSave(`Extracting data from ${batch.length} websites (batch ${Math.floor(i / extractBatchSize) + 1})`);
 
-          const items = await runActorAndGetResults("apify/web-scraper", {
+          const items = await runActorAndGetResults("apify~web-scraper", {
             startUrls: batch.map((u) => ({ url: u })),
             maxRequestsPerCrawl: params.maxCrawlPagesPerSite * batch.length,
             maxCrawlingDepth: 1,

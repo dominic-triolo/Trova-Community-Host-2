@@ -1,0 +1,111 @@
+23:46:20] Pipeline started
+
+[23:46:20] Generated 107 search queries
+
+[23:46:20] Running Google Search batch 1/6 (20 queries)
+
+[23:46:21] [ERROR] Google batch 1 failed: Apify start failed (404): {
+
+"error": {
+
+"type": "page-not-found",
+
+"message": "We have bad news: there is no API endpoint at this URL. Did you specify it correctly?"
+
+}
+
+}
+
+[23:46:21] Progress update
+
+[23:46:21] Running Google Search batch 2/6 (20 queries)
+
+[23:46:21] [ERROR] Google batch 2 failed: Apify start failed (404): {
+
+"error": {
+
+"type": "page-not-found",
+
+"message": "We have bad news: there is no API endpoint at this URL. Did you specify it correctly?"
+
+}
+
+}
+
+[23:46:21] Progress update
+
+[23:46:21] Running Google Search batch 3/6 (20 queries)
+
+[23:46:21] [ERROR] Google batch 3 failed: Apify start failed (404): {
+
+"error": {
+
+"type": "page-not-found",
+
+"message": "We have bad news: there is no API endpoint at this URL. Did you specify it correctly?"
+
+}
+
+}
+
+[23:46:21] Progress update
+
+[23:46:21] Running Google Search batch 4/6 (20 queries)
+
+[23:46:21] [ERROR] Google batch 4 failed: Apify start failed (404): {
+
+"error": {
+
+"type": "page-not-found",
+
+"message": "We have bad news: there is no API endpoint at this URL. Did you specify it correctly?"
+
+}
+
+}
+
+[23:46:21] Progress update
+
+[23:46:21] Running Google Search batch 5/6 (20 queries)
+
+[23:46:21] [ERROR] Google batch 5 failed: Apify start failed (404): {
+
+"error": {
+
+"type": "page-not-found",
+
+"message": "We have bad news: there is no API endpoint at this URL. Did you specify it correctly?"
+
+}
+
+}
+
+[23:46:21] Progress update
+
+[23:46:21] Running Google Search batch 6/6 (7 queries)
+
+[23:46:21] [ERROR] Google batch 6 failed: Apify start failed (404): {
+
+"error": {
+
+"type": "page-not-found",
+
+"message": "We have bad news: there is no API endpoint at this URL. Did you specify it correctly?"
+
+}
+
+}
+
+[23:46:21] Progress update
+
+[23:46:21] Discovery complete: 0 URLs stored
+
+[23:46:21] Classification complete
+
+[23:46:21] Extraction complete: 0 pages processed
+
+[23:46:21] Created 0 leads
+
+[23:46:21] Scoring complete: 0 qualified, 0 watchlist
+
+[23:46:21] Pipeline complete! 0 qualified, 0 watchlist leads.
