@@ -1,0 +1,275 @@
+Build a Replit web app called “Trova Community Host Finder” that continuously discovers, enriches, and scores HIGH-POTENTIAL TrovaTrip Host leads from COMMUNITY sources (not just creators). Use Apify Store actors for data collection (no custom scraping), and explicitly EXCLUDE Instagram (we have a separate system). The app should support communities like churches, church groups, run clubs, hiking clubs, social clubs, alumni groups, hobby clubs, coworking communities, professional associations, wellness studios, nonprofits, fraternities/sororities, and membership communities.
+
+# 1) Goal
+Trova wants to partner with community leaders who can host group trips. The system should:
+- Discover community organizations and group leaders + their “owned channels” (website, email list, podcast, YouTube, membership platform, newsletter)
+- Enrich contact data (email, phone, website, LinkedIn) where possible
+- Score each lead against Trova’s Host ICP adapted for communities
+- Export Qualified leads + Watchlist
+- Run incrementally over time (do not cap to 1000; continuously expand)
+- Provide a 1-click UI: “Run Finder” executes discovery -> extraction -> enrichment -> scoring -> export
+
+IMPORTANT:
+- Do NOT use Instagram.
+- Avoid scraping behind logins or bypassing protections. Prefer official APIs and public pages.
+- Use Apify actors as the collection layer.
+
+# 2) Sources to include (Apify actors)
+Use modular “connectors” driven by Apify actors. Implement each connector so it can be toggled on/off in UI.
+
+A) Discovery (required)
+1) apify/google-search-scraper
+   - Use this to discover candidate URLs for community pages and directories.
+   - Generate search queries from:
+     - Community types (church, run club, hiking club, book club, social club, alumni association, nonprofit, membership community, women’s group, men’s group, young adults group, choir, retreat group, small group, bible study, softball league, triathlon club, cycling club, yoga studio community, CrossFit community, coworking community, rotary, lions club, meetup group, alumni chapter, fraternity/sorority alumni, professional association, HOA social committee)
+     - Intent terms: retreat, trip, travel, pilgrimage, mission trip, group trip, annual trip, conference travel, tours, excursions, meetup, events
+     - Owned channel terms: newsletter, “subscribe”, “join”, “membership”, “donate”, “podcast”, “YouTube”, “Discord”, “Slack”, “Patreon”, “Substack”
+   - Target domains and patterns:
+     - site:meetup.com
+     - site:eventbrite.com
+     - site:facebook.com (ONLY public pages; do not rely on login)
+     - site:churchcenter.com (public church pages)
+     - site:subsplash.com (church sites)
+     - site:substack.com
+     - site:patreon.com
+     - site:youtube.com
+     - + general web results for “club”, “association”, “chapter”, “community”
+
+B) Communities + events (high-signal, required)
+2) Meetup connector:
+   - Prefer an Apify actor that extracts Meetup group data from public pages (group name, location, member count, organizer, description, upcoming events).
+   - If you can’t find a dedicated actor, use apify/web-scraper to fetch public Meetup pages discovered via Google Search and extract structured fields.
+3) Eventbrite connector:
+   - Use an Eventbrite actor (or apify/web-scraper on public pages) to extract event host/organizer and event recurrence.
+   - Prioritize organizers with recurring events and community branding.
+
+C) Owned channel enrichment (optional but valuable)
+4) YouTube:
+   - Use a YouTube actor (e.g., a general YouTube scraper) to extract channel “About” data when a YouTube channel URL is discovered.
+5) Substack:
+   - Use a Substack actor to extract newsletter title, description, subscriber cues, and external links.
+6) Patreon (for paid communities):
+   - Use a Patreon actor to extract creator/community membership positioning, tiers, and external links.
+
+D) Website extraction (required fallback for “anything else”)
+7) apify/web-scraper (required)
+   - For any discovered community website URL, crawl 1–3 levels deep (polite) and extract:
+     - Org name, description, location
+     - Contact emails/phones
+     - Leadership/team/staff names if present
+     - Links to newsletters, podcasts, YouTube, donation pages, membership pages, “join” forms
+     - Events pages evidence (calendar, recurring meetups)
+   - Always respect robots and set conservative limits.
+
+E) Social networks (non-Instagram) – optional
+8) Reddit:
+   - If you include Reddit, use a Reddit actor to discover active niche communities (subreddits) and moderators/contact channels, BUT treat as “community leads” not personal leads unless contact info is public.
+9) Facebook Pages (NOT Groups requiring login):
+   - If you include Facebook, only scrape public Pages (not private Groups) via apify/web-scraper from Google-discovered URLs and extract website/email if visible.
+
+NOTE: Do not implement automated extraction that requires logging into Facebook groups.
+
+# 3) Lead definition (what we store)
+A “Lead” can be:
+- An organization/community (e.g., “St. Mark’s Young Adults”, “Denver Run Club”, “City Book Club”, “Rotary Club of X”, “CrossFit ABC Community”, “Alumni Chapter: UCLA in NYC”)
+- A leader/organizer contact (if publicly available), linked to the community
+
+We care about contactability and trip-host potential.
+
+# 4) Tech stack
+- Next.js (App Router) + TypeScript
+- TailwindCSS
+- SQLite with Prisma ORM
+- Apify API integration via HTTP (preferred) or official client
+- Background jobs implemented in-app:
+  - A JobQueue table in SQLite
+  - Worker loop (server-side) to process steps sequentially and update progress
+  - UI polls /api/runs/:id for status and logs
+
+# 5) Data model (Prisma)
+Create Prisma models:
+
+Run:
+- id, status (queued/running/failed/succeeded), progress (0-100), step, logs (text), params (json), startedAt, finishedAt
+
+SourceUrl:
+- id, url, domain, source (google/meetup/eventbrite/web/youtube/substack/patreon/reddit/facebook_page),
+  discoveredAt, fetchedAt, fetchStatus (new/fetched/blocked/robots_disallow/error), runId
+
+Community:
+- id, name, type (church/run_club/social_club/nonprofit/etc.), description, location, website,
+  ownedChannels (json), eventCadence (json), audienceSignals (json),
+  sourceUrls (json), createdAt, updatedAt
+
+Leader:
+- id, name, role, email, phone, linkedin, sourceUrl, communityId
+
+Lead (flattened export-friendly view):
+- id, leadType (community/leader), communityName, communityType, leaderName, leaderRole,
+  location, website, email, phone, linkedin,
+  ownedChannels (json: youtube/substack/podcast/membership/newsletter),
+  monetizationSignals (json: membership/donations/patreon/paid_events),
+  engagementSignals (json: event_count_90d, recurrence, attendance proxies if available),
+  tripFitSignals (json),
+  score (int 0-100), scoreBreakdown (json),
+  status (qualified/watchlist/rejected/do_not_contact),
+  firstSeenAt, lastSeenAt, raw (json)
+
+Dedupe rules:
+- email > website domain > (communityName + location) normalized fuzzy match
+Keep history: update lastSeenAt; do not delete.
+
+# 6) Pipeline steps (1-click)
+Implement a single “Run Finder” action that executes:
+
+Step A — DISCOVER (Google)
+- Build query templates from UI inputs:
+  Inputs:
+  - seedKeywords (list)
+  - seedGeos (optional list)
+  - communityTypes (checkbox list)
+  - intentTerms toggles (retreat/trip/pilgrimage/mission trip/group travel)
+- Generate ~200–1000 queries depending on settings, but enforce budgets:
+  - maxGoogleResultsPerQuery
+  - maxTotalDiscoveredUrlsPerRun
+- Store discovered URLs into SourceUrl.
+
+Step B — CLASSIFY URLS
+- Classify each URL into connector routes:
+  - meetup.com -> Meetup connector
+  - eventbrite.com -> Eventbrite connector
+  - youtube.com -> YouTube connector
+  - substack.com -> Substack connector
+  - patreon.com -> Patreon connector
+  - otherwise -> Website connector via apify/web-scraper
+
+Step C — EXTRACT (Apify actor runs)
+- For each connector, trigger Apify actor runs (batched) and normalize outputs.
+- Save raw payloads and extracted fields to Community/Leader/Lead.
+- If a connector isn’t available for a domain, fall back to apify/web-scraper extraction for that URL.
+
+Step D — ENRICH (optional)
+- If the lead has a website and is missing email:
+  - Try to extract emails from site crawl results.
+  - Optionally integrate Hunter/Clearbit if API keys exist (toggle), but keep it optional.
+- Normalize and validate emails; store “emailSource”.
+
+Step E — SCORE (ICP adapted for communities)
+Implement score 0–100 with a breakdown for these pillars (weights configurable in UI):
+
+P1: Niche & Audience Identity (0–20)
+- Clear identity language: “young adults”, “women’s ministry”, “run club”, “book club”, “alumni chapter”, “members”, “community”
+- Specific niche signals from keywords and description
+
+P2: Trust & Safety / Leadership (0–15)
+- Presence of named leadership/staff/organizer
+- Tone cues from about page (“welcoming”, “inclusive”, “community”, “safe”)
+- Institutional credibility (church/nonprofit/association) as a partial proxy
+
+P3: Engagement & Activity (0–20)
+- Event cadence: upcoming events, recurring weekly/monthly gatherings
+- Event count in last 90 days (if available)
+- Evidence of attendance/RSVPs (Meetup/Eventbrite), or “calendar” pages
+
+P4: Monetization / Ability to mobilize (0–15)
+- Donations, dues, membership, paid events, retreats, conferences
+- “Register”, “tickets”, “membership”, “join”, “dues”, “support”
+
+P5: Owned Channels / Direct reach (0–20)
+- Newsletter signup, email list, podcast, YouTube, membership platform links
+- Platforms like Substack/Patreon/podcast/YT add points
+
+P6: Trip Fit & Travelability (0–10)
+- Travel language: retreat, pilgrimage, mission trip, tour, annual trip, conference
+- Demographic/finance proxies: professionals, alumni, paid memberships, etc.
+
+Penalties:
+- No contact path (no website/email/contact form)
+- Stale/no events evidence
+- Generic org with no clear community identity
+
+Qualification rule:
+- Qualified if score >= threshold AND (email OR contact form URL OR leader contact OR strong owned channel link)
+- Watchlist if score within 10 points of threshold but missing contact info.
+
+Step F — EXPORT
+- Generate:
+  - exports/qualified_leads_<date>.csv
+  - exports/watchlist_<date>.csv
+- Provide download buttons in UI
+- Provide “push to CRM webhook” optional (POST JSON to a configured endpoint)
+
+# 7) UI requirements (simple, 1-click)
+Pages:
+1) Home
+- Inputs:
+  - Seed keywords (textarea, one per line)
+  - Geos (optional)
+  - Community category checkboxes:
+    Churches/Ministries, Run Clubs, Hiking/Outdoors, Social Clubs, Book Clubs, Professional Orgs, Alumni Chapters, Nonprofits, Fitness Studios, Coworking, Other
+  - Toggles for sources:
+    Google Discovery (required)
+    Meetup
+    Eventbrite
+    Website crawl
+    YouTube
+    Substack
+    Patreon
+    Reddit (optional)
+    Facebook Pages (public only, optional)
+  - Threshold slider (default 65)
+  - Budget controls:
+    maxDiscoveredUrls
+    maxGoogleResultsPerQuery
+    maxCrawlPagesPerSite
+  - Button: “Run Finder”
+
+2) Run Status
+- Progress bar, current step, live logs
+- Estimated counts: urls discovered, leads extracted, qualified, watchlist
+
+3) Results
+- Tabs: Qualified / Watchlist / All
+- Table with filters:
+  - communityType, score range, hasEmail, hasNewsletter, hasEvents, hasDonation/membership, source
+- Lead details drawer:
+  - score breakdown by pillar
+  - key extracted signals (events, owned channels, monetization)
+  - source links
+
+# 8) Apify integration details
+- Store APIFY_TOKEN in env.
+- Implement a helper that starts actor runs and waits for completion:
+  - startRun(actorId, input)
+  - poll run status until SUCCEEDED/FAILED (with timeout)
+  - fetch dataset items
+- For apify/web-scraper:
+  - configure startUrls = discovered URLs (batched)
+  - limit depth and max requests
+  - extract emails/phones via regex and also capture links from a tags
+- Always log actor runs and failures into Run.logs.
+
+# 9) Incremental expansion over time
+- Runs should add new SourceUrls and update existing leads.
+- Do not delete leads.
+- Keep “lastSeenAt” updated.
+- Add a “Scheduled runs” section (optional): a button to show a cron string, but actual scheduling can be done outside Replit.
+
+# 10) Deliverables
+- Fully runnable Replit project
+- Prisma schema + migrations
+- Next.js pages and API routes
+- Background job runner using SQLite queue
+- CSV export implementation
+- README with env vars:
+  APIFY_TOKEN
+  (optional) HUNTER_API_KEY, CLEARBIT_API_KEY
+- Include config defaults for community categories and query templates
+- Ensure Instagram is not included anywhere.
+
+Build it cleanly with good separation:
+- /lib/apify.ts (Apify client)
+- /lib/scoring.ts (score + breakdown)
+- /lib/pipeline/*.ts (discover/extract/enrich/export)
+- /app pages + /app/api routes
+- /prisma schema
