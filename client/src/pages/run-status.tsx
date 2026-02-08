@@ -18,6 +18,7 @@ import {
   Award,
   Eye,
   BarChart3,
+  Download,
 } from "lucide-react";
 
 function StatusBadge({ status }: { status: string }) {
@@ -35,6 +36,20 @@ function StatusBadge({ status }: { status: string }) {
       {status.charAt(0).toUpperCase() + status.slice(1)}
     </Badge>
   );
+}
+
+function downloadRunCsv(runId: string, type: string) {
+  const url = `/api/exports/${type}?runId=${runId}`;
+  fetch(url)
+    .then((res) => res.blob())
+    .then((blob) => {
+      const href = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = href;
+      a.download = `run${runId}_${type}_leads.csv`;
+      a.click();
+      URL.revokeObjectURL(href);
+    });
 }
 
 export default function RunStatus() {
@@ -92,18 +107,26 @@ export default function RunStatus() {
               {run.step || "Waiting to start..."}
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <Link href="/">
               <Button variant="outline" size="sm" data-testid="button-back">
                 <ArrowLeft className="w-4 h-4 mr-1" /> New Run
               </Button>
             </Link>
             {run.status === "succeeded" && (
-              <Link href="/results">
-                <Button size="sm" data-testid="button-view-results">
-                  <BarChart3 className="w-4 h-4 mr-1" /> View Results
+              <>
+                <Link href={`/results?runId=${run.id}`}>
+                  <Button size="sm" data-testid="button-view-results">
+                    <BarChart3 className="w-4 h-4 mr-1" /> View Results
+                  </Button>
+                </Link>
+                <Button variant="outline" size="sm" onClick={() => downloadRunCsv(String(run.id), "qualified")} data-testid="button-export-qualified">
+                  <Download className="w-4 h-4 mr-1" /> Qualified CSV
                 </Button>
-              </Link>
+                <Button variant="outline" size="sm" onClick={() => downloadRunCsv(String(run.id), "watchlist")} data-testid="button-export-watchlist">
+                  <Download className="w-4 h-4 mr-1" /> Watchlist CSV
+                </Button>
+              </>
             )}
           </div>
         </div>

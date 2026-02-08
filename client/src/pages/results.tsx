@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useLocation, Link } from "wouter";
 import type { Lead, ScoreBreakdown } from "@shared/schema";
 
 const TYPE_LABELS: Record<string, string> = {
@@ -210,13 +211,23 @@ function LeadDetail({ lead }: { lead: Lead }) {
 }
 
 export default function Results() {
+  const [location] = useLocation();
+  const params = new URLSearchParams(location.split("?")[1] || "");
+  const runId = params.get("runId");
+
   const [tab, setTab] = useState("qualified");
   const [searchQ, setSearchQ] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
 
   const { data: leads, isLoading } = useQuery<Lead[]>({
-    queryKey: ["/api/leads"],
+    queryKey: ["/api/leads", runId],
+    queryFn: async () => {
+      const url = runId ? `/api/leads?runId=${runId}` : "/api/leads";
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("Failed to fetch leads");
+      return res.json();
+    },
   });
 
   const filtered = (leads || []).filter((lead) => {
@@ -236,13 +247,14 @@ export default function Results() {
   });
 
   const downloadCsv = async (type: string) => {
-    const res = await fetch(`/api/exports/${type}`);
+    const exportUrl = runId ? `/api/exports/${type}?runId=${runId}` : `/api/exports/${type}`;
+    const res = await fetch(exportUrl);
     if (!res.ok) return;
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `${type}_leads.csv`;
+    a.download = runId ? `run${runId}_${type}_leads.csv` : `${type}_leads.csv`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -253,13 +265,20 @@ export default function Results() {
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <div className="space-y-1">
             <h1 className="text-2xl font-semibold tracking-tight" data-testid="text-results-title">
-              Results
+              {runId ? `Run #${runId} Results` : "Results"}
             </h1>
-            <p className="text-sm text-muted-foreground">
-              {(leads || []).length} total leads found
-            </p>
+            <div className="flex items-center gap-2 flex-wrap">
+              <p className="text-sm text-muted-foreground">
+                {(leads || []).length} leads found
+              </p>
+              {runId && (
+                <Link href="/results" data-testid="link-show-all-results" className="text-xs text-primary underline-offset-2 hover:underline">
+                  Show all runs
+                </Link>
+              )}
+            </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <Button variant="outline" size="sm" onClick={() => downloadCsv("qualified")} data-testid="button-export-qualified">
               <Download className="w-4 h-4 mr-1" /> Qualified CSV
             </Button>
