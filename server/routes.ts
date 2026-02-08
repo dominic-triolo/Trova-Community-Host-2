@@ -10,6 +10,18 @@ export async function registerRoutes(
   app: Express
 ): Promise<Server> {
 
+  app.post("/api/auth", (req, res) => {
+    const { password } = req.body || {};
+    const sitePassword = process.env.SITE_PASSWORD;
+    if (!sitePassword) {
+      return res.status(500).json({ message: "Site password not configured" });
+    }
+    if (password === sitePassword) {
+      return res.json({ success: true });
+    }
+    return res.status(401).json({ success: false, message: "Incorrect password" });
+  });
+
   app.post("/api/runs", async (req, res) => {
     try {
       const parsed = runParamsSchema.safeParse(req.body);

@@ -18,19 +18,32 @@ import Results from "@/pages/results";
 import NotFound from "@/pages/not-found";
 
 const AUTH_KEY = "trova_authenticated";
-const PASS = "trovadiscovery!";
 
 function LoginGate({ onAuth }: { onAuth: () => void }) {
   const [password, setPassword] = useState("");
   const [error, setError] = useState(false);
+  const [loading, setLoading] = useState(false);
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (password === PASS) {
-      sessionStorage.setItem(AUTH_KEY, "true");
-      onAuth();
-    } else {
+    setLoading(true);
+    setError(false);
+    try {
+      const res = await fetch("/api/auth", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password }),
+      });
+      if (res.ok) {
+        sessionStorage.setItem(AUTH_KEY, "true");
+        onAuth();
+      } else {
+        setError(true);
+      }
+    } catch {
       setError(true);
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -62,8 +75,8 @@ function LoginGate({ onAuth }: { onAuth: () => void }) {
                 Incorrect password
               </p>
             )}
-            <Button data-testid="button-login" type="submit">
-              Unlock
+            <Button data-testid="button-login" type="submit" disabled={loading}>
+              {loading ? "Checking..." : "Unlock"}
             </Button>
           </form>
         </CardContent>
