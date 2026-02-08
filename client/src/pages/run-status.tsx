@@ -38,15 +38,15 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-function downloadRunCsv(runId: string, type: string) {
-  const url = `/api/exports/${type}?runId=${runId}`;
+function downloadRunCsv(runId: string) {
+  const url = `/api/exports/csv?runId=${runId}`;
   fetch(url)
     .then((res) => res.blob())
     .then((blob) => {
       const href = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = href;
-      a.download = `run${runId}_${type}_leads.csv`;
+      a.download = `run${runId}_leads.csv`;
       a.click();
       URL.revokeObjectURL(href);
     });
@@ -120,11 +120,8 @@ export default function RunStatus() {
                     <BarChart3 className="w-4 h-4 mr-1" /> View Results
                   </Button>
                 </Link>
-                <Button variant="outline" size="sm" onClick={() => downloadRunCsv(String(run.id), "qualified")} data-testid="button-export-qualified">
-                  <Download className="w-4 h-4 mr-1" /> Qualified CSV
-                </Button>
-                <Button variant="outline" size="sm" onClick={() => downloadRunCsv(String(run.id), "watchlist")} data-testid="button-export-watchlist">
-                  <Download className="w-4 h-4 mr-1" /> Watchlist CSV
+                <Button variant="outline" size="sm" onClick={() => downloadRunCsv(String(run.id))} data-testid="button-export-csv">
+                  <Download className="w-4 h-4 mr-1" /> Export CSV
                 </Button>
               </>
             )}

@@ -178,8 +178,8 @@ async function scrapeMeetupGroups(
       await appendAndSave(`Meetup: searching ${batch.length} queries...`);
       const items = await runActorAndGetResults("easyapi~meetup-groups-scraper", {
         searchUrls: batch,
-        maxItems: Math.min(maxItems, 30),
-      }, 180000);
+        maxItems: Math.min(maxItems - leads.length, 200),
+      }, 300000);
 
       for (const item of items) {
         if (leads.length >= maxItems) break;
@@ -247,7 +247,7 @@ async function scrapeYouTubeChannels(
       await appendAndSave(`YouTube: searching for "${kw}"...`);
       const items = await runActorAndGetResults("streamers~youtube-scraper", {
         searchKeywords: [kw],
-        maxResults: Math.min(10, maxItems - leads.length),
+        maxResults: Math.min(50, maxItems - leads.length),
         maxResultsShorts: 0,
         maxResultStreams: 0,
       }, 180000);
@@ -404,8 +404,8 @@ async function scrapeEventbriteEvents(
         city: city || "all",
         category: "custom",
         keyword: kw,
-        maxItems: Math.min(20, maxItems - leads.length),
-      }, 180000);
+        maxItems: Math.min(50, maxItems - leads.length),
+      }, 300000);
 
       for (const item of items) {
         if (leads.length >= maxItems) break;
@@ -486,7 +486,7 @@ async function scrapeFacebookGroups(
       const items = await runActorAndGetResults("apify/facebook-groups-scraper", {
         searchType: "groups",
         searchQuery: kw,
-        maxGroups: Math.min(20, maxItems - leads.length),
+        maxGroups: Math.min(50, maxItems - leads.length),
         maxPostsPerGroup: 0,
       }, 180000);
 
@@ -561,7 +561,7 @@ export async function runPipeline(runId: number): Promise<void> {
     const geos = params.seedGeos;
     const enabledSources = params.enabledSources || ["meetup", "youtube", "reddit", "eventbrite", "google"];
     const platformSources = enabledSources.filter((s) => s !== "google");
-    const maxPerPlatform = Math.min(30, Math.floor(params.maxDiscoveredUrls / Math.max(1, platformSources.length)));
+    const maxPerPlatform = Math.floor(params.maxDiscoveredUrls / Math.max(1, platformSources.length));
 
     const platformTasks: { name: string; promise: Promise<PlatformLead[]> }[] = [];
     if (enabledSources.includes("meetup")) {
