@@ -1,6 +1,6 @@
 import type { ScoreBreakdown } from "@shared/schema";
 
-interface ScoringInput {
+export interface ScoringInput {
   name: string;
   description: string;
   type: string;
@@ -14,6 +14,8 @@ interface ScoringInput {
   engagementSignals: Record<string, any>;
   tripFitSignals: Record<string, any>;
   leaderName: string;
+  memberCount?: number;
+  subscriberCount?: number;
   raw: Record<string, any>;
 }
 
@@ -49,6 +51,18 @@ function textScore(text: string, keywords: string[], maxScore: number): number {
   return Math.round(ratio * maxScore);
 }
 
+function audienceSizeScore(memberCount: number, subscriberCount: number): number {
+  const count = Math.max(memberCount, subscriberCount);
+  if (count >= 10000) return 8;
+  if (count >= 5000) return 7;
+  if (count >= 1000) return 6;
+  if (count >= 500) return 5;
+  if (count >= 200) return 4;
+  if (count >= 50) return 3;
+  if (count > 0) return 1;
+  return 0;
+}
+
 export function scoreLead(input: ScoringInput): ScoreBreakdown {
   const fullText = [input.name, input.description, input.type, JSON.stringify(input.raw)].join(" ");
 
@@ -63,10 +77,15 @@ export function scoreLead(input: ScoringInput): ScoreBreakdown {
 
   let engagement = 0;
   const es = input.engagementSignals || {};
-  if (es.event_count_90d && es.event_count_90d > 0) engagement += Math.min(es.event_count_90d * 2, 10);
-  if (es.recurring) engagement += 5;
-  if (es.has_calendar) engagement += 3;
+  if (es.event_count_90d && es.event_count_90d > 0) engagement += Math.min(es.event_count_90d * 2, 8);
+  if (es.recurring) engagement += 4;
+  if (es.has_calendar) engagement += 2;
   if (es.attendance_proxy) engagement += 2;
+
+  const memberCount = input.memberCount || es.member_count || 0;
+  const subscriberCount = input.subscriberCount || es.subscriber_count || 0;
+  const sizeBonus = audienceSizeScore(memberCount, subscriberCount);
+  engagement += sizeBonus;
   engagement = Math.min(engagement, 20);
 
   let monetization = 0;
@@ -92,7 +111,7 @@ export function scoreLead(input: ScoringInput): ScoreBreakdown {
 
   let penalties = 0;
   if (!input.email && !input.website && !input.phone) penalties -= 10;
-  if (engagement === 0 && Object.keys(es).length === 0) penalties -= 5;
+  if (engagement === 0 && Object.keys(es).length === 0 && memberCount === 0) penalties -= 5;
   if (nicheIdentity < 3) penalties -= 5;
 
   const total = Math.max(0, Math.min(100,

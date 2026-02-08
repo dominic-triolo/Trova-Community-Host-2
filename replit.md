@@ -7,7 +7,7 @@ A web application that discovers, enriches, and scores high-potential TrovaTrip 
 - **Frontend**: React + TypeScript + Vite + TailwindCSS + Shadcn UI
 - **Backend**: Express.js
 - **Database**: PostgreSQL with Drizzle ORM
-- **Data Collection**: Apify API (Google Search Scraper, Web Scraper)
+- **Data Collection**: Apify API (platform-specific scrapers + Google Search + Cheerio)
 - **Routing**: wouter (frontend), Express (backend)
 - **State**: TanStack React Query
 
@@ -46,12 +46,23 @@ shared/
 - **leads** - Flattened, scored, export-ready lead records
 
 ## Pipeline Steps
-1. **Discover** - Google Search via Apify to find community URLs
-2. **Classify** - Route URLs to connectors (meetup/eventbrite/website/youtube/etc.)
-3. **Extract** - Crawl and extract data using Apify web-scraper
-4. **Enrich** - Extract emails, phones, owned channels from page content
-5. **Score** - ICP scoring (0-100) with 6 pillars
-6. **Export** - CSV download for qualified/watchlist leads
+1. **Platform Discovery** - Run specialized Apify scrapers in parallel:
+   - Meetup Groups (easyapi~meetup-groups-scraper) - member counts, descriptions, locations
+   - YouTube Channels (streamers~youtube-scraper) - subscribers, monetization, social links
+   - Reddit Communities (trudax~reddit-scraper-lite) - member counts, descriptions
+   - Eventbrite Events (aitorsm~eventbrite) - organizer data, followers, venues
+2. **Google Search** - Discover generic website URLs via Google Search Scraper
+3. **Extract** - Crawl generic websites with Cheerio Scraper (landing pages only)
+4. **Score** - ICP scoring (0-100) with 6 pillars + audience size bonus
+5. **Export** - CSV download for qualified/watchlist leads
+
+## Apify Actors Used
+- `apify~google-search-scraper` - Google Search discovery
+- `apify~cheerio-scraper` - Generic website extraction
+- `easyapi~meetup-groups-scraper` - Meetup group search (structured data)
+- `streamers~youtube-scraper` - YouTube channel/video search (structured data)
+- `trudax~reddit-scraper-lite` - Reddit community search (structured data)
+- `aitorsm~eventbrite` - Eventbrite event/organizer search (structured data)
 
 ## API Endpoints
 - `POST /api/runs` - Start a new pipeline run

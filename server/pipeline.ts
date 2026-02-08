@@ -32,45 +32,33 @@ function appendLog(existing: string, line: string): string {
 function buildGoogleQueries(params: RunParams): string[] {
   const queries: string[] = [];
   const { seedKeywords, seedGeos } = params;
-
   const geos = seedGeos.length > 0 ? seedGeos : [""];
-
-  const sitePrefixes = [
-    "",
-    "site:meetup.com",
-    "site:eventbrite.com",
-  ];
 
   for (const kw of seedKeywords) {
     for (const geo of geos) {
       const geoStr = geo ? ` ${geo}` : "";
       queries.push(`${kw}${geoStr}`);
-
-      for (const site of sitePrefixes.slice(1)) {
-        queries.push(`${site} ${kw}${geoStr}`);
-      }
-
       for (const extra of ["newsletter", "membership", "contact"]) {
         queries.push(`${kw} ${extra}${geoStr}`);
       }
     }
   }
 
-  const unique = [...new Set(queries)];
+  const unique = Array.from(new Set(queries));
   return unique.slice(0, 200);
 }
 
 function extractEmailsFromText(text: string): string[] {
   const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
   const matches = text.match(emailRegex) || [];
-  return [...new Set(matches)].filter(
+  return Array.from(new Set(matches)).filter(
     (e) => !e.endsWith(".png") && !e.endsWith(".jpg") && !e.endsWith(".gif")
   );
 }
 
 function extractPhonesFromText(text: string): string[] {
   const phoneRegex = /(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/g;
-  return [...new Set(text.match(phoneRegex) || [])];
+  return Array.from(new Set(text.match(phoneRegex) || []));
 }
 
 function detectOwnedChannels(text: string, url: string): Record<string, string> {
@@ -142,6 +130,320 @@ function detectCommunityType(text: string): string {
   return "other";
 }
 
+interface PlatformLead {
+  source: string;
+  communityName: string;
+  communityType: string;
+  description: string;
+  location: string;
+  website: string;
+  email: string;
+  phone: string;
+  leaderName: string;
+  memberCount: number;
+  subscriberCount: number;
+  ownedChannels: Record<string, string>;
+  monetizationSignals: Record<string, any>;
+  engagementSignals: Record<string, any>;
+  tripFitSignals: Record<string, any>;
+  raw: Record<string, any>;
+}
+
+async function scrapeMeetupGroups(
+  keywords: string[],
+  geos: string[],
+  maxItems: number,
+  appendAndSave: (msg: string) => Promise<void>,
+): Promise<PlatformLead[]> {
+  const leads: PlatformLead[] = [];
+  const searchUrls: string[] = [];
+
+  const locations = geos.length > 0 ? geos : [""];
+  for (const kw of keywords) {
+    for (const geo of locations) {
+      const locationParam = geo ? `&location=us--${encodeURIComponent(geo)}` : "";
+      searchUrls.push(
+        `https://www.meetup.com/find/?keywords=${encodeURIComponent(kw)}${locationParam}&source=GROUPS&distance=anyDistance`
+      );
+    }
+  }
+
+  const urlBatches: string[][] = [];
+  for (let i = 0; i < searchUrls.length; i += 5) {
+    urlBatches.push(searchUrls.slice(i, i + 5));
+  }
+
+  for (const batch of urlBatches) {
+    try {
+      await appendAndSave(`Meetup: searching ${batch.length} queries...`);
+      const items = await runActorAndGetResults("easyapi~meetup-groups-scraper", {
+        searchUrls: batch,
+        maxItems: Math.min(maxItems, 30),
+      }, 180000);
+
+      for (const item of items) {
+        if (leads.length >= maxItems) break;
+        const memberCount = item.stats?.memberCounts?.all || 0;
+        const description = item.description || "";
+        const fullText = `${item.name || ""} ${description}`;
+        const city = item.city || "";
+        const country = item.country || "";
+        const location = [city, item.state, country].filter(Boolean).join(", ");
+
+        leads.push({
+          source: "meetup",
+          communityName: item.name || "",
+          communityType: detectCommunityType(fullText),
+          description,
+          location,
+          website: item.link || "",
+          email: extractEmailsFromText(description)[0] || "",
+          phone: "",
+          leaderName: "",
+          memberCount,
+          subscriberCount: 0,
+          ownedChannels: { meetup: item.link || "active" },
+          monetizationSignals: detectMonetization(description),
+          engagementSignals: {
+            ...detectEngagement(description),
+            member_count: memberCount,
+            attendance_proxy: memberCount,
+          },
+          tripFitSignals: detectTripFit(description),
+          raw: item,
+        });
+      }
+
+      await appendAndSave(`Meetup: found ${leads.length} groups so far`);
+    } catch (err: any) {
+      await appendAndSave(`[WARN] Meetup batch failed: ${err.message}`);
+    }
+  }
+
+  return leads;
+}
+
+async function scrapeYouTubeChannels(
+  keywords: string[],
+  maxItems: number,
+  appendAndSave: (msg: string) => Promise<void>,
+): Promise<PlatformLead[]> {
+  const leads: PlatformLead[] = [];
+
+  for (const kw of keywords) {
+    if (leads.length >= maxItems) break;
+    try {
+      await appendAndSave(`YouTube: searching for "${kw}"...`);
+      const items = await runActorAndGetResults("streamers~youtube-scraper", {
+        searchKeywords: [kw],
+        maxResults: Math.min(10, maxItems - leads.length),
+        maxResultsShorts: 0,
+        maxResultStreams: 0,
+      }, 180000);
+
+      for (const item of items) {
+        if (leads.length >= maxItems) break;
+        if (!item.channelName && !item.title) continue;
+
+        const channelName = item.channelName || item.title || "";
+        const description = item.channelDescription || item.text || "";
+        const subscribers = item.numberOfSubscribers || 0;
+        const channelUrl = item.channelUrl || item.url || "";
+        const location = item.channelLocation || "";
+
+        const channels: Record<string, string> = { youtube: channelUrl };
+        if (description.toLowerCase().includes("patreon")) channels.patreon = "detected";
+        if (description.toLowerCase().includes("podcast")) channels.podcast = "detected";
+        if (description.toLowerCase().includes("newsletter")) channels.newsletter = "detected";
+        if (item.channelDescriptionLinks) {
+          for (const link of item.channelDescriptionLinks) {
+            const url = (link.url || "").toLowerCase();
+            if (url.includes("discord")) channels.discord = "detected";
+            if (url.includes("patreon")) channels.patreon = url;
+            if (url.includes("instagram")) channels.instagram = "detected";
+            if (url.includes("twitter") || url.includes("x.com")) channels.twitter = "detected";
+          }
+        }
+
+        const monetization: Record<string, any> = {};
+        if (item.isMonetized) monetization.youtube_monetized = true;
+        if (channels.patreon) monetization.patreon = true;
+
+        leads.push({
+          source: "youtube",
+          communityName: channelName,
+          communityType: detectCommunityType(`${channelName} ${description}`),
+          description: description.substring(0, 2000),
+          location,
+          website: channelUrl,
+          email: extractEmailsFromText(description)[0] || "",
+          phone: "",
+          leaderName: channelName,
+          memberCount: 0,
+          subscriberCount: subscribers,
+          ownedChannels: channels,
+          monetizationSignals: { ...monetization, ...detectMonetization(description) },
+          engagementSignals: {
+            subscriber_count: subscribers,
+            total_videos: item.channelTotalVideos || 0,
+            ...(subscribers > 0 ? { recurring: true } : {}),
+          },
+          tripFitSignals: detectTripFit(description),
+          raw: item,
+        });
+      }
+
+      await appendAndSave(`YouTube: found ${leads.length} channels so far`);
+    } catch (err: any) {
+      await appendAndSave(`[WARN] YouTube search failed for "${kw}": ${err.message}`);
+    }
+  }
+
+  return leads;
+}
+
+async function scrapeRedditCommunities(
+  keywords: string[],
+  maxItems: number,
+  appendAndSave: (msg: string) => Promise<void>,
+): Promise<PlatformLead[]> {
+  const leads: PlatformLead[] = [];
+
+  try {
+    await appendAndSave(`Reddit: searching ${keywords.length} keywords...`);
+    const items = await runActorAndGetResults("trudax~reddit-scraper-lite", {
+      searches: keywords,
+      searchCommunities: true,
+      searchPosts: false,
+      searchComments: false,
+      searchUsers: false,
+      maxItems: maxItems,
+      maxCommunitiesCount: maxItems,
+      scrollTimeout: 30,
+      proxy: { useApifyProxy: true },
+    }, 180000);
+
+    for (const item of items) {
+      if (leads.length >= maxItems) break;
+      if (item.dataType !== "community" && item.dataType !== "subreddit" && !item.communityName && !item.name) continue;
+
+      const name = item.name || item.communityName || item.title || "";
+      const description = item.description || item.body || "";
+      const memberCount = item.numberOfMembers || item.members || 0;
+      const url = item.url || `https://www.reddit.com/r/${name.replace("r/", "")}`;
+
+      leads.push({
+        source: "reddit",
+        communityName: name.replace(/^r\//, ""),
+        communityType: detectCommunityType(`${name} ${description}`),
+        description: description.substring(0, 2000),
+        location: "",
+        website: url,
+        email: extractEmailsFromText(description)[0] || "",
+        phone: "",
+        leaderName: "",
+        memberCount,
+        subscriberCount: 0,
+        ownedChannels: { reddit: url },
+        monetizationSignals: detectMonetization(description),
+        engagementSignals: {
+          member_count: memberCount,
+          attendance_proxy: memberCount,
+          ...detectEngagement(description),
+        },
+        tripFitSignals: detectTripFit(description),
+        raw: item,
+      });
+    }
+
+    await appendAndSave(`Reddit: found ${leads.length} communities`);
+  } catch (err: any) {
+    await appendAndSave(`[WARN] Reddit search failed: ${err.message}`);
+  }
+
+  return leads;
+}
+
+async function scrapeEventbriteEvents(
+  keywords: string[],
+  geos: string[],
+  maxItems: number,
+  appendAndSave: (msg: string) => Promise<void>,
+): Promise<PlatformLead[]> {
+  const leads: PlatformLead[] = [];
+
+  for (const kw of keywords) {
+    if (leads.length >= maxItems) break;
+    try {
+      const city = geos.length > 0 ? geos[0] : "";
+      await appendAndSave(`Eventbrite: searching for "${kw}" ${city ? `in ${city}` : ""}...`);
+      const items = await runActorAndGetResults("aitorsm~eventbrite", {
+        country: "US",
+        city: city || "all",
+        category: "custom",
+        keyword: kw,
+        maxItems: Math.min(20, maxItems - leads.length),
+      }, 180000);
+
+      for (const item of items) {
+        if (leads.length >= maxItems) break;
+        const eventName = item.name || item.title || "";
+        const organizer = item.primary_organizer || {};
+        const organizerName = organizer.name || "";
+        const organizerUrl = organizer.url || "";
+        const venue = item.primary_venue || {};
+        const address = venue.address || {};
+        const location = [address.city, address.region, address.country].filter(Boolean).join(", ");
+        const description = item.summary || item.description || "";
+        const tags = (item.tags || []).map((t: any) => t.display_name || "").filter(Boolean);
+        const fullText = `${eventName} ${organizerName} ${description} ${tags.join(" ")}`;
+
+        const channels: Record<string, string> = { eventbrite: organizerUrl || "active" };
+        if (organizer.facebook) channels.facebook = organizer.facebook;
+        if (organizer.twitter) channels.twitter = organizer.twitter;
+        if (organizer.website_url) channels.website = organizer.website_url;
+
+        const monetization: Record<string, any> = {};
+        const ticketInfo = item.ticket_availability || {};
+        if (!ticketInfo.is_free) monetization.paid_events = true;
+        if (organizer.num_upcoming_events > 1) monetization.recurring_events = true;
+
+        const followerCount = organizer.num_followers || 0;
+
+        leads.push({
+          source: "eventbrite",
+          communityName: organizerName || eventName,
+          communityType: detectCommunityType(fullText),
+          description: description.substring(0, 2000),
+          location,
+          website: organizerUrl || item.url || "",
+          email: extractEmailsFromText(description)[0] || "",
+          phone: "",
+          leaderName: organizerName,
+          memberCount: followerCount,
+          subscriberCount: 0,
+          ownedChannels: channels,
+          monetizationSignals: { ...monetization, ...detectMonetization(fullText) },
+          engagementSignals: {
+            has_calendar: true,
+            recurring: true,
+            member_count: followerCount,
+            attendance_proxy: followerCount,
+          },
+          tripFitSignals: detectTripFit(fullText),
+          raw: item,
+        });
+      }
+
+      await appendAndSave(`Eventbrite: found ${leads.length} organizers so far`);
+    } catch (err: any) {
+      await appendAndSave(`[WARN] Eventbrite search failed for "${kw}": ${err.message}`);
+    }
+  }
+
+  return leads;
+}
+
 export async function runPipeline(runId: number): Promise<void> {
   let currentLogs = "";
 
@@ -161,10 +463,35 @@ export async function runPipeline(runId: number): Promise<void> {
     const params = run.params as RunParams;
     await storage.updateRun(runId, { status: "running", startedAt: new Date() });
 
-    await appendAndSave("Pipeline started", 5, "Step A: Discovery (Google Search)");
+    await appendAndSave("Pipeline started", 2, "Step 1: Platform-specific discovery");
+
+    const maxPerPlatform = Math.min(30, Math.floor(params.maxDiscoveredUrls / 4));
+    const keywords = params.seedKeywords;
+    const geos = params.seedGeos;
+
+    const platformResults = await Promise.allSettled([
+      scrapeMeetupGroups(keywords, geos, maxPerPlatform, (msg) => appendAndSave(msg)),
+      scrapeYouTubeChannels(keywords, maxPerPlatform, (msg) => appendAndSave(msg)),
+      scrapeRedditCommunities(keywords, maxPerPlatform, (msg) => appendAndSave(msg)),
+      scrapeEventbriteEvents(keywords, geos, maxPerPlatform, (msg) => appendAndSave(msg)),
+    ]);
+
+    const allPlatformLeads: PlatformLead[] = [];
+    const platformNames = ["Meetup", "YouTube", "Reddit", "Eventbrite"];
+    for (let i = 0; i < platformResults.length; i++) {
+      const result = platformResults[i];
+      if (result.status === "fulfilled") {
+        allPlatformLeads.push(...result.value);
+        await appendAndSave(`${platformNames[i]}: ${result.value.length} results`);
+      } else {
+        await appendAndSave(`[WARN] ${platformNames[i]} failed: ${result.reason?.message || "Unknown error"}`);
+      }
+    }
+
+    await appendAndSave(`Platform discovery complete: ${allPlatformLeads.length} results`, 35, "Step 2: Google Search discovery");
 
     const queries = buildGoogleQueries(params);
-    await appendAndSave(`Generated ${queries.length} search queries`);
+    await appendAndSave(`Generated ${queries.length} Google search queries`);
 
     let allDiscoveredUrls: { url: string; domain: string; source: string }[] = [];
 
@@ -179,7 +506,7 @@ export async function runPipeline(runId: number): Promise<void> {
       if (allDiscoveredUrls.length >= params.maxDiscoveredUrls) break;
 
       try {
-        await appendAndSave(`Running Google Search batch ${batchIdx + 1}/${queryBatches.length} (${batch.length} queries)`);
+        await appendAndSave(`Google Search batch ${batchIdx + 1}/${queryBatches.length} (${batch.length} queries)`);
 
         const items = await runActorAndGetResults("apify~google-search-scraper", {
           queries: batch.join("\n"),
@@ -201,19 +528,23 @@ export async function runPipeline(runId: number): Promise<void> {
             const domain = extractDomain(url);
             if (!domain) continue;
             if (domain.includes("instagram.com")) continue;
+            if (domain.includes("facebook.com")) continue;
+
+            const urlType = classifyUrl(url);
+            if (["meetup", "youtube", "reddit", "eventbrite"].includes(urlType)) continue;
 
             if (!allDiscoveredUrls.some((u) => u.url === url)) {
-              allDiscoveredUrls.push({ url, domain, source: classifyUrl(url) });
+              allDiscoveredUrls.push({ url, domain, source: urlType });
             }
           }
         }
 
-        await appendAndSave(`Batch ${batchIdx + 1} complete. Total URLs: ${allDiscoveredUrls.length}`);
+        await appendAndSave(`Google batch ${batchIdx + 1} complete. Total website URLs: ${allDiscoveredUrls.length}`);
       } catch (err: any) {
         await appendAndSave(`[ERROR] Google batch ${batchIdx + 1} failed: ${err.message}`);
       }
 
-      const progress = 5 + Math.round((batchIdx / queryBatches.length) * 25);
+      const progress = 35 + Math.round((batchIdx / queryBatches.length) * 15);
       await appendAndSave(`Progress update`, progress);
     }
 
@@ -225,31 +556,20 @@ export async function runPipeline(runId: number): Promise<void> {
       runId,
     }));
     await storage.createSourceUrls(sourceUrlsData);
-    await storage.updateRun(runId, { urlsDiscovered: allDiscoveredUrls.length });
+    await storage.updateRun(runId, { urlsDiscovered: allDiscoveredUrls.length + allPlatformLeads.length });
 
-    await appendAndSave(`Discovery complete: ${allDiscoveredUrls.length} URLs stored`, 30, "Step B: Classify URLs");
+    await appendAndSave(
+      `Google discovery complete: ${allDiscoveredUrls.length} website URLs`,
+      50,
+      "Step 3: Extract website data"
+    );
 
-    const classified: Record<string, string[]> = {};
-    for (const u of allDiscoveredUrls) {
-      const cat = u.source;
-      if (!classified[cat]) classified[cat] = [];
-      classified[cat].push(u.url);
-    }
+    const websiteUrls = allDiscoveredUrls
+      .filter((u) => u.source === "website" || u.source === "substack")
+      .map((u) => u.url)
+      .slice(0, Math.min(100, params.maxDiscoveredUrls));
 
-    for (const [cat, urls] of Object.entries(classified)) {
-      await appendAndSave(`${cat}: ${urls.length} URLs`);
-    }
-
-    await appendAndSave("Classification complete", 35, "Step C: Extract data");
-
-    const websiteUrls = [
-      ...(classified.website || []),
-      ...(classified.meetup || []),
-      ...(classified.eventbrite || []),
-      ...(classified.facebook_page || []),
-    ].slice(0, Math.min(100, params.maxDiscoveredUrls));
-
-    let extractedLeads: any[] = [];
+    let extractedPages: any[] = [];
 
     if (websiteUrls.length > 0) {
       const extractBatchSize = 10;
@@ -259,7 +579,7 @@ export async function runPipeline(runId: number): Promise<void> {
         const batch = websiteUrls.slice(i, i + extractBatchSize);
         const batchNum = Math.floor(i / extractBatchSize) + 1;
         try {
-          await appendAndSave(`Extracting data from ${batch.length} websites (batch ${batchNum}/${totalBatches})`);
+          await appendAndSave(`Extracting ${batch.length} websites (batch ${batchNum}/${totalBatches})`);
 
           const items = await runActorAndGetResults("apify~cheerio-scraper", {
             startUrls: batch.map((u) => ({ url: u })),
@@ -283,7 +603,7 @@ export async function runPipeline(runId: number): Promise<void> {
           }, 120000);
 
           for (const item of items) {
-            extractedLeads.push(item);
+            extractedPages.push(item);
           }
 
           await appendAndSave(`Extracted ${items.length} pages in batch ${batchNum}`);
@@ -291,23 +611,112 @@ export async function runPipeline(runId: number): Promise<void> {
           await appendAndSave(`[ERROR] Web extraction batch ${batchNum} failed: ${err.message}`);
         }
 
-        const progress = 35 + Math.round((batchNum / totalBatches) * 20);
+        const progress = 50 + Math.round((batchNum / totalBatches) * 15);
         await appendAndSave(`Progress update`, progress);
       }
     }
 
-    if (classified.youtube && classified.youtube.length > 0) {
-      await appendAndSave(`Skipped ${classified.youtube.length} YouTube URLs (requires JS rendering)`);
-    }
-    if (classified.substack && classified.substack.length > 0) {
-      await appendAndSave(`Found ${classified.substack.length} Substack URLs`);
-    }
-
-    await appendAndSave(`Extraction complete: ${extractedLeads.length} pages processed`, 55, "Step D: Enrich & create leads");
+    await appendAndSave(
+      `Extraction complete: ${extractedPages.length} pages + ${allPlatformLeads.length} platform results`,
+      65,
+      "Step 4: Create & score leads"
+    );
 
     let createdCount = 0;
 
-    for (const item of extractedLeads) {
+    for (const pl of allPlatformLeads) {
+      try {
+        let existingLead = null;
+        if (pl.email) existingLead = await storage.findLeadByEmail(pl.email);
+        if (!existingLead && pl.website) existingLead = await storage.findLeadByWebsite(pl.website);
+        if (!existingLead && pl.communityName) {
+          existingLead = await storage.findLeadByNameAndLocation(pl.communityName, pl.location);
+        }
+
+        if (existingLead) {
+          await storage.updateLead(existingLead.id, { lastSeenAt: new Date() });
+          continue;
+        }
+
+        const community = await storage.createCommunity({
+          name: pl.communityName,
+          type: pl.communityType,
+          description: pl.description,
+          website: pl.website,
+          ownedChannels: pl.ownedChannels,
+          eventCadence: pl.engagementSignals,
+          audienceSignals: pl.tripFitSignals,
+          sourceUrls: [pl.website],
+        });
+
+        let leaderId: number | undefined;
+        if (pl.leaderName) {
+          const leader = await storage.createLeader({
+            name: pl.leaderName,
+            role: "",
+            email: pl.email,
+            phone: pl.phone,
+            sourceUrl: pl.website,
+            communityId: community.id,
+          });
+          leaderId = leader.id;
+        }
+
+        const scoringInput = {
+          name: pl.communityName,
+          description: pl.description,
+          type: pl.communityType,
+          location: pl.location,
+          website: pl.website,
+          email: pl.email,
+          phone: pl.phone,
+          linkedin: "",
+          ownedChannels: pl.ownedChannels,
+          monetizationSignals: pl.monetizationSignals,
+          engagementSignals: pl.engagementSignals,
+          tripFitSignals: pl.tripFitSignals,
+          leaderName: pl.leaderName,
+          memberCount: pl.memberCount,
+          subscriberCount: pl.subscriberCount,
+          raw: pl.raw,
+        };
+
+        const breakdown = scoreLead(scoringInput);
+        const hasContact = !!(pl.email || pl.website || pl.phone);
+        const status = determineStatus(breakdown.total, params.threshold, hasContact);
+
+        const leadData: InsertLead = {
+          leadType: pl.leaderName ? "leader" : "community",
+          communityName: pl.communityName,
+          communityType: pl.communityType,
+          leaderName: pl.leaderName,
+          location: pl.location,
+          website: pl.website,
+          email: pl.email,
+          phone: pl.phone,
+          ownedChannels: pl.ownedChannels,
+          monetizationSignals: pl.monetizationSignals,
+          engagementSignals: pl.engagementSignals,
+          tripFitSignals: pl.tripFitSignals,
+          score: breakdown.total,
+          scoreBreakdown: breakdown,
+          status,
+          raw: pl.raw,
+          runId,
+          communityId: community.id,
+          leaderId,
+        };
+
+        await storage.createLead(leadData);
+        createdCount++;
+      } catch (err: any) {
+        await appendAndSave(`[ERROR] Platform lead processing failed: ${err.message}`);
+      }
+    }
+
+    await appendAndSave(`Created ${createdCount} leads from platforms`, 75);
+
+    for (const item of extractedPages) {
       try {
         const pageText = [item.title || "", item.description || "", item.bodyText || ""].join(" ");
         const url = item.url || "";
@@ -392,6 +801,8 @@ export async function runPipeline(runId: number): Promise<void> {
           engagementSignals: engagement,
           tripFitSignals: tripFit,
           leaderName,
+          memberCount: 0,
+          subscriberCount: 0,
           raw: item,
         };
 
@@ -424,13 +835,13 @@ export async function runPipeline(runId: number): Promise<void> {
         await storage.createLead(leadData);
         createdCount++;
       } catch (err: any) {
-        await appendAndSave(`[ERROR] Lead processing failed: ${err.message}`);
+        await appendAndSave(`[ERROR] Website lead processing failed: ${err.message}`);
       }
     }
 
     await storage.updateRun(runId, { leadsExtracted: createdCount });
 
-    await appendAndSave(`Created ${createdCount} leads`, 80, "Step E: Scoring & qualification");
+    await appendAndSave(`Created ${createdCount} total leads`, 85, "Step 5: Scoring & qualification");
 
     const qualifiedCount = await storage.countLeadsByRunAndStatus(runId, "qualified");
     const watchlistCount = await storage.countLeadsByRunAndStatus(runId, "watchlist");
@@ -440,14 +851,21 @@ export async function runPipeline(runId: number): Promise<void> {
       watchlist: watchlistCount,
     });
 
-    await appendAndSave(`Scoring complete: ${qualifiedCount} qualified, ${watchlistCount} watchlist`, 95, "Step F: Finalizing");
+    await appendAndSave(
+      `Scoring complete: ${qualifiedCount} qualified, ${watchlistCount} watchlist`,
+      95,
+      "Step 6: Finalizing"
+    );
 
     await storage.updateRun(runId, {
       status: "succeeded",
       progress: 100,
       step: "Complete",
       finishedAt: new Date(),
-      logs: appendLog(currentLogs, `Pipeline complete! ${qualifiedCount} qualified, ${watchlistCount} watchlist leads.`),
+      logs: appendLog(
+        currentLogs,
+        `Pipeline complete! ${createdCount} leads (${qualifiedCount} qualified, ${watchlistCount} watchlist). Sources: Meetup, YouTube, Reddit, Eventbrite + Google Search.`
+      ),
     });
 
     log(`Pipeline run ${runId} completed successfully`, "pipeline");
