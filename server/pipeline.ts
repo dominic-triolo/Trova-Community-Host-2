@@ -529,35 +529,60 @@ export async function runPipeline(runId: number): Promise<void> {
 
     await appendAndSave("Pipeline started", 2, "Step 1: Platform-specific discovery");
 
-    const maxPerPlatform = Math.min(30, Math.floor(params.maxDiscoveredUrls / 4));
     const keywords = params.seedKeywords;
     const geos = params.seedGeos;
+    const enabledSources = params.enabledSources || ["meetup", "youtube", "reddit", "eventbrite", "google"];
+    const platformSources = enabledSources.filter((s) => s !== "google");
+    const maxPerPlatform = Math.min(30, Math.floor(params.maxDiscoveredUrls / Math.max(1, platformSources.length)));
 
-    const platformResults = await Promise.allSettled([
-      scrapeMeetupGroups(keywords, geos, maxPerPlatform, (msg) => appendAndSave(msg)),
-      scrapeYouTubeChannels(keywords, maxPerPlatform, (msg) => appendAndSave(msg)),
-      scrapeRedditCommunities(keywords, maxPerPlatform, (msg) => appendAndSave(msg)),
-      scrapeEventbriteEvents(keywords, geos, maxPerPlatform, (msg) => appendAndSave(msg)),
-    ]);
+    const platformTasks: { name: string; promise: Promise<PlatformLead[]> }[] = [];
+    if (enabledSources.includes("meetup")) {
+      platformTasks.push({ name: "Meetup", promise: scrapeMeetupGroups(keywords, geos, maxPerPlatform, (msg) => appendAndSave(msg)) });
+    }
+    if (enabledSources.includes("youtube")) {
+      platformTasks.push({ name: "YouTube", promise: scrapeYouTubeChannels(keywords, maxPerPlatform, (msg) => appendAndSave(msg)) });
+    }
+    if (enabledSources.includes("reddit")) {
+      platformTasks.push({ name: "Reddit", promise: scrapeRedditCommunities(keywords, maxPerPlatform, (msg) => appendAndSave(msg)) });
+    }
+    if (enabledSources.includes("eventbrite")) {
+      platformTasks.push({ name: "Eventbrite", promise: scrapeEventbriteEvents(keywords, geos, maxPerPlatform, (msg) => appendAndSave(msg)) });
+    }
+    if (enabledSources.includes("facebook")) {
+      platformTasks.push({ name: "Facebook", promise: scrapeFacebookGroups(keywords, maxPerPlatform, (msg) => appendAndSave(msg)) });
+    }
+
+    if (platformTasks.length === 0) {
+      await appendAndSave("No platform sources selected, skipping platform discovery");
+    }
+
+    const platformResults = await Promise.allSettled(platformTasks.map((t) => t.promise));
 
     const allPlatformLeads: PlatformLead[] = [];
-    const platformNames = ["Meetup", "YouTube", "Reddit", "Eventbrite"];
     for (let i = 0; i < platformResults.length; i++) {
       const result = platformResults[i];
       if (result.status === "fulfilled") {
         allPlatformLeads.push(...result.value);
-        await appendAndSave(`${platformNames[i]}: ${result.value.length} results`);
+        await appendAndSave(`${platformTasks[i].name}: ${result.value.length} results`);
       } else {
-        await appendAndSave(`[WARN] ${platformNames[i]} failed: ${result.reason?.message || "Unknown error"}`);
+        await appendAndSave(`[WARN] ${platformTasks[i].name} failed: ${result.reason?.message || "Unknown error"}`);
       }
     }
 
     await appendAndSave(`Platform discovery complete: ${allPlatformLeads.length} results`, 35, "Step 2: Google Search discovery");
 
+    let allDiscoveredUrls: { url: string; domain: string; source: string }[] = [];
+
+    if (enabledSources.includes("google")) {
     const queries = buildGoogleQueries(params);
     await appendAndSave(`Generated ${queries.length} Google search queries`);
 
-    let allDiscoveredUrls: { url: string; domain: string; source: string }[] = [];
+    const skipDomains = ["instagram.com"];
+    if (enabledSources.includes("meetup")) skipDomains.push("meetup.com");
+    if (enabledSources.includes("youtube")) skipDomains.push("youtube.com", "youtu.be");
+    if (enabledSources.includes("reddit")) skipDomains.push("reddit.com");
+    if (enabledSources.includes("eventbrite")) skipDomains.push("eventbrite.com");
+    if (enabledSources.includes("facebook")) skipDomains.push("facebook.com");
 
     const batchSize = 20;
     const queryBatches = [];
@@ -591,14 +616,10 @@ export async function runPipeline(runId: number): Promise<void> {
 
             const domain = extractDomain(url);
             if (!domain) continue;
-            if (domain.includes("instagram.com")) continue;
-            if (domain.includes("facebook.com")) continue;
-
-            const urlType = classifyUrl(url);
-            if (["meetup", "youtube", "reddit", "eventbrite"].includes(urlType)) continue;
+            if (skipDomains.some((d) => domain.includes(d))) continue;
 
             if (!allDiscoveredUrls.some((u) => u.url === url)) {
-              allDiscoveredUrls.push({ url, domain, source: urlType });
+              allDiscoveredUrls.push({ url, domain, source: classifyUrl(url) });
             }
           }
         }
@@ -612,6 +633,11 @@ export async function runPipeline(runId: number): Promise<void> {
       await appendAndSave(`Progress update`, progress);
     }
 
+    await appendAndSave(`Google discovery complete: ${allDiscoveredUrls.length} website URLs`);
+    } else {
+      await appendAndSave("Google Search skipped (not selected)");
+    }
+
     const sourceUrlsData: InsertSourceUrl[] = allDiscoveredUrls.map((u) => ({
       url: u.url,
       domain: u.domain,
@@ -619,11 +645,13 @@ export async function runPipeline(runId: number): Promise<void> {
       fetchStatus: "new",
       runId,
     }));
-    await storage.createSourceUrls(sourceUrlsData);
+    if (sourceUrlsData.length > 0) {
+      await storage.createSourceUrls(sourceUrlsData);
+    }
     await storage.updateRun(runId, { urlsDiscovered: allDiscoveredUrls.length + allPlatformLeads.length });
 
     await appendAndSave(
-      `Google discovery complete: ${allDiscoveredUrls.length} website URLs`,
+      `Discovery complete: ${allPlatformLeads.length} platform + ${allDiscoveredUrls.length} website leads`,
       50,
       "Step 3: Extract website data"
     );
