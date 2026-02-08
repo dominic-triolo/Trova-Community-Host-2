@@ -290,13 +290,12 @@ export async function runPipeline(runId: number): Promise<void> {
         try {
           await appendAndSave(`Extracting data from ${batch.length} websites (batch ${batchNum}/${totalBatches})`);
 
-          const items = await runActorAndGetResults("apify~web-scraper", {
+          const items = await runActorAndGetResults("apify~cheerio-scraper", {
             startUrls: batch.map((u) => ({ url: u })),
             maxRequestsPerCrawl: batch.length,
-            maxCrawlingDepth: 0,
+            maxConcurrency: 10,
             pageFunction: `async function pageFunction(context) {
-              const { request, log, jQuery } = context;
-              const $ = jQuery;
+              const { request, $, log } = context;
               const title = $('title').text().trim();
               const description = $('meta[name="description"]').attr('content') || '';
               const bodyText = $('body').text().replace(/\\s+/g, ' ').substring(0, 5000);
@@ -310,7 +309,7 @@ export async function runPipeline(runId: number): Promise<void> {
                 links: links.slice(0, 100),
               };
             }`,
-          }, 300000);
+          }, 120000);
 
           for (const item of items) {
             extractedLeads.push(item);
