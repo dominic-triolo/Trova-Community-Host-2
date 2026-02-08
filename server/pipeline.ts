@@ -444,6 +444,70 @@ async function scrapeEventbriteEvents(
   return leads;
 }
 
+async function scrapeFacebookGroups(
+  keywords: string[],
+  maxItems: number,
+  appendAndSave: (msg: string) => Promise<void>,
+): Promise<PlatformLead[]> {
+  const leads: PlatformLead[] = [];
+
+  for (const kw of keywords) {
+    if (leads.length >= maxItems) break;
+    try {
+      await appendAndSave(`Facebook: searching for "${kw}"...`);
+      const items = await runActorAndGetResults("apify/facebook-groups-scraper", {
+        searchType: "groups",
+        searchQuery: kw,
+        maxGroups: Math.min(20, maxItems - leads.length),
+        maxPostsPerGroup: 0,
+      }, 180000);
+
+      for (const item of items) {
+        if (leads.length >= maxItems) break;
+
+        const groupName = item.name || item.title || "";
+        const description = item.description || item.about || "";
+        const memberCount = item.membersCount || item.members || 0;
+        const url = item.url || item.groupUrl || "";
+        const fullText = `${groupName} ${description}`;
+
+        const channels: Record<string, string> = { facebook: url || "active" };
+        if (description.toLowerCase().includes("discord")) channels.discord = "detected";
+        if (description.toLowerCase().includes("newsletter")) channels.newsletter = "detected";
+
+        leads.push({
+          source: "facebook",
+          communityName: groupName,
+          communityType: detectCommunityType(fullText),
+          description: description.substring(0, 2000),
+          location: item.location || "",
+          website: url,
+          email: extractEmailsFromText(description)[0] || "",
+          phone: "",
+          leaderName: item.adminName || "",
+          memberCount,
+          subscriberCount: 0,
+          ownedChannels: channels,
+          monetizationSignals: detectMonetization(description),
+          engagementSignals: {
+            member_count: memberCount,
+            attendance_proxy: memberCount,
+            ...detectEngagement(description),
+          },
+          tripFitSignals: detectTripFit(fullText),
+          raw: item,
+        });
+      }
+
+      await appendAndSave(`Facebook: found ${leads.length} groups so far`);
+    } catch (err: any) {
+      await appendAndSave(`[WARN] Facebook search failed for "${kw}": ${err.message}`);
+    }
+  }
+
+  return leads;
+}
+
 export async function runPipeline(runId: number): Promise<void> {
   let currentLogs = "";
 
