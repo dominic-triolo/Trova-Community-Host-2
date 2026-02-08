@@ -39,6 +39,8 @@ const MONETIZATION_KEYWORDS = [
 const TRIP_KEYWORDS = [
   "retreat", "pilgrimage", "mission trip", "tour", "annual trip",
   "conference", "travel", "excursion", "group trip", "adventure",
+  "outdoor", "weekend", "gathering", "annual event", "summit",
+  "getaway", "outing", "expedition",
 ];
 
 function textScore(text: string, keywords: string[], maxScore: number): number {
@@ -69,10 +71,13 @@ export function scoreLead(input: ScoringInput): ScoreBreakdown {
   const nicheIdentity = textScore(fullText, NICHE_KEYWORDS, 20);
 
   let trustLeadership = 0;
-  if (input.leaderName) trustLeadership += 5;
-  trustLeadership += textScore(fullText, TRUST_KEYWORDS, 7);
+  if (input.leaderName) trustLeadership += 4;
+  if (input.email) trustLeadership += 3;
+  if (input.phone) trustLeadership += 2;
+  if (input.linkedin) trustLeadership += 2;
+  trustLeadership += textScore(fullText, TRUST_KEYWORDS, 4);
   const institutionalTypes = ["church", "nonprofit", "alumni", "professional"];
-  if (institutionalTypes.includes(input.type)) trustLeadership += 3;
+  if (institutionalTypes.includes(input.type)) trustLeadership += 2;
   trustLeadership = Math.min(trustLeadership, 15);
 
   let engagement = 0;

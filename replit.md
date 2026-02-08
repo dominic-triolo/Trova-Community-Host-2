@@ -53,9 +53,9 @@ shared/
    - Eventbrite Events (aitorsm~eventbrite) - organizer data, followers, venues
    - Facebook Groups (apify/facebook-groups-scraper) - member counts, public groups
 2. **Google Search** - Discover generic website URLs via Google Search Scraper (optional)
-3. **Extract** - Crawl generic websites with Cheerio Scraper (landing pages only)
-4. **Score** - ICP scoring (0-100) with 6 pillars + audience size bonus
-5. **Export** - CSV download for qualified/watchlist leads
+3. **Extract** - Crawl generic websites with Cheerio Scraper (follows contact/about/team subpages to find organizer info)
+4. **Score** - ICP scoring (0-100) with 6 pillars + audience size bonus + contact info bonus
+5. **Export** - CSV download for qualified/watchlist leads (global or per-run)
 
 ## Source Selection
 Users can toggle which platforms to search per run via the "Data Sources" card on the discovery form. Available sources: Meetup, YouTube, Reddit, Eventbrite, Facebook Groups, Google Search + Websites. The `enabledSources` array is stored in RunParams.
@@ -73,8 +73,8 @@ Users can toggle which platforms to search per run via the "Data Sources" card o
 - `POST /api/runs` - Start a new pipeline run
 - `GET /api/runs` - List all runs
 - `GET /api/runs/:id` - Get run status
-- `GET /api/leads` - List all leads
-- `GET /api/exports/:type` - Download CSV (qualified/watchlist)
+- `GET /api/leads` - List all leads (optional `?runId=` filter)
+- `GET /api/exports/:type` - Download CSV (qualified/watchlist, optional `?runId=` filter)
 
 ## Environment Variables
 - `DATABASE_URL` - PostgreSQL connection

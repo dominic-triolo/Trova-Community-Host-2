@@ -38,7 +38,7 @@ function buildGoogleQueries(params: RunParams): string[] {
     for (const geo of geos) {
       const geoStr = geo ? ` ${geo}` : "";
       queries.push(`${kw}${geoStr}`);
-      for (const extra of ["newsletter", "membership", "contact"]) {
+      for (const extra of ["contact us", "about our team", "join our community", "membership"]) {
         queries.push(`${kw} ${extra}${geoStr}`);
       }
     }
@@ -190,6 +190,17 @@ async function scrapeMeetupGroups(
         const country = item.country || "";
         const location = [city, item.state, country].filter(Boolean).join(", ");
 
+        const organizer = item.organizer || item.organizerProfile || {};
+        const organizerName = organizer.name || item.organizerName || "";
+        const organizerBio = organizer.bio || organizer.description || "";
+        const organizerEmail = extractEmailsFromText(`${description} ${organizerBio}`)[0] || "";
+
+        const meetupChannels: Record<string, string> = { meetup: item.link || "active" };
+        const socialsText = `${description} ${organizerBio}`;
+        if (socialsText.includes("instagram.com")) meetupChannels.instagram = "detected";
+        if (socialsText.includes("facebook.com")) meetupChannels.facebook = "detected";
+        if (socialsText.includes("discord")) meetupChannels.discord = "detected";
+
         leads.push({
           source: "meetup",
           communityName: item.name || "",
@@ -197,12 +208,12 @@ async function scrapeMeetupGroups(
           description,
           location,
           website: item.link || "",
-          email: extractEmailsFromText(description)[0] || "",
+          email: organizerEmail,
           phone: "",
-          leaderName: "",
+          leaderName: organizerName,
           memberCount,
           subscriberCount: 0,
-          ownedChannels: { meetup: item.link || "active" },
+          ownedChannels: meetupChannels,
           monetizationSignals: detectMonetization(description),
           engagementSignals: {
             ...detectEngagement(description),
@@ -255,15 +266,26 @@ async function scrapeYouTubeChannels(
         if (description.toLowerCase().includes("patreon")) channels.patreon = "detected";
         if (description.toLowerCase().includes("podcast")) channels.podcast = "detected";
         if (description.toLowerCase().includes("newsletter")) channels.newsletter = "detected";
+
+        let externalWebsite = "";
         if (item.channelDescriptionLinks) {
           for (const link of item.channelDescriptionLinks) {
-            const url = (link.url || "").toLowerCase();
-            if (url.includes("discord")) channels.discord = "detected";
-            if (url.includes("patreon")) channels.patreon = url;
-            if (url.includes("instagram")) channels.instagram = "detected";
-            if (url.includes("twitter") || url.includes("x.com")) channels.twitter = "detected";
+            const linkUrl = (link.url || "").toLowerCase();
+            if (linkUrl.includes("discord")) channels.discord = link.url;
+            else if (linkUrl.includes("patreon")) channels.patreon = link.url;
+            else if (linkUrl.includes("instagram")) channels.instagram = link.url;
+            else if (linkUrl.includes("twitter") || linkUrl.includes("x.com")) channels.twitter = link.url;
+            else if (linkUrl.includes("linkedin.com")) channels.linkedin = link.url;
+            else if (linkUrl.includes("facebook.com")) channels.facebook = link.url;
+            else if (linkUrl.startsWith("http") && !linkUrl.includes("youtube.com") && !linkUrl.includes("google.com")) {
+              if (!externalWebsite) externalWebsite = link.url;
+              channels.website = link.url;
+            }
           }
         }
+
+        const allText = `${description} ${item.channelAbout || ""}`;
+        const businessEmail = item.channelEmail || extractEmailsFromText(allText)[0] || "";
 
         const monetization: Record<string, any> = {};
         if (item.isMonetized) monetization.youtube_monetized = true;
@@ -275,8 +297,8 @@ async function scrapeYouTubeChannels(
           communityType: detectCommunityType(`${channelName} ${description}`),
           description: description.substring(0, 2000),
           location,
-          website: channelUrl,
-          email: extractEmailsFromText(description)[0] || "",
+          website: externalWebsite || channelUrl,
+          email: businessEmail,
           phone: "",
           leaderName: channelName,
           memberCount: 0,
@@ -401,7 +423,13 @@ async function scrapeEventbriteEvents(
         const channels: Record<string, string> = { eventbrite: organizerUrl || "active" };
         if (organizer.facebook) channels.facebook = organizer.facebook;
         if (organizer.twitter) channels.twitter = organizer.twitter;
+        if (organizer.instagram) channels.instagram = organizer.instagram;
         if (organizer.website_url) channels.website = organizer.website_url;
+
+        const organizerContact = organizer.contact || {};
+        const eventbriteEmail = organizerContact.email || extractEmailsFromText(`${description} ${organizer.description || ""}`)[0] || "";
+        const eventbritePhone = organizerContact.phone || extractPhonesFromText(description)[0] || "";
+        const organizerWebsite = organizer.website_url || organizerContact.website || "";
 
         const monetization: Record<string, any> = {};
         const ticketInfo = item.ticket_availability || {};
@@ -416,9 +444,9 @@ async function scrapeEventbriteEvents(
           communityType: detectCommunityType(fullText),
           description: description.substring(0, 2000),
           location,
-          website: organizerUrl || item.url || "",
-          email: extractEmailsFromText(description)[0] || "",
-          phone: "",
+          website: organizerWebsite || organizerUrl || item.url || "",
+          email: eventbriteEmail,
+          phone: eventbritePhone,
           leaderName: organizerName,
           memberCount: followerCount,
           subscriberCount: 0,
@@ -675,30 +703,106 @@ export async function runPipeline(runId: number): Promise<void> {
 
           const items = await runActorAndGetResults("apify~cheerio-scraper", {
             startUrls: batch.map((u) => ({ url: u })),
-            maxRequestsPerCrawl: batch.length,
+            maxRequestsPerCrawl: batch.length * 4,
             maxConcurrency: 10,
+            maxRequestRetries: 1,
+            linkSelector: "a[href]",
+            pseudoUrls: batch.map((baseUrl) => {
+              const base = new URL(baseUrl);
+              return { purl: `${base.origin}/[.*]` };
+            }),
             pageFunction: `async function pageFunction(context) {
-              const { request, $, log } = context;
+              const { request, $, log, enqueueLinks } = context;
               const title = $('title').text().trim();
               const description = $('meta[name="description"]').attr('content') || '';
-              const bodyText = $('body').text().replace(/\\s+/g, ' ').substring(0, 5000);
-              const links = [];
-              $('a[href]').each(function() { links.push($(this).attr('href')); });
+              const bodyText = $('body').text().replace(/\\s+/g, ' ').substring(0, 8000);
+
+              var contactLinks = [];
+              var contactPatterns = /\\b(contact|about|team|staff|leadership|our-team|meet-the-team|organizer|founder|who-we-are|board|people|connect|get-in-touch)\\b/i;
+              $('a[href]').each(function() {
+                var href = $(this).attr('href') || '';
+                var text = $(this).text().toLowerCase().trim();
+                if (contactPatterns.test(href) || contactPatterns.test(text)) {
+                  contactLinks.push(href);
+                }
+              });
+
+              var allLinks = [];
+              $('a[href]').each(function() {
+                var href = $(this).attr('href') || '';
+                if (href.includes('linkedin.com/in/')) allLinks.push(href);
+                if (href.includes('twitter.com/') || href.includes('x.com/')) allLinks.push(href);
+                if (href.includes('instagram.com/')) allLinks.push(href);
+                if (href.includes('facebook.com/')) allLinks.push(href);
+              });
+
+              if (request.userData && request.userData.isSubpage) {
+                return {
+                  url: request.url,
+                  parentUrl: request.userData.parentUrl,
+                  isSubpage: true,
+                  title: title,
+                  description: '',
+                  bodyText: bodyText,
+                  contactLinks: [],
+                  socialLinks: allLinks,
+                };
+              }
+
+              try {
+                var absoluteContactLinks = contactLinks.map(function(link) {
+                  try { return new URL(link, request.url).href; } catch(e) { return ''; }
+                }).filter(function(u) { return u && u.startsWith('http'); });
+
+                var uniqueContactLinks = absoluteContactLinks.filter(function(v, i, a) { return a.indexOf(v) === i; }).slice(0, 3);
+                if (uniqueContactLinks.length > 0) {
+                  await enqueueLinks({
+                    urls: uniqueContactLinks,
+                    userData: { isSubpage: true, parentUrl: request.url },
+                  });
+                }
+              } catch(e) {
+                log.warning('Failed to enqueue subpage links: ' + e.message);
+              }
+
               return {
                 url: request.url,
-                title,
-                description,
-                bodyText,
-                links: links.slice(0, 100),
+                isSubpage: false,
+                title: title,
+                description: description,
+                bodyText: bodyText,
+                contactLinks: contactLinks.slice(0, 10),
+                socialLinks: allLinks,
               };
             }`,
-          }, 120000);
+          }, 180000);
+
+          const mainPages = new Map<string, any>();
+          const subPages: any[] = [];
 
           for (const item of items) {
+            if (item.isSubpage) {
+              subPages.push(item);
+            } else {
+              mainPages.set(item.url, item);
+            }
+          }
+
+          for (const sub of subPages) {
+            const parent = mainPages.get(sub.parentUrl);
+            if (parent) {
+              parent.bodyText = (parent.bodyText || "") + " " + (sub.bodyText || "");
+              if (sub.socialLinks) {
+                parent.socialLinks = [...(parent.socialLinks || []), ...sub.socialLinks];
+              }
+            }
+          }
+
+          for (const item of Array.from(mainPages.values())) {
             extractedPages.push(item);
           }
 
-          await appendAndSave(`Extracted ${items.length} pages in batch ${batchNum}`);
+          await appendAndSave(`Extracted ${mainPages.size} websites + ${subPages.length} subpages in batch ${batchNum}`);
         } catch (err: any) {
           await appendAndSave(`[ERROR] Web extraction batch ${batchNum} failed: ${err.message}`);
         }
@@ -822,6 +926,15 @@ export async function runPipeline(runId: number): Promise<void> {
         const tripFit = detectTripFit(pageText);
         const communityType = detectCommunityType(pageText);
 
+        const socialLinks = (item.socialLinks || []) as string[];
+        const linkedinUrl = socialLinks.find((l: string) => l.includes("linkedin.com/in/")) || "";
+        for (const sl of socialLinks) {
+          if (sl.includes("twitter.com/") || sl.includes("x.com/")) channels.twitter = sl;
+          if (sl.includes("instagram.com/")) channels.instagram = sl;
+          if (sl.includes("facebook.com/")) channels.facebook = sl;
+          if (sl.includes("linkedin.com/in/")) channels.linkedin = sl;
+        }
+
         const name = item.title || domain || "Unknown Community";
         const email = emails[0] || "";
 
@@ -887,7 +1000,7 @@ export async function runPipeline(runId: number): Promise<void> {
           website: url,
           email,
           phone: phones[0] || "",
-          linkedin: "",
+          linkedin: linkedinUrl,
           ownedChannels: channels,
           monetizationSignals: monetization,
           engagementSignals: engagement,
@@ -899,7 +1012,7 @@ export async function runPipeline(runId: number): Promise<void> {
         };
 
         const breakdown = scoreLead(scoringInput);
-        const hasContact = !!(email || url || phones[0]);
+        const hasContact = !!(email || url || phones[0] || linkedinUrl);
         const status = determineStatus(breakdown.total, params.threshold, hasContact);
 
         const leadData: InsertLead = {
@@ -911,6 +1024,7 @@ export async function runPipeline(runId: number): Promise<void> {
           website: url,
           email,
           phone: phones[0] || "",
+          linkedin: linkedinUrl,
           ownedChannels: channels,
           monetizationSignals: monetization,
           engagementSignals: engagement,
