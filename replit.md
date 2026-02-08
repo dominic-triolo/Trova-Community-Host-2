@@ -46,15 +46,19 @@ shared/
 - **leads** - Flattened, scored, export-ready lead records
 
 ## Pipeline Steps
-1. **Platform Discovery** - Run specialized Apify scrapers in parallel:
+1. **Platform Discovery** - Run user-selected Apify scrapers in parallel:
    - Meetup Groups (easyapi~meetup-groups-scraper) - member counts, descriptions, locations
    - YouTube Channels (streamers~youtube-scraper) - subscribers, monetization, social links
    - Reddit Communities (trudax~reddit-scraper-lite) - member counts, descriptions
    - Eventbrite Events (aitorsm~eventbrite) - organizer data, followers, venues
-2. **Google Search** - Discover generic website URLs via Google Search Scraper
+   - Facebook Groups (apify/facebook-groups-scraper) - member counts, public groups
+2. **Google Search** - Discover generic website URLs via Google Search Scraper (optional)
 3. **Extract** - Crawl generic websites with Cheerio Scraper (landing pages only)
 4. **Score** - ICP scoring (0-100) with 6 pillars + audience size bonus
 5. **Export** - CSV download for qualified/watchlist leads
+
+## Source Selection
+Users can toggle which platforms to search per run via the "Data Sources" card on the discovery form. Available sources: Meetup, YouTube, Reddit, Eventbrite, Facebook Groups, Google Search + Websites. The `enabledSources` array is stored in RunParams.
 
 ## Apify Actors Used
 - `apify~google-search-scraper` - Google Search discovery
@@ -63,6 +67,7 @@ shared/
 - `streamers~youtube-scraper` - YouTube channel/video search (structured data)
 - `trudax~reddit-scraper-lite` - Reddit community search (structured data)
 - `aitorsm~eventbrite` - Eventbrite event/organizer search (structured data)
+- `apify/facebook-groups-scraper` - Facebook public group search (structured data)
 
 ## API Endpoints
 - `POST /api/runs` - Start a new pipeline run

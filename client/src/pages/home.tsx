@@ -6,6 +6,7 @@ import { useToast } from "@/hooks/use-toast";
 import {
   RECOMMENDED_KEYWORDS,
   DEFAULT_RUN_PARAMS,
+  AVAILABLE_SOURCES,
   type RunParams,
 } from "@shared/schema";
 import { Card } from "@/components/ui/card";
@@ -16,6 +17,7 @@ import { Slider } from "@/components/ui/slider";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Rocket,
   Search,
@@ -25,6 +27,7 @@ import {
   ArrowRight,
   X,
   Plus,
+  Globe,
 } from "lucide-react";
 
 export default function Home() {
@@ -166,6 +169,43 @@ export default function Home() {
           <p className="text-[11px] text-muted-foreground">One location per line. Leave empty to search everywhere.</p>
         </Card>
 
+        <Card className="p-4 space-y-4">
+          <div className="flex items-center gap-2">
+            <Globe className="w-4 h-4 text-muted-foreground" />
+            <Label className="text-sm font-medium">Data Sources</Label>
+          </div>
+          <p className="text-xs text-muted-foreground">Choose which platforms to search. Each requires a rented Apify actor.</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {AVAILABLE_SOURCES.map((src) => {
+              const isEnabled = params.enabledSources.includes(src.id);
+              return (
+                <label
+                  key={src.id}
+                  className="flex items-start gap-3 p-2.5 rounded-md cursor-pointer hover-elevate"
+                  data-testid={`source-toggle-${src.id}`}
+                >
+                  <Checkbox
+                    checked={isEnabled}
+                    onCheckedChange={(checked: boolean) => {
+                      setParams((p) => ({
+                        ...p,
+                        enabledSources: checked
+                          ? [...p.enabledSources, src.id]
+                          : p.enabledSources.filter((s) => s !== src.id),
+                      }));
+                    }}
+                    className="mt-0.5"
+                  />
+                  <div className="space-y-0.5">
+                    <span className="text-sm font-medium leading-none">{src.label}</span>
+                    <p className="text-[11px] text-muted-foreground">{src.description}</p>
+                  </div>
+                </label>
+              );
+            })}
+          </div>
+        </Card>
+
         <Card className="p-4 space-y-5">
           <div className="flex items-center gap-2">
             <Settings2 className="w-4 h-4 text-muted-foreground" />
@@ -225,6 +265,7 @@ export default function Home() {
           <p className="text-sm text-muted-foreground">
             {params.seedKeywords.length} keyword{params.seedKeywords.length !== 1 ? "s" : ""} selected
             {params.seedGeos.length > 0 && ` across ${params.seedGeos.length} location${params.seedGeos.length !== 1 ? "s" : ""}`}
+            {` using ${params.enabledSources.length} source${params.enabledSources.length !== 1 ? "s" : ""}`}
           </p>
           <Button
             size="lg"
