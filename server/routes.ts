@@ -66,9 +66,15 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/leads", async (_req, res) => {
+  app.get("/api/leads", async (req, res) => {
     try {
-      const leads = await storage.listLeads();
+      const runId = req.query.runId ? parseInt(req.query.runId as string) : null;
+      let leads;
+      if (runId && !isNaN(runId)) {
+        leads = await storage.listLeadsByRun(runId);
+      } else {
+        leads = await storage.listLeads();
+      }
       res.json(leads);
     } catch (err: any) {
       res.status(500).json({ message: err.message });
@@ -78,13 +84,25 @@ export async function registerRoutes(
   app.get("/api/exports/:type", async (req, res) => {
     try {
       const type = req.params.type;
+      const runId = req.query.runId ? parseInt(req.query.runId as string) : null;
       let leads;
-      if (type === "qualified") {
-        leads = await storage.listLeadsByStatus("qualified");
-      } else if (type === "watchlist") {
-        leads = await storage.listLeadsByStatus("watchlist");
+
+      if (runId && !isNaN(runId)) {
+        if (type === "qualified") {
+          leads = await storage.listLeadsByRunAndStatus(runId, "qualified");
+        } else if (type === "watchlist") {
+          leads = await storage.listLeadsByRunAndStatus(runId, "watchlist");
+        } else {
+          leads = await storage.listLeadsByRun(runId);
+        }
       } else {
-        leads = await storage.listLeads();
+        if (type === "qualified") {
+          leads = await storage.listLeadsByStatus("qualified");
+        } else if (type === "watchlist") {
+          leads = await storage.listLeadsByStatus("watchlist");
+        } else {
+          leads = await storage.listLeads();
+        }
       }
 
       const headers = [
@@ -105,8 +123,9 @@ export async function registerRoutes(
       }
 
       const csv = csvRows.join("\n");
+      const filename = runId ? `run${runId}_${type}_leads.csv` : `${type}_leads.csv`;
       res.setHeader("Content-Type", "text/csv");
-      res.setHeader("Content-Disposition", `attachment; filename=${type}_leads.csv`);
+      res.setHeader("Content-Disposition", `attachment; filename=${filename}`);
       res.send(csv);
     } catch (err: any) {
       res.status(500).json({ message: err.message });

@@ -33,6 +33,8 @@ export interface IStorage {
   findLeadByNameAndLocation(name: string, location: string): Promise<Lead | undefined>;
   updateLead(id: number, data: Partial<Lead>): Promise<void>;
   listLeads(): Promise<Lead[]>;
+  listLeadsByRun(runId: number): Promise<Lead[]>;
+  listLeadsByRunAndStatus(runId: number, status: string): Promise<Lead[]>;
   listLeadsByStatus(status: string): Promise<Lead[]>;
   countLeadsByRunAndStatus(runId: number, status: string): Promise<number>;
 }
@@ -132,6 +134,16 @@ export class DatabaseStorage implements IStorage {
 
   async listLeads(): Promise<Lead[]> {
     return db.select().from(leads).orderBy(desc(leads.score));
+  }
+
+  async listLeadsByRun(runId: number): Promise<Lead[]> {
+    return db.select().from(leads).where(eq(leads.runId, runId)).orderBy(desc(leads.score));
+  }
+
+  async listLeadsByRunAndStatus(runId: number, status: string): Promise<Lead[]> {
+    return db.select().from(leads).where(
+      and(eq(leads.runId, runId), eq(leads.status, status))
+    ).orderBy(desc(leads.score));
   }
 
   async listLeadsByStatus(status: string): Promise<Lead[]> {
