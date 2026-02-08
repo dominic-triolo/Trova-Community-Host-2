@@ -81,39 +81,33 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/exports/:type", async (req, res) => {
+  app.get("/api/exports/csv", async (req, res) => {
     try {
-      const type = req.params.type;
       const runId = req.query.runId ? parseInt(req.query.runId as string) : null;
       let leads;
 
       if (runId && !isNaN(runId)) {
-        if (type === "qualified") {
-          leads = await storage.listLeadsByRunAndStatus(runId, "qualified");
-        } else if (type === "watchlist") {
-          leads = await storage.listLeadsByRunAndStatus(runId, "watchlist");
-        } else {
-          leads = await storage.listLeadsByRun(runId);
-        }
+        leads = await storage.listLeadsByRun(runId);
       } else {
-        if (type === "qualified") {
-          leads = await storage.listLeadsByStatus("qualified");
-        } else if (type === "watchlist") {
-          leads = await storage.listLeadsByStatus("watchlist");
-        } else {
-          leads = await storage.listLeads();
-        }
+        leads = await storage.listLeads();
       }
 
       const headers = [
         "communityName", "communityType", "leaderName", "leaderRole",
         "location", "website", "email", "phone", "linkedin",
-        "score", "status", "ownedChannels", "monetizationSignals",
+        "score", "qualified", "discoveredAt",
+        "ownedChannels", "monetizationSignals",
       ];
 
       const csvRows = [headers.join(",")];
       for (const lead of leads) {
         const row = headers.map((h) => {
+          if (h === "qualified") {
+            return lead.status === "qualified" ? "Yes" : "No";
+          }
+          if (h === "discoveredAt") {
+            return `"${lead.firstSeenAt ? new Date(lead.firstSeenAt).toISOString() : ""}"`;
+          }
           const val = (lead as any)[h];
           if (val === null || val === undefined) return "";
           if (typeof val === "object") return `"${JSON.stringify(val).replace(/"/g, '""')}"`;
@@ -123,7 +117,7 @@ export async function registerRoutes(
       }
 
       const csv = csvRows.join("\n");
-      const filename = runId ? `run${runId}_${type}_leads.csv` : `${type}_leads.csv`;
+      const filename = runId ? `run${runId}_leads.csv` : `all_leads.csv`;
       res.setHeader("Content-Type", "text/csv");
       res.setHeader("Content-Disposition", `attachment; filename=${filename}`);
       res.send(csv);

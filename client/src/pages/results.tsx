@@ -246,15 +246,15 @@ export default function Results() {
     return true;
   });
 
-  const downloadCsv = async (type: string) => {
-    const exportUrl = runId ? `/api/exports/${type}?runId=${runId}` : `/api/exports/${type}`;
+  const downloadCsv = async () => {
+    const exportUrl = runId ? `/api/exports/csv?runId=${runId}` : `/api/exports/csv`;
     const res = await fetch(exportUrl);
     if (!res.ok) return;
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = runId ? `run${runId}_${type}_leads.csv` : `${type}_leads.csv`;
+    a.download = runId ? `run${runId}_leads.csv` : `all_leads.csv`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -278,14 +278,9 @@ export default function Results() {
               )}
             </div>
           </div>
-          <div className="flex items-center gap-2 flex-wrap">
-            <Button variant="outline" size="sm" onClick={() => downloadCsv("qualified")} data-testid="button-export-qualified">
-              <Download className="w-4 h-4 mr-1" /> Qualified CSV
-            </Button>
-            <Button variant="outline" size="sm" onClick={() => downloadCsv("watchlist")} data-testid="button-export-watchlist">
-              <Download className="w-4 h-4 mr-1" /> Watchlist CSV
-            </Button>
-          </div>
+          <Button variant="outline" size="sm" onClick={downloadCsv} data-testid="button-export-csv">
+            <Download className="w-4 h-4 mr-1" /> Export CSV
+          </Button>
         </div>
 
         <div className="flex items-center gap-3 flex-wrap">

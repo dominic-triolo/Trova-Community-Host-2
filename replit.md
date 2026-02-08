@@ -74,7 +74,7 @@ Users can toggle which platforms to search per run via the "Data Sources" card o
 - `GET /api/runs` - List all runs
 - `GET /api/runs/:id` - Get run status
 - `GET /api/leads` - List all leads (optional `?runId=` filter)
-- `GET /api/exports/:type` - Download CSV (qualified/watchlist, optional `?runId=` filter)
+- `GET /api/exports/csv` - Download single CSV with all leads, scores, qualified column, and discovery datetime (optional `?runId=` filter)
 
 ## Environment Variables
 - `DATABASE_URL` - PostgreSQL connection
