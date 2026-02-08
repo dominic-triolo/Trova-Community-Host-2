@@ -83,12 +83,24 @@ export const leads = pgTable("leads", {
   leaderId: integer("leader_id").references(() => leaders.id),
 });
 
+export const AVAILABLE_SOURCES = [
+  { id: "meetup", label: "Meetup Groups", description: "Community groups with member counts" },
+  { id: "youtube", label: "YouTube Channels", description: "Channels with subscriber data" },
+  { id: "reddit", label: "Reddit Communities", description: "Subreddits with member counts" },
+  { id: "eventbrite", label: "Eventbrite Events", description: "Event organizers with followers" },
+  { id: "facebook", label: "Facebook Groups", description: "Public groups with member counts" },
+  { id: "google", label: "Google Search + Websites", description: "Generic website discovery" },
+] as const;
+
+export const DEFAULT_ENABLED_SOURCES = ["meetup", "youtube", "reddit", "eventbrite", "google"];
+
 export const runParamsSchema = z.object({
   seedKeywords: z.array(z.string()).min(1, "At least one keyword is required"),
   seedGeos: z.array(z.string()).default([]),
   threshold: z.number().min(0).max(100).default(65),
   maxDiscoveredUrls: z.number().min(1).max(5000).default(200),
   maxGoogleResultsPerQuery: z.number().min(1).max(100).default(10),
+  enabledSources: z.array(z.string()).default(DEFAULT_ENABLED_SOURCES),
 });
 
 export type RunParams = z.infer<typeof runParamsSchema>;
@@ -146,4 +158,5 @@ export const DEFAULT_RUN_PARAMS: RunParams = {
   threshold: 65,
   maxDiscoveredUrls: 200,
   maxGoogleResultsPerQuery: 10,
+  enabledSources: [...DEFAULT_ENABLED_SOURCES],
 };
