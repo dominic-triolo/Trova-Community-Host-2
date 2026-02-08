@@ -186,10 +186,10 @@ export default function Home() {
                 >
                   <Checkbox
                     checked={isEnabled}
-                    onCheckedChange={(checked: boolean) => {
+                    onCheckedChange={(checked) => {
                       setParams((p) => ({
                         ...p,
-                        enabledSources: checked
+                        enabledSources: checked === true
                           ? [...p.enabledSources, src.id]
                           : p.enabledSources.filter((s) => s !== src.id),
                       }));
@@ -270,7 +270,7 @@ export default function Home() {
           <Button
             size="lg"
             onClick={() => runMutation.mutate()}
-            disabled={runMutation.isPending || params.seedKeywords.length === 0}
+            disabled={runMutation.isPending || params.seedKeywords.length === 0 || params.enabledSources.length === 0}
             data-testid="button-run-finder"
             className="gap-2 min-w-[180px]"
           >

@@ -92,7 +92,8 @@ export const AVAILABLE_SOURCES = [
   { id: "google", label: "Google Search + Websites", description: "Generic website discovery" },
 ] as const;
 
-export const DEFAULT_ENABLED_SOURCES = ["meetup", "youtube", "reddit", "eventbrite", "google"];
+export type SourceId = "meetup" | "youtube" | "reddit" | "eventbrite" | "facebook" | "google";
+export const DEFAULT_ENABLED_SOURCES: SourceId[] = ["meetup", "youtube", "reddit", "eventbrite", "google"];
 
 export const runParamsSchema = z.object({
   seedKeywords: z.array(z.string()).min(1, "At least one keyword is required"),
@@ -100,7 +101,7 @@ export const runParamsSchema = z.object({
   threshold: z.number().min(0).max(100).default(65),
   maxDiscoveredUrls: z.number().min(1).max(5000).default(200),
   maxGoogleResultsPerQuery: z.number().min(1).max(100).default(10),
-  enabledSources: z.array(z.string()).default(DEFAULT_ENABLED_SOURCES),
+  enabledSources: z.array(z.enum(["meetup", "youtube", "reddit", "eventbrite", "facebook", "google"])).min(1, "At least one source must be selected").default(DEFAULT_ENABLED_SOURCES),
 });
 
 export type RunParams = z.infer<typeof runParamsSchema>;
