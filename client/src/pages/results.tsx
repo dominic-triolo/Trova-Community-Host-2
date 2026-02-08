@@ -1,7 +1,20 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { Lead, ScoreBreakdown } from "@shared/schema";
-import { COMMUNITY_TYPES } from "@shared/schema";
+
+const TYPE_LABELS: Record<string, string> = {
+  church: "Churches / Ministries",
+  run_club: "Run Clubs",
+  hiking: "Hiking / Outdoors",
+  social_club: "Social Clubs",
+  book_club: "Book Clubs",
+  professional: "Professional Orgs",
+  alumni: "Alumni Chapters",
+  nonprofit: "Nonprofits",
+  fitness: "Fitness Studios",
+  coworking: "Coworking",
+  other: "Other",
+};
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -74,7 +87,7 @@ function LeadDetail({ lead }: { lead: Lead }) {
             {lead.communityName || lead.leaderName || "Unknown"}
           </p>
           <p className="text-xs text-muted-foreground">
-            {COMMUNITY_TYPES.find((ct) => ct.value === lead.communityType)?.label || lead.communityType}
+            {TYPE_LABELS[lead.communityType || ""] || lead.communityType || "Other"}
           </p>
         </div>
         <Badge variant={lead.status === "qualified" ? "default" : lead.status === "watchlist" ? "secondary" : "outline"}>
@@ -273,8 +286,8 @@ export default function Results() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Types</SelectItem>
-              {COMMUNITY_TYPES.map((ct) => (
-                <SelectItem key={ct.value} value={ct.value}>{ct.label}</SelectItem>
+              {Object.entries(TYPE_LABELS).map(([value, label]) => (
+                <SelectItem key={value} value={value}>{label}</SelectItem>
               ))}
             </SelectContent>
           </Select>
@@ -341,7 +354,7 @@ export default function Results() {
                                 </TableCell>
                                 <TableCell>
                                   <Badge variant="secondary" className="text-[10px]">
-                                    {COMMUNITY_TYPES.find((ct) => ct.value === lead.communityType)?.label || lead.communityType || "—"}
+                                    {TYPE_LABELS[lead.communityType || ""] || lead.communityType || "—"}
                                   </Badge>
                                 </TableCell>
                                 <TableCell className="text-sm text-muted-foreground truncate max-w-[150px]">

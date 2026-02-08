@@ -31,57 +31,28 @@ function appendLog(existing: string, line: string): string {
 
 function buildGoogleQueries(params: RunParams): string[] {
   const queries: string[] = [];
-  const { seedKeywords, seedGeos, communityTypes, intentTerms } = params;
+  const { seedKeywords, seedGeos } = params;
 
-  const communityLabels: Record<string, string[]> = {
-    church: ["church", "ministry", "bible study", "young adults church"],
-    run_club: ["run club", "running group", "running community"],
-    hiking: ["hiking club", "hiking group", "outdoor club", "trail group"],
-    social_club: ["social club", "social group", "meetup group"],
-    book_club: ["book club", "reading group"],
-    professional: ["professional association", "professional network", "networking group"],
-    alumni: ["alumni chapter", "alumni group", "alumni association"],
-    nonprofit: ["nonprofit community", "volunteer group", "charity group"],
-    fitness: ["CrossFit community", "yoga studio community", "fitness community"],
-    coworking: ["coworking community", "coworking space members"],
-    other: ["community group", "local club", "social organization"],
-  };
+  const geos = seedGeos.length > 0 ? seedGeos : [""];
 
   const sitePrefixes = [
     "",
     "site:meetup.com",
     "site:eventbrite.com",
-    "site:facebook.com",
-    "site:youtube.com",
-    "site:substack.com",
   ];
 
   for (const kw of seedKeywords) {
-    for (const intent of intentTerms.slice(0, 3)) {
-      const geoStr = seedGeos.length > 0 ? ` ${seedGeos[0]}` : "";
-      queries.push(`${kw} ${intent}${geoStr}`);
-    }
-  }
+    for (const geo of geos) {
+      const geoStr = geo ? ` ${geo}` : "";
+      queries.push(`${kw}${geoStr}`);
 
-  for (const ct of communityTypes) {
-    const labels = communityLabels[ct] || [ct];
-    for (const label of labels.slice(0, 2)) {
-      for (const intent of intentTerms.slice(0, 2)) {
-        const geoStr = seedGeos.length > 0 ? ` ${seedGeos[0]}` : "";
-        queries.push(`${label} ${intent}${geoStr}`);
+      for (const site of sitePrefixes.slice(1)) {
+        queries.push(`${site} ${kw}${geoStr}`);
       }
-      for (const site of sitePrefixes.slice(0, 3)) {
-        const geoStr = seedGeos.length > 0 ? ` ${seedGeos[0]}` : "";
-        const prefix = site ? `${site} ` : "";
-        queries.push(`${prefix}${label} community${geoStr}`);
-      }
-    }
-  }
 
-  for (const kw of seedKeywords) {
-    for (const channelTerm of ["newsletter", "membership", "subscribe", "podcast"]) {
-      const geoStr = seedGeos.length > 0 ? ` ${seedGeos[0]}` : "";
-      queries.push(`${kw} ${channelTerm}${geoStr}`);
+      for (const extra of ["newsletter", "membership", "contact"]) {
+        queries.push(`${kw} ${extra}${geoStr}`);
+      }
     }
   }
 
@@ -325,11 +296,11 @@ export async function runPipeline(runId: number): Promise<void> {
       }
     }
 
-    if (classified.youtube && classified.youtube.length > 0 && params.sources.youtube) {
-      await appendAndSave(`Processing ${classified.youtube.length} YouTube URLs`);
+    if (classified.youtube && classified.youtube.length > 0) {
+      await appendAndSave(`Skipped ${classified.youtube.length} YouTube URLs (requires JS rendering)`);
     }
-    if (classified.substack && classified.substack.length > 0 && params.sources.substack) {
-      await appendAndSave(`Processing ${classified.substack.length} Substack URLs`);
+    if (classified.substack && classified.substack.length > 0) {
+      await appendAndSave(`Found ${classified.substack.length} Substack URLs`);
     }
 
     await appendAndSave(`Extraction complete: ${extractedLeads.length} pages processed`, 55, "Step D: Enrich & create leads");

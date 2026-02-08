@@ -86,28 +86,12 @@ export const leads = pgTable("leads", {
 export const runParamsSchema = z.object({
   seedKeywords: z.array(z.string()).min(1, "At least one keyword is required"),
   seedGeos: z.array(z.string()).default([]),
-  communityTypes: z.array(z.string()).min(1).default(["church", "run_club", "hiking", "social_club"]),
-  intentTerms: z.array(z.string()).min(1).default(["retreat", "trip", "group travel"]),
-  sources: z.record(z.boolean()).default({}),
   threshold: z.number().min(0).max(100).default(65),
   maxDiscoveredUrls: z.number().min(1).max(5000).default(200),
   maxGoogleResultsPerQuery: z.number().min(1).max(100).default(10),
-  maxCrawlPagesPerSite: z.number().min(1).max(10).default(3),
 });
 
 export type RunParams = z.infer<typeof runParamsSchema>;
-
-export interface RunParamsLegacy {
-  seedKeywords: string[];
-  seedGeos: string[];
-  communityTypes: string[];
-  intentTerms: string[];
-  sources: Record<string, boolean>;
-  threshold: number;
-  maxDiscoveredUrls: number;
-  maxGoogleResultsPerQuery: number;
-  maxCrawlPagesPerSite: number;
-}
 
 export interface ScoreBreakdown {
   nicheIdentity: number;
@@ -137,62 +121,29 @@ export type Leader = typeof leaders.$inferSelect;
 export type InsertLead = z.infer<typeof insertLeadSchema>;
 export type Lead = typeof leads.$inferSelect;
 
-export const COMMUNITY_TYPES = [
-  { value: "church", label: "Churches / Ministries" },
-  { value: "run_club", label: "Run Clubs" },
-  { value: "hiking", label: "Hiking / Outdoors" },
-  { value: "social_club", label: "Social Clubs" },
-  { value: "book_club", label: "Book Clubs" },
-  { value: "professional", label: "Professional Orgs" },
-  { value: "alumni", label: "Alumni Chapters" },
-  { value: "nonprofit", label: "Nonprofits" },
-  { value: "fitness", label: "Fitness Studios" },
-  { value: "coworking", label: "Coworking" },
-  { value: "other", label: "Other" },
-] as const;
-
-export const INTENT_TERMS = [
-  "retreat",
-  "trip",
-  "travel",
-  "pilgrimage",
-  "mission trip",
-  "group travel",
-  "conference travel",
-  "tours",
-  "excursions",
-] as const;
-
-export const SOURCE_CONNECTORS = [
-  { key: "google", label: "Google Discovery", required: true },
-  { key: "meetup", label: "Meetup" },
-  { key: "eventbrite", label: "Eventbrite" },
-  { key: "website", label: "Website Crawl" },
-  { key: "youtube", label: "YouTube" },
-  { key: "substack", label: "Substack" },
-  { key: "patreon", label: "Patreon" },
-  { key: "reddit", label: "Reddit" },
-  { key: "facebook_page", label: "Facebook Pages (public)" },
+export const RECOMMENDED_KEYWORDS = [
+  { label: "Church retreat groups", keyword: "church group retreat travel" },
+  { label: "Run clubs", keyword: "run club group travel" },
+  { label: "Hiking clubs", keyword: "hiking club group trip" },
+  { label: "Social clubs", keyword: "social club group outing" },
+  { label: "Book clubs", keyword: "book club retreat weekend" },
+  { label: "Alumni groups", keyword: "alumni chapter group travel" },
+  { label: "Fitness communities", keyword: "CrossFit yoga fitness retreat" },
+  { label: "Professional networks", keyword: "professional association group travel" },
+  { label: "Women's groups", keyword: "women's group retreat travel" },
+  { label: "Volunteer orgs", keyword: "nonprofit volunteer group trip" },
+  { label: "Cycling clubs", keyword: "cycling club group tour" },
+  { label: "Adventure clubs", keyword: "adventure club outdoor trip" },
+  { label: "Photography groups", keyword: "photography club travel workshop" },
+  { label: "Wine & food clubs", keyword: "wine club food tour travel" },
+  { label: "Meetup organizers", keyword: "meetup organizer group travel" },
+  { label: "Coworking retreats", keyword: "coworking retreat remote work trip" },
 ] as const;
 
 export const DEFAULT_RUN_PARAMS: RunParams = {
-  seedKeywords: ["community group", "local club", "church group"],
+  seedKeywords: [],
   seedGeos: [],
-  communityTypes: ["church", "run_club", "hiking", "social_club"],
-  intentTerms: ["retreat", "trip", "group travel"],
-  sources: {
-    google: true,
-    meetup: true,
-    eventbrite: true,
-    website: true,
-    youtube: false,
-    substack: false,
-    patreon: false,
-    reddit: false,
-    facebook_page: false,
-  },
   threshold: 65,
   maxDiscoveredUrls: 200,
   maxGoogleResultsPerQuery: 10,
-  maxCrawlPagesPerSite: 3,
 };

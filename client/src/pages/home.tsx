@@ -4,9 +4,7 @@ import { useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import {
-  COMMUNITY_TYPES,
-  INTENT_TERMS,
-  SOURCE_CONNECTORS,
+  RECOMMENDED_KEYWORDS,
   DEFAULT_RUN_PARAMS,
   type RunParams,
 } from "@shared/schema";
@@ -14,8 +12,6 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Switch } from "@/components/ui/switch";
 import { Slider } from "@/components/ui/slider";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
@@ -24,12 +20,11 @@ import {
   Rocket,
   Search,
   MapPin,
-  Users,
-  Zap,
-  Globe,
   Settings2,
   Loader2,
   ArrowRight,
+  X,
+  Plus,
 } from "lucide-react";
 
 export default function Home() {
@@ -37,6 +32,7 @@ export default function Home() {
   const { toast } = useToast();
 
   const [params, setParams] = useState<RunParams>({ ...DEFAULT_RUN_PARAMS });
+  const [customKeyword, setCustomKeyword] = useState("");
 
   const runMutation = useMutation({
     mutationFn: async () => {
@@ -53,156 +49,127 @@ export default function Home() {
     },
   });
 
-  const updateKeywords = (val: string) => {
-    setParams((p) => ({ ...p, seedKeywords: val.split("\n").filter(Boolean) }));
+  const addKeyword = (keyword: string) => {
+    const trimmed = keyword.trim();
+    if (!trimmed) return;
+    if (params.seedKeywords.includes(trimmed)) return;
+    setParams((p) => ({ ...p, seedKeywords: [...p.seedKeywords, trimmed] }));
   };
+
+  const removeKeyword = (keyword: string) => {
+    setParams((p) => ({ ...p, seedKeywords: p.seedKeywords.filter((k) => k !== keyword) }));
+  };
+
+  const handleCustomKeywordSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    addKeyword(customKeyword);
+    setCustomKeyword("");
+  };
+
   const updateGeos = (val: string) => {
     setParams((p) => ({ ...p, seedGeos: val.split("\n").filter(Boolean) }));
-  };
-  const toggleCommunityType = (type: string) => {
-    setParams((p) => ({
-      ...p,
-      communityTypes: p.communityTypes.includes(type)
-        ? p.communityTypes.filter((t) => t !== type)
-        : [...p.communityTypes, type],
-    }));
-  };
-  const toggleIntent = (term: string) => {
-    setParams((p) => ({
-      ...p,
-      intentTerms: p.intentTerms.includes(term)
-        ? p.intentTerms.filter((t) => t !== term)
-        : [...p.intentTerms, term],
-    }));
-  };
-  const toggleSource = (key: string) => {
-    setParams((p) => ({
-      ...p,
-      sources: { ...p.sources, [key]: !p.sources[key] },
-    }));
   };
 
   return (
     <div className="flex-1 overflow-auto">
-      <div className="max-w-4xl mx-auto p-6 space-y-6">
+      <div className="max-w-3xl mx-auto p-6 space-y-6">
         <div className="space-y-1">
           <h1 className="text-2xl font-semibold tracking-tight" data-testid="text-page-title">
             Community Host Finder
           </h1>
           <p className="text-sm text-muted-foreground">
-            Discover, enrich, and score high-potential community hosts for TrovaTrip.
+            Select keywords to discover high-potential community hosts for TrovaTrip.
           </p>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <Card className="p-4 space-y-3">
-            <div className="flex items-center gap-2">
-              <Search className="w-4 h-4 text-muted-foreground" />
-              <Label className="text-sm font-medium">Seed Keywords</Label>
-            </div>
-            <Textarea
-              data-testid="input-seed-keywords"
-              placeholder={"community group\nlocal club\nchurch group"}
-              value={params.seedKeywords.join("\n")}
-              onChange={(e) => updateKeywords(e.target.value)}
-              className="resize-none text-sm min-h-[100px]"
-            />
-            <p className="text-[11px] text-muted-foreground">One keyword per line</p>
-          </Card>
-
-          <Card className="p-4 space-y-3">
-            <div className="flex items-center gap-2">
-              <MapPin className="w-4 h-4 text-muted-foreground" />
-              <Label className="text-sm font-medium">Geographic Focus (optional)</Label>
-            </div>
-            <Textarea
-              data-testid="input-geos"
-              placeholder={"Denver, CO\nAustin, TX\nNew York, NY"}
-              value={params.seedGeos.join("\n")}
-              onChange={(e) => updateGeos(e.target.value)}
-              className="resize-none text-sm min-h-[100px]"
-            />
-            <p className="text-[11px] text-muted-foreground">One location per line (optional)</p>
-          </Card>
-        </div>
-
         <Card className="p-4 space-y-4">
           <div className="flex items-center gap-2">
-            <Users className="w-4 h-4 text-muted-foreground" />
-            <Label className="text-sm font-medium">Community Categories</Label>
+            <Search className="w-4 h-4 text-muted-foreground" />
+            <Label className="text-sm font-medium">Search Keywords</Label>
           </div>
-          <div className="flex flex-wrap gap-2">
-            {COMMUNITY_TYPES.map((ct) => {
-              const selected = params.communityTypes.includes(ct.value);
-              return (
-                <Button
-                  key={ct.value}
-                  variant={selected ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => toggleCommunityType(ct.value)}
-                  data-testid={`button-category-${ct.value}`}
-                  className="toggle-elevate"
-                >
-                  {ct.label}
-                </Button>
-              );
-            })}
-          </div>
-        </Card>
 
-        <Card className="p-4 space-y-4">
-          <div className="flex items-center gap-2">
-            <Zap className="w-4 h-4 text-muted-foreground" />
-            <Label className="text-sm font-medium">Intent Terms</Label>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {INTENT_TERMS.map((term) => {
-              const selected = params.intentTerms.includes(term);
-              return (
+          {params.seedKeywords.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {params.seedKeywords.map((kw) => (
                 <Badge
-                  key={term}
-                  variant={selected ? "default" : "outline"}
-                  className={`cursor-pointer select-none toggle-elevate ${selected ? "toggle-elevated" : ""}`}
-                  onClick={() => toggleIntent(term)}
-                  data-testid={`badge-intent-${term}`}
+                  key={kw}
+                  variant="secondary"
+                  className="gap-1 cursor-pointer select-none"
+                  data-testid={`badge-keyword-active-${kw.replace(/\s+/g, "-")}`}
                 >
-                  {term}
+                  {kw}
+                  <X
+                    className="w-3 h-3"
+                    onClick={() => removeKeyword(kw)}
+                  />
                 </Badge>
-              );
-            })}
+              ))}
+            </div>
+          )}
+
+          <Separator />
+
+          <div>
+            <p className="text-xs text-muted-foreground mb-2">Click to add recommended searches:</p>
+            <div className="flex flex-wrap gap-1.5">
+              {RECOMMENDED_KEYWORDS.map((rec) => {
+                const isActive = params.seedKeywords.includes(rec.keyword);
+                return (
+                  <Badge
+                    key={rec.keyword}
+                    variant={isActive ? "default" : "outline"}
+                    className={`cursor-pointer select-none toggle-elevate ${isActive ? "toggle-elevated" : ""}`}
+                    onClick={() => isActive ? removeKeyword(rec.keyword) : addKeyword(rec.keyword)}
+                    data-testid={`badge-rec-${rec.keyword.replace(/\s+/g, "-")}`}
+                  >
+                    {rec.label}
+                  </Badge>
+                );
+              })}
+            </div>
           </div>
+
+          <Separator />
+
+          <form onSubmit={handleCustomKeywordSubmit} className="flex gap-2">
+            <Input
+              data-testid="input-custom-keyword"
+              placeholder="Add a custom keyword..."
+              value={customKeyword}
+              onChange={(e) => setCustomKeyword(e.target.value)}
+              className="text-sm"
+            />
+            <Button
+              type="submit"
+              size="icon"
+              variant="outline"
+              disabled={!customKeyword.trim()}
+              data-testid="button-add-keyword"
+            >
+              <Plus className="w-4 h-4" />
+            </Button>
+          </form>
         </Card>
 
-        <Card className="p-4 space-y-4">
+        <Card className="p-4 space-y-3">
           <div className="flex items-center gap-2">
-            <Globe className="w-4 h-4 text-muted-foreground" />
-            <Label className="text-sm font-medium">Data Sources</Label>
+            <MapPin className="w-4 h-4 text-muted-foreground" />
+            <Label className="text-sm font-medium">Locations (optional)</Label>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-            {SOURCE_CONNECTORS.map((src) => (
-              <div
-                key={src.key}
-                className="flex items-center justify-between gap-2 rounded-md border p-3"
-              >
-                <Label className="text-sm cursor-pointer" htmlFor={`source-${src.key}`}>
-                  {src.label}
-                </Label>
-                <Switch
-                  id={`source-${src.key}`}
-                  checked={params.sources[src.key] ?? false}
-                  onCheckedChange={() => toggleSource(src.key)}
-                  disabled={"required" in src && src.required}
-                  data-testid={`switch-source-${src.key}`}
-                />
-              </div>
-            ))}
-          </div>
+          <Textarea
+            data-testid="input-geos"
+            placeholder={"Denver, CO\nAustin, TX\nNew York, NY"}
+            value={params.seedGeos.join("\n")}
+            onChange={(e) => updateGeos(e.target.value)}
+            className="resize-none text-sm min-h-[80px]"
+          />
+          <p className="text-[11px] text-muted-foreground">One location per line. Leave empty to search everywhere.</p>
         </Card>
 
         <Card className="p-4 space-y-5">
           <div className="flex items-center gap-2">
             <Settings2 className="w-4 h-4 text-muted-foreground" />
-            <Label className="text-sm font-medium">Budget & Thresholds</Label>
+            <Label className="text-sm font-medium">Settings</Label>
           </div>
 
           <div className="space-y-4">
@@ -224,9 +191,9 @@ export default function Home() {
 
             <Separator />
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">Max Discovered URLs</Label>
+                <Label className="text-xs text-muted-foreground">Max URLs to Discover</Label>
                 <Input
                   type="number"
                   value={params.maxDiscoveredUrls}
@@ -237,7 +204,7 @@ export default function Home() {
                 />
               </div>
               <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">Results per Query</Label>
+                <Label className="text-xs text-muted-foreground">Results per Search Query</Label>
                 <Input
                   type="number"
                   value={params.maxGoogleResultsPerQuery}
@@ -250,25 +217,15 @@ export default function Home() {
                   data-testid="input-results-per-query"
                 />
               </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">Crawl Pages per Site</Label>
-                <Input
-                  type="number"
-                  value={params.maxCrawlPagesPerSite}
-                  onChange={(e) =>
-                    setParams((p) => ({
-                      ...p,
-                      maxCrawlPagesPerSite: parseInt(e.target.value) || 3,
-                    }))
-                  }
-                  data-testid="input-crawl-pages"
-                />
-              </div>
             </div>
           </div>
         </Card>
 
-        <div className="flex justify-end">
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <p className="text-sm text-muted-foreground">
+            {params.seedKeywords.length} keyword{params.seedKeywords.length !== 1 ? "s" : ""} selected
+            {params.seedGeos.length > 0 && ` across ${params.seedGeos.length} location${params.seedGeos.length !== 1 ? "s" : ""}`}
+          </p>
           <Button
             size="lg"
             onClick={() => runMutation.mutate()}

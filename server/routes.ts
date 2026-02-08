@@ -21,7 +21,6 @@ export async function registerRoutes(
       const params = {
         ...DEFAULT_RUN_PARAMS,
         ...parsed.data,
-        sources: { ...DEFAULT_RUN_PARAMS.sources, ...(parsed.data.sources || {}) },
       };
 
       const run = await storage.createRun({
