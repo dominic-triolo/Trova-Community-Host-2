@@ -1,6 +1,7 @@
 import { storage } from "./storage";
 import { runActorAndGetResults } from "./apify";
 import { scoreLead, determineStatus } from "./scoring";
+import { hunterDomainSearch, extractDomainFromUrl, isEnrichableDomain, isHunterAvailable } from "./hunter";
 import { log } from "./index";
 import type { RunParams, InsertSourceUrl, InsertLead, InsertLeader } from "@shared/schema";
 
@@ -799,8 +800,32 @@ export async function runPipeline(runId: number): Promise<void> {
               const description = $('meta[name="description"]').attr('content') || '';
               const bodyText = $('body').text().replace(/\\s+/g, ' ').substring(0, 8000);
 
+              var mailtoEmails = [];
+              $('a[href^="mailto:"]').each(function() {
+                var href = $(this).attr('href') || '';
+                var email = href.replace('mailto:', '').split('?')[0].trim();
+                if (email && email.includes('@')) mailtoEmails.push(email);
+              });
+
+              var footerText = '';
+              $('footer, .footer, #footer, [role="contentinfo"]').each(function() {
+                footerText += ' ' + $(this).text();
+              });
+
+              var schemaEmails = [];
+              $('script[type="application/ld+json"]').each(function() {
+                try {
+                  var data = JSON.parse($(this).html() || '{}');
+                  if (data.email) schemaEmails.push(data.email);
+                  if (data.contactPoint) {
+                    var cp = Array.isArray(data.contactPoint) ? data.contactPoint : [data.contactPoint];
+                    cp.forEach(function(c) { if (c.email) schemaEmails.push(c.email); });
+                  }
+                } catch(e) {}
+              });
+
               var contactLinks = [];
-              var contactPatterns = /\\b(contact|about|team|staff|leadership|our-team|meet-the-team|organizer|founder|who-we-are|board|people|connect|get-in-touch)\\b/i;
+              var contactPatterns = /\\b(contact|about|team|staff|leadership|our-team|meet-the-team|organizer|founder|who-we-are|board|people|connect|get-in-touch|join|membership|connect-with-us)\\b/i;
               $('a[href]').each(function() {
                 var href = $(this).attr('href') || '';
                 var text = $(this).text().toLowerCase().trim();
@@ -813,6 +838,7 @@ export async function runPipeline(runId: number): Promise<void> {
               $('a[href]').each(function() {
                 var href = $(this).attr('href') || '';
                 if (href.includes('linkedin.com/in/')) allLinks.push(href);
+                if (href.includes('linkedin.com/company/')) allLinks.push(href);
                 if (href.includes('twitter.com/') || href.includes('x.com/')) allLinks.push(href);
                 if (href.includes('instagram.com/')) allLinks.push(href);
                 if (href.includes('facebook.com/')) allLinks.push(href);
@@ -825,9 +851,11 @@ export async function runPipeline(runId: number): Promise<void> {
                   isSubpage: true,
                   title: title,
                   description: '',
-                  bodyText: bodyText,
+                  bodyText: bodyText + ' ' + footerText,
                   contactLinks: [],
                   socialLinks: allLinks,
+                  mailtoEmails: mailtoEmails,
+                  schemaEmails: schemaEmails,
                 };
               }
 
@@ -852,9 +880,11 @@ export async function runPipeline(runId: number): Promise<void> {
                 isSubpage: false,
                 title: title,
                 description: description,
-                bodyText: bodyText,
+                bodyText: bodyText + ' ' + footerText,
                 contactLinks: contactLinks.slice(0, 10),
                 socialLinks: allLinks,
+                mailtoEmails: mailtoEmails,
+                schemaEmails: schemaEmails,
               };
             }`,
           }, 180000);
@@ -1000,7 +1030,10 @@ export async function runPipeline(runId: number): Promise<void> {
         const url = item.url || "";
         const domain = extractDomain(url);
 
-        const emails = extractEmailsFromText(pageText);
+        const mailtoEmails: string[] = (item.mailtoEmails || []) as string[];
+        const schemaEmails: string[] = (item.schemaEmails || []) as string[];
+        const textEmails = extractEmailsFromText(pageText);
+        const emails = [...new Set([...mailtoEmails, ...schemaEmails, ...textEmails])];
         const phones = extractPhonesFromText(pageText);
         const channels = detectOwnedChannels(pageText, url);
         const monetization = detectMonetization(pageText);
@@ -1129,7 +1162,111 @@ export async function runPipeline(runId: number): Promise<void> {
 
     await storage.updateRun(runId, { leadsExtracted: createdCount });
 
-    await appendAndSave(`Created ${createdCount} total leads`, 85, "Step 5: Scoring & qualification");
+    await appendAndSave(`Created ${createdCount} total leads`, 80, "Step 5: Email enrichment (Hunter.io)");
+
+    if (isHunterAvailable()) {
+      const runLeads = await storage.listLeadsByRun(runId);
+      const leadsNeedingEmail = runLeads.filter((l) => !l.email && l.website);
+      const enrichedDomains = new Set<string>();
+      let enrichedCount = 0;
+
+      await appendAndSave(`Hunter.io: enriching ${leadsNeedingEmail.length} leads missing emails...`);
+
+      for (const lead of leadsNeedingEmail) {
+        const domain = extractDomainFromUrl(lead.website || "");
+        if (!domain || !isEnrichableDomain(domain) || enrichedDomains.has(domain)) continue;
+        enrichedDomains.add(domain);
+
+        const result = await hunterDomainSearch(domain);
+        if (!result || result.emails.length === 0) continue;
+
+        const bestEmail = result.emails.sort((a, b) => b.confidence - a.confidence)[0];
+
+        const updateData: Record<string, any> = { email: bestEmail.value };
+
+        if (bestEmail.phone_number && !lead.phone) {
+          updateData.phone = bestEmail.phone_number;
+        }
+        if (bestEmail.linkedin && !lead.linkedin) {
+          updateData.linkedin = bestEmail.linkedin;
+        }
+        if (!lead.leaderName && bestEmail.first_name && bestEmail.last_name) {
+          updateData.leaderName = `${bestEmail.first_name} ${bestEmail.last_name}`;
+        }
+
+        const breakdown = scoreLead({
+          name: lead.communityName || "",
+          description: "",
+          type: lead.communityType || "",
+          location: lead.location || "",
+          website: lead.website || "",
+          email: updateData.email || lead.email || "",
+          phone: updateData.phone || lead.phone || "",
+          linkedin: updateData.linkedin || lead.linkedin || "",
+          ownedChannels: (lead.ownedChannels as Record<string, string>) || {},
+          monetizationSignals: (lead.monetizationSignals as Record<string, any>) || {},
+          engagementSignals: (lead.engagementSignals as Record<string, any>) || {},
+          tripFitSignals: (lead.tripFitSignals as Record<string, any>) || {},
+          leaderName: updateData.leaderName || lead.leaderName || "",
+          memberCount: (lead.engagementSignals as any)?.member_count || 0,
+          subscriberCount: (lead.engagementSignals as any)?.subscriber_count || 0,
+          raw: (lead.raw as Record<string, any>) || {},
+        });
+
+        const hasContact = !!(updateData.email || lead.website || updateData.phone || updateData.linkedin);
+        updateData.score = breakdown.total;
+        updateData.scoreBreakdown = breakdown;
+        updateData.status = determineStatus(breakdown.total, params.threshold, hasContact);
+
+        await storage.updateLead(lead.id, updateData);
+        enrichedCount++;
+
+        for (const otherLead of leadsNeedingEmail) {
+          if (otherLead.id !== lead.id) {
+            const otherDomain = extractDomainFromUrl(otherLead.website || "");
+            if (otherDomain === domain) {
+              const otherUpdate: Record<string, any> = { email: bestEmail.value };
+              if (bestEmail.phone_number && !otherLead.phone) otherUpdate.phone = bestEmail.phone_number;
+
+              const otherBreakdown = scoreLead({
+                name: otherLead.communityName || "",
+                description: "",
+                type: otherLead.communityType || "",
+                location: otherLead.location || "",
+                website: otherLead.website || "",
+                email: otherUpdate.email,
+                phone: otherUpdate.phone || otherLead.phone || "",
+                linkedin: otherLead.linkedin || "",
+                ownedChannels: (otherLead.ownedChannels as Record<string, string>) || {},
+                monetizationSignals: (otherLead.monetizationSignals as Record<string, any>) || {},
+                engagementSignals: (otherLead.engagementSignals as Record<string, any>) || {},
+                tripFitSignals: (otherLead.tripFitSignals as Record<string, any>) || {},
+                leaderName: otherLead.leaderName || "",
+                memberCount: (otherLead.engagementSignals as any)?.member_count || 0,
+                subscriberCount: (otherLead.engagementSignals as any)?.subscriber_count || 0,
+                raw: (otherLead.raw as Record<string, any>) || {},
+              });
+
+              const otherHasContact = !!(otherUpdate.email || otherLead.website || otherUpdate.phone || otherLead.linkedin);
+              otherUpdate.score = otherBreakdown.total;
+              otherUpdate.scoreBreakdown = otherBreakdown;
+              otherUpdate.status = determineStatus(otherBreakdown.total, params.threshold, otherHasContact);
+
+              await storage.updateLead(otherLead.id, otherUpdate);
+              enrichedCount++;
+            }
+          }
+        }
+
+        await new Promise((r) => setTimeout(r, 200));
+      }
+
+      await appendAndSave(`Hunter.io: enriched ${enrichedCount} leads with emails from ${enrichedDomains.size} domains`);
+    } else {
+      await appendAndSave("Hunter.io: skipped (no API key configured)");
+    }
+
+    await appendAndSave("Recalculating scores...", 90, "Step 6: Scoring & qualification");
 
     const qualifiedCount = await storage.countLeadsByRunAndStatus(runId, "qualified");
     const watchlistCount = await storage.countLeadsByRunAndStatus(runId, "watchlist");
@@ -1142,7 +1279,7 @@ export async function runPipeline(runId: number): Promise<void> {
     await appendAndSave(
       `Scoring complete: ${qualifiedCount} qualified, ${watchlistCount} watchlist`,
       95,
-      "Step 6: Finalizing"
+      "Step 7: Finalizing"
     );
 
     await storage.updateRun(runId, {
