@@ -246,10 +246,11 @@ async function scrapeYouTubeChannels(
     try {
       await appendAndSave(`YouTube: searching for "${kw}"...`);
       const items = await runActorAndGetResults("streamers~youtube-scraper", {
-        searchKeywords: [kw],
+        searchQueries: [kw],
         maxResults: Math.min(50, maxItems - leads.length),
         maxResultsShorts: 0,
         maxResultStreams: 0,
+        proxyConfiguration: { useApifyProxy: true },
       }, 180000);
 
       for (const item of items) {
