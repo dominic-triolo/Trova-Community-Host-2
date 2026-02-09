@@ -473,6 +473,83 @@ async function scrapeEventbriteEvents(
   return leads;
 }
 
+async function scrapePatreonCreators(
+  keywords: string[],
+  maxItems: number,
+  appendAndSave: (msg: string) => Promise<void>,
+): Promise<PlatformLead[]> {
+  const leads: PlatformLead[] = [];
+
+  for (const kw of keywords) {
+    if (leads.length >= maxItems) break;
+    try {
+      await appendAndSave(`Patreon: searching for "${kw}"...`);
+      const searchUrl = `https://www.patreon.com/search?q=${encodeURIComponent(kw)}`;
+      const items = await runActorAndGetResults("powerai~patreon-creators-search-scraper", {
+        searchUrl,
+        maxItems: Math.min(50, maxItems - leads.length),
+        proxyConfiguration: { useApifyProxy: true, apifyProxyGroups: ["RESIDENTIAL"] },
+      }, 180000);
+
+      for (const item of items) {
+        if (leads.length >= maxItems) break;
+
+        const creatorName = item.name || item.title || item.fullName || "";
+        if (!creatorName) continue;
+        const description = item.description || item.about || item.summary || "";
+        const patronCount = item.patronCount || item.memberCount || item.patrons || 0;
+        const url = item.url || item.profileUrl || "";
+        const fullText = `${creatorName} ${description}`;
+
+        const channels: Record<string, string> = { patreon: url || "active" };
+        const socialsText = `${description} ${JSON.stringify(item.socialLinks || item.socials || {})}`;
+        if (socialsText.includes("youtube.com")) channels.youtube = "detected";
+        if (socialsText.includes("instagram.com")) channels.instagram = "detected";
+        if (socialsText.includes("twitter.com") || socialsText.includes("x.com")) channels.twitter = "detected";
+        if (socialsText.includes("discord")) channels.discord = "detected";
+        if (socialsText.includes("facebook.com")) channels.facebook = "detected";
+
+        const creatorEmail = item.email || extractEmailsFromText(description)[0] || "";
+        const creatorWebsite = item.website || item.externalUrl || "";
+        if (creatorWebsite) channels.website = creatorWebsite;
+
+        const monetization: Record<string, any> = { patreon: true };
+        if (item.tiers || item.membershipTiers) monetization.paid_membership = true;
+        if (item.isMonthly !== undefined) monetization.recurring = true;
+
+        leads.push({
+          source: "patreon",
+          communityName: creatorName,
+          communityType: detectCommunityType(fullText),
+          description: description.substring(0, 2000),
+          location: "",
+          website: creatorWebsite || url,
+          email: creatorEmail,
+          phone: "",
+          leaderName: creatorName,
+          memberCount: patronCount,
+          subscriberCount: 0,
+          ownedChannels: channels,
+          monetizationSignals: { ...monetization, ...detectMonetization(description) },
+          engagementSignals: {
+            member_count: patronCount,
+            attendance_proxy: patronCount,
+            recurring: true,
+          },
+          tripFitSignals: detectTripFit(fullText),
+          raw: item,
+        });
+      }
+
+      await appendAndSave(`Patreon: found ${leads.length} creators so far`);
+    } catch (err: any) {
+      await appendAndSave(`[WARN] Patreon search failed for "${kw}": ${err.message}`);
+    }
+  }
+
+  return leads;
+}
+
 async function scrapeFacebookGroups(
   keywords: string[],
   maxItems: number,
@@ -580,6 +657,9 @@ export async function runPipeline(runId: number): Promise<void> {
     if (enabledSources.includes("facebook")) {
       platformTasks.push({ name: "Facebook", promise: scrapeFacebookGroups(keywords, maxPerPlatform, (msg) => appendAndSave(msg)) });
     }
+    if (enabledSources.includes("patreon")) {
+      platformTasks.push({ name: "Patreon", promise: scrapePatreonCreators(keywords, maxPerPlatform, (msg) => appendAndSave(msg)) });
+    }
 
     if (platformTasks.length === 0) {
       await appendAndSave("No platform sources selected, skipping platform discovery");
@@ -612,6 +692,7 @@ export async function runPipeline(runId: number): Promise<void> {
     if (enabledSources.includes("reddit")) skipDomains.push("reddit.com");
     if (enabledSources.includes("eventbrite")) skipDomains.push("eventbrite.com");
     if (enabledSources.includes("facebook")) skipDomains.push("facebook.com");
+    if (enabledSources.includes("patreon")) skipDomains.push("patreon.com");
 
     const batchSize = 20;
     const queryBatches = [];

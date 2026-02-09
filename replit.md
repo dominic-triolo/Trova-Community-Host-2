@@ -52,6 +52,7 @@ shared/
    - Reddit Communities (trudax~reddit-scraper-lite) - member counts, descriptions
    - Eventbrite Events (aitorsm~eventbrite) - organizer data, followers, venues
    - Facebook Groups (apify/facebook-groups-scraper) - member counts, public groups
+   - Patreon Creators (powerai~patreon-creators-search-scraper) - patron counts, tiers, social links
 2. **Google Search** - Discover generic website URLs via Google Search Scraper (optional)
 3. **Extract** - Crawl generic websites with Cheerio Scraper (follows contact/about/team subpages to find organizer info)
 4. **Score** - ICP scoring (0-100) with 6 pillars + audience size bonus + contact info bonus
@@ -68,6 +69,7 @@ Users can toggle which platforms to search per run via the "Data Sources" card o
 - `trudax~reddit-scraper-lite` - Reddit community search (structured data)
 - `aitorsm~eventbrite` - Eventbrite event/organizer search (structured data)
 - `apify/facebook-groups-scraper` - Facebook public group search (structured data)
+- `powerai~patreon-creators-search-scraper` - Patreon creator search (patron counts, tiers)
 
 ## API Endpoints
 - `POST /api/runs` - Start a new pipeline run

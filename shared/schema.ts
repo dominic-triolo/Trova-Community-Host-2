@@ -89,10 +89,11 @@ export const AVAILABLE_SOURCES = [
   { id: "reddit", label: "Reddit Communities", description: "Subreddits with member counts" },
   { id: "eventbrite", label: "Eventbrite Events", description: "Event organizers with followers" },
   { id: "facebook", label: "Facebook Groups", description: "Public groups with member counts" },
+  { id: "patreon", label: "Patreon Creators", description: "Creators with patron counts & tiers" },
   { id: "google", label: "Google Search + Websites", description: "Generic website discovery" },
 ] as const;
 
-export type SourceId = "meetup" | "youtube" | "reddit" | "eventbrite" | "facebook" | "google";
+export type SourceId = "meetup" | "youtube" | "reddit" | "eventbrite" | "facebook" | "patreon" | "google";
 export const DEFAULT_ENABLED_SOURCES: SourceId[] = ["meetup", "youtube", "reddit", "eventbrite", "google"];
 
 export const runParamsSchema = z.object({
@@ -101,7 +102,7 @@ export const runParamsSchema = z.object({
   threshold: z.number().min(0).max(100).default(65),
   maxDiscoveredUrls: z.number().min(1).max(5000).default(200),
   maxGoogleResultsPerQuery: z.number().min(1).max(100).default(10),
-  enabledSources: z.array(z.enum(["meetup", "youtube", "reddit", "eventbrite", "facebook", "google"])).min(1, "At least one source must be selected").default(DEFAULT_ENABLED_SOURCES),
+  enabledSources: z.array(z.enum(["meetup", "youtube", "reddit", "eventbrite", "facebook", "patreon", "google"])).min(1, "At least one source must be selected").default(DEFAULT_ENABLED_SOURCES),
 });
 
 export type RunParams = z.infer<typeof runParamsSchema>;
