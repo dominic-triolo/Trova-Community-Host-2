@@ -400,7 +400,7 @@ async function scrapeEventbriteEvents(
       const city = geos.length > 0 ? geos[0] : "";
       await appendAndSave(`Eventbrite: searching for "${kw}" ${city ? `in ${city}` : ""}...`);
       const items = await runActorAndGetResults("aitorsm~eventbrite", {
-        country: "US",
+        country: "united-states",
         city: city || "all",
         category: "custom",
         keyword: kw,

@@ -12,42 +12,81 @@ export async function startActorRun(actorId: string, input: Record<string, any>)
   const token = getToken();
   const url = `${APIFY_BASE}/acts/${actorId}/runs?token=${token}`;
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
-  });
+  const controller = new AbortController();
+  const fetchTimeout = setTimeout(() => controller.abort(), 30000);
 
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Apify start failed (${res.status}): ${text}`);
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Apify start failed (${res.status}): ${text}`);
+    }
+
+    const data = await res.json();
+    return data.data.id;
+  } catch (err: any) {
+    if (err.name === "AbortError") {
+      throw new Error(`Apify start timed out after 30s for actor ${actorId}`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(fetchTimeout);
   }
-
-  const data = await res.json();
-  return data.data.id;
 }
 
 export async function waitForRun(runId: string, timeoutMs = 300000): Promise<"SUCCEEDED" | "FAILED" | "TIMED_OUT"> {
   const token = getToken();
   const start = Date.now();
+  let consecutiveErrors = 0;
 
   while (Date.now() - start < timeoutMs) {
-    const res = await fetch(`${APIFY_BASE}/actor-runs/${runId}?token=${token}`);
-    if (!res.ok) {
-      log(`[APIFY] Failed to check run status: ${res.status}`, "apify");
+    try {
+      const controller = new AbortController();
+      const fetchTimeout = setTimeout(() => controller.abort(), 15000);
+
+      const res = await fetch(`${APIFY_BASE}/actor-runs/${runId}?token=${token}`, {
+        signal: controller.signal,
+      });
+      clearTimeout(fetchTimeout);
+
+      if (!res.ok) {
+        consecutiveErrors++;
+        log(`[APIFY] Failed to check run status: ${res.status} (attempt ${consecutiveErrors})`, "apify");
+        if (consecutiveErrors >= 10) {
+          log(`[APIFY] Too many consecutive polling errors, giving up`, "apify");
+          return "FAILED";
+        }
+        await sleep(5000);
+        continue;
+      }
+
+      consecutiveErrors = 0;
+      const data = await res.json();
+      const status = data.data.status;
+
+      if (status === "SUCCEEDED") return "SUCCEEDED";
+      if (status === "FAILED" || status === "ABORTED") return "FAILED";
+      if (status === "TIMED-OUT") return "TIMED_OUT";
+
+      await sleep(3000);
+    } catch (err: any) {
+      consecutiveErrors++;
+      log(`[APIFY] Polling error: ${err.message} (attempt ${consecutiveErrors})`, "apify");
+      if (consecutiveErrors >= 10) {
+        log(`[APIFY] Too many consecutive polling errors, giving up`, "apify");
+        return "FAILED";
+      }
       await sleep(5000);
-      continue;
     }
-
-    const data = await res.json();
-    const status = data.data.status;
-
-    if (status === "SUCCEEDED") return "SUCCEEDED";
-    if (status === "FAILED" || status === "ABORTED") return "FAILED";
-
-    await sleep(3000);
   }
 
+  log(`[APIFY] Run ${runId} timed out after ${timeoutMs}ms`, "apify");
   return "TIMED_OUT";
 }
 
