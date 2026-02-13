@@ -31,6 +31,18 @@ function extractDomain(url: string): string {
   }
 }
 
+function normalizePatreonUrl(url: string): string {
+  if (!url) return "";
+  let normalized = url.split("?")[0].split("#")[0].toLowerCase().trim();
+  normalized = normalized.replace(/^http:\/\//, "https://");
+  normalized = normalized.replace(/^https?:\/\/www\./, "https://");
+  if (!normalized.startsWith("https://")) {
+    if (normalized.startsWith("patreon.com")) normalized = "https://" + normalized;
+  }
+  normalized = normalized.replace(/\/+$/, "");
+  return normalized;
+}
+
 function classifyUrl(url: string): string {
   const domain = extractDomain(url);
   if (domain.includes("meetup.com")) return "meetup";
@@ -567,7 +579,7 @@ async function scrapePatreonEmails(
           const email = cleanEmail(item.email || "");
           if (!email) continue;
 
-          const patreonUrl = (item.url || "").split("?")[0].toLowerCase();
+          const patreonUrl = normalizePatreonUrl(item.url || "");
           if (patreonUrl && patreonUrl.includes("patreon.com") && !emailMap.has(patreonUrl)) {
             emailMap.set(patreonUrl, email);
             batchEmails++;
@@ -749,7 +761,7 @@ async function crawlPatreonProfiles(
     const totalBatches = Math.ceil(patreonLeads.length / batchSize);
 
     try {
-      const items = await runActorAndGetResults("apify/puppeteer-scraper", {
+      const items = await runActorAndGetResults("apify~puppeteer-scraper", {
         startUrls: batch.map((l) => ({ url: l.website })),
         maxRequestsPerCrawl: batch.length,
         maxConcurrency: 5,
@@ -1264,10 +1276,10 @@ export async function runPipeline(runId: number): Promise<void> {
           if (pl.source !== "patreon") continue;
 
           const candidateUrls: string[] = [];
-          const mainUrl = (pl.website || "").split("?")[0].toLowerCase();
+          const mainUrl = normalizePatreonUrl(pl.website || "");
           if (mainUrl && mainUrl.includes("patreon.com")) candidateUrls.push(mainUrl);
-          const patreonChannel = (pl.ownedChannels?.patreon || "").split("?")[0].toLowerCase();
-          if (patreonChannel && patreonChannel.includes("patreon.com")) candidateUrls.push(patreonChannel);
+          const patreonChannel = normalizePatreonUrl(pl.ownedChannels?.patreon || "");
+          if (patreonChannel && patreonChannel.includes("patreon.com") && patreonChannel !== mainUrl) candidateUrls.push(patreonChannel);
 
           for (const url of candidateUrls) {
             if (emailMap.has(url)) {
@@ -1277,7 +1289,7 @@ export async function runPipeline(runId: number): Promise<void> {
             }
           }
         }
-        await appendAndSave(`Email scraper: merged ${emailsMerged} emails into platform leads`);
+        await appendAndSave(`Email scraper: merged ${emailsMerged} emails into platform leads (map has ${emailMap.size} entries)`);
       } catch (err: any) {
         await appendAndSave(`[WARN] Email scraper merge failed: ${err.message}`);
       }
@@ -2035,10 +2047,10 @@ export async function reEnrichRun(runId: number): Promise<void> {
           if (pl.email) continue;
 
           const candidateUrls: string[] = [];
-          const mainUrl = (pl.website || "").split("?")[0].toLowerCase();
+          const mainUrl = normalizePatreonUrl(pl.website || "");
           if (mainUrl && mainUrl.includes("patreon.com")) candidateUrls.push(mainUrl);
-          const patreonChannel = (pl.ownedChannels?.patreon || "").split("?")[0].toLowerCase();
-          if (patreonChannel && patreonChannel.includes("patreon.com")) candidateUrls.push(patreonChannel);
+          const patreonChannel = normalizePatreonUrl(pl.ownedChannels?.patreon || "");
+          if (patreonChannel && patreonChannel.includes("patreon.com") && patreonChannel !== mainUrl) candidateUrls.push(patreonChannel);
 
           for (const url of candidateUrls) {
             if (emailMap.has(url)) {
@@ -2048,7 +2060,7 @@ export async function reEnrichRun(runId: number): Promise<void> {
             }
           }
         }
-        await appendAndSave(`Email scraper: merged ${emailsMerged} emails into leads`);
+        await appendAndSave(`Email scraper: merged ${emailsMerged} emails into leads (map has ${emailMap.size} entries)`);
       } catch (err: any) {
         await appendAndSave(`[WARN] Email scraper failed: ${err.message}`);
       }
