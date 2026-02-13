@@ -102,7 +102,7 @@ export const runParamsSchema = z.object({
   seedKeywords: z.array(z.string()).min(1, "At least one keyword is required"),
   seedGeos: z.array(z.string()).default([]),
   threshold: z.number().min(0).max(100).default(65),
-  maxDiscoveredUrls: z.number().min(1).max(5000).default(200),
+  maxDiscoveredUrls: z.number().min(1).max(200).default(200),
   maxGoogleResultsPerQuery: z.number().min(1).max(100).default(10),
   enabledSources: z.array(z.enum(["meetup", "youtube", "reddit", "eventbrite", "facebook", "patreon", "google"])).min(1, "At least one source must be selected").default(DEFAULT_ENABLED_SOURCES),
   minMemberCount: z.number().min(0).default(0),

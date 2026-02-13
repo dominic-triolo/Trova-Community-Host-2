@@ -218,7 +218,7 @@ export default function Home() {
             <Filter className="w-4 h-4 text-muted-foreground" />
             <Label className="text-sm font-medium">Creator Filters</Label>
           </div>
-          <p className="text-xs text-muted-foreground">Filter results by audience size and activity. Set to 0 to disable a filter.</p>
+          <p className="text-xs text-muted-foreground">Creators outside these ranges are excluded before enrichment. Set to 0 to disable a filter.</p>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="space-y-1.5">
               <Label className="text-xs text-muted-foreground">Min Members</Label>
@@ -281,32 +281,20 @@ export default function Home() {
 
             <Separator />
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">Max Leads to Discover</Label>
-                <Input
-                  type="number"
-                  value={params.maxDiscoveredUrls}
-                  onChange={(e) =>
-                    setParams((p) => ({ ...p, maxDiscoveredUrls: parseInt(e.target.value) || 200 }))
-                  }
-                  data-testid="input-max-urls"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">Results per Search Query</Label>
-                <Input
-                  type="number"
-                  value={params.maxGoogleResultsPerQuery}
-                  onChange={(e) =>
-                    setParams((p) => ({
-                      ...p,
-                      maxGoogleResultsPerQuery: parseInt(e.target.value) || 10,
-                    }))
-                  }
-                  data-testid="input-results-per-query"
-                />
-              </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">Max Leads to Discover</Label>
+              <Input
+                type="number"
+                value={params.maxDiscoveredUrls}
+                min={1}
+                max={200}
+                onChange={(e) => {
+                  const val = parseInt(e.target.value) || 200;
+                  setParams((p) => ({ ...p, maxDiscoveredUrls: Math.min(200, Math.max(1, val)) }));
+                }}
+                data-testid="input-max-urls"
+              />
+              <p className="text-[11px] text-muted-foreground">Maximum 200 leads per run</p>
             </div>
           </div>
         </Card>
