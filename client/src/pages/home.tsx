@@ -7,6 +7,7 @@ import {
   RECOMMENDED_KEYWORDS,
   DEFAULT_RUN_PARAMS,
   AVAILABLE_SOURCES,
+  TEMPORARILY_DISABLED_SOURCES,
   type RunParams,
 } from "@shared/schema";
 import { Card } from "@/components/ui/card";
@@ -177,16 +178,19 @@ export default function Home() {
           <p className="text-xs text-muted-foreground">Choose which platforms to search. Each requires a rented Apify actor.</p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {AVAILABLE_SOURCES.map((src) => {
+              const isDisabled = TEMPORARILY_DISABLED_SOURCES.includes(src.id);
               const isEnabled = params.enabledSources.includes(src.id);
               return (
                 <label
                   key={src.id}
-                  className="flex items-start gap-3 p-2.5 rounded-md cursor-pointer hover-elevate"
+                  className={`flex items-start gap-3 p-2.5 rounded-md ${isDisabled ? "opacity-40 cursor-not-allowed" : "cursor-pointer hover-elevate"}`}
                   data-testid={`source-toggle-${src.id}`}
                 >
                   <Checkbox
                     checked={isEnabled}
+                    disabled={isDisabled}
                     onCheckedChange={(checked) => {
+                      if (isDisabled) return;
                       setParams((p) => ({
                         ...p,
                         enabledSources: checked === true
@@ -198,7 +202,9 @@ export default function Home() {
                   />
                   <div className="space-y-0.5">
                     <span className="text-sm font-medium leading-none">{src.label}</span>
-                    <p className="text-[11px] text-muted-foreground">{src.description}</p>
+                    <p className="text-[11px] text-muted-foreground">
+                      {isDisabled ? "Coming soon" : src.description}
+                    </p>
                   </div>
                 </label>
               );

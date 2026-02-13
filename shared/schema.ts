@@ -94,7 +94,9 @@ export const AVAILABLE_SOURCES = [
 ] as const;
 
 export type SourceId = "meetup" | "youtube" | "reddit" | "eventbrite" | "facebook" | "patreon" | "google";
-export const DEFAULT_ENABLED_SOURCES: SourceId[] = ["meetup", "youtube", "reddit", "eventbrite", "google"];
+export const DEFAULT_ENABLED_SOURCES: SourceId[] = ["patreon"];
+
+export const TEMPORARILY_DISABLED_SOURCES: SourceId[] = ["meetup", "youtube", "reddit", "eventbrite", "facebook", "google"];
 
 export const runParamsSchema = z.object({
   seedKeywords: z.array(z.string()).min(1, "At least one keyword is required"),
