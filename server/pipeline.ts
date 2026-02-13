@@ -1,6 +1,7 @@
 import { storage } from "./storage";
 import { runActorAndGetResults } from "./apify";
 import { scoreLead, determineStatus } from "./scoring";
+import { apolloPersonMatch, isApolloAvailable, extractDomainFromUrl as apolloExtractDomain, isEnrichableDomain as apolloIsEnrichable } from "./apollo";
 import { hunterDomainSearch, extractDomainFromUrl, isEnrichableDomain, isHunterAvailable } from "./hunter";
 import { log } from "./index";
 import type { RunParams, InsertSourceUrl, InsertLead, InsertLeader } from "@shared/schema";
@@ -1162,17 +1163,95 @@ export async function runPipeline(runId: number): Promise<void> {
 
     await storage.updateRun(runId, { leadsExtracted: createdCount });
 
-    await appendAndSave(`Created ${createdCount} total leads`, 80, "Step 5: Email enrichment (Hunter.io)");
+    await appendAndSave(`Created ${createdCount} total leads`, 80, "Step 5: Contact enrichment");
 
-    if (isHunterAvailable()) {
-      const runLeads = await storage.listLeadsByRun(runId);
-      const leadsNeedingEmail = runLeads.filter((l) => !l.email && l.website);
+    const runLeads = await storage.listLeadsByRun(runId);
+    const leadsToEnrich = runLeads.filter((l) => !l.email);
+    let enrichedCount = 0;
+
+    if (isApolloAvailable() && leadsToEnrich.length > 0) {
+      await appendAndSave(`Apollo.io: enriching ${leadsToEnrich.length} leads missing contact info...`);
+
+      for (const lead of leadsToEnrich) {
+        try {
+          const leaderName = lead.leaderName || lead.communityName || "";
+          if (!leaderName) continue;
+
+          const nameParts = leaderName.trim().split(/\s+/);
+          const firstName = nameParts[0] || "";
+          const lastName = nameParts.length > 1 ? nameParts.slice(1).join(" ") : "";
+
+          const domain = apolloExtractDomain(lead.website || "");
+          const enrichableDomain = domain && apolloIsEnrichable(domain) ? domain : undefined;
+
+          const result = await apolloPersonMatch({
+            name: leaderName,
+            firstName: firstName || undefined,
+            lastName: lastName || undefined,
+            domain: enrichableDomain,
+            organizationName: lead.communityName || undefined,
+          });
+
+          if (!result) continue;
+
+          const updateData: Record<string, any> = {};
+
+          if (result.email) updateData.email = result.email;
+          if (result.phone && !lead.phone) updateData.phone = result.phone;
+          if (result.linkedin && !lead.linkedin) updateData.linkedin = result.linkedin;
+          if (result.location && !lead.location) updateData.location = result.location;
+          if (!lead.leaderName && result.fullName) updateData.leaderName = result.fullName;
+
+          const existingChannels = (lead.ownedChannels as Record<string, string>) || {};
+          const updatedChannels = { ...existingChannels };
+          if (result.twitter && !existingChannels.twitter) updatedChannels.twitter = result.twitter;
+          if (result.facebook && !existingChannels.facebook) updatedChannels.facebook = result.facebook;
+          if (result.linkedin && !existingChannels.linkedin) updatedChannels.linkedin = result.linkedin;
+          if (Object.keys(updatedChannels).length > Object.keys(existingChannels).length) {
+            updateData.ownedChannels = updatedChannels;
+          }
+
+          if (Object.keys(updateData).length === 0) continue;
+
+          const breakdown = scoreLead({
+            name: lead.communityName || "",
+            description: "",
+            type: lead.communityType || "",
+            location: updateData.location || lead.location || "",
+            website: lead.website || "",
+            email: updateData.email || lead.email || "",
+            phone: updateData.phone || lead.phone || "",
+            linkedin: updateData.linkedin || lead.linkedin || "",
+            ownedChannels: updateData.ownedChannels || existingChannels,
+            monetizationSignals: (lead.monetizationSignals as Record<string, any>) || {},
+            engagementSignals: (lead.engagementSignals as Record<string, any>) || {},
+            tripFitSignals: (lead.tripFitSignals as Record<string, any>) || {},
+            leaderName: updateData.leaderName || lead.leaderName || "",
+            memberCount: (lead.engagementSignals as any)?.member_count || 0,
+            subscriberCount: (lead.engagementSignals as any)?.subscriber_count || 0,
+            raw: (lead.raw as Record<string, any>) || {},
+          });
+
+          const hasContact = !!(updateData.email || lead.website || updateData.phone || updateData.linkedin);
+          updateData.score = breakdown.total;
+          updateData.scoreBreakdown = breakdown;
+          updateData.status = determineStatus(breakdown.total, params.threshold, hasContact);
+
+          await storage.updateLead(lead.id, updateData);
+          enrichedCount++;
+
+          await new Promise((r) => setTimeout(r, 200));
+        } catch (err: any) {
+          await appendAndSave(`[WARN] Apollo enrichment failed for lead ${lead.id}: ${err.message}`);
+        }
+      }
+
+      await appendAndSave(`Apollo.io: enriched ${enrichedCount} of ${leadsToEnrich.length} leads`);
+    } else if (isHunterAvailable() && leadsToEnrich.length > 0) {
+      await appendAndSave(`Hunter.io fallback: enriching ${leadsToEnrich.length} leads missing emails...`);
       const enrichedDomains = new Set<string>();
-      let enrichedCount = 0;
 
-      await appendAndSave(`Hunter.io: enriching ${leadsNeedingEmail.length} leads missing emails...`);
-
-      for (const lead of leadsNeedingEmail) {
+      for (const lead of leadsToEnrich) {
         const domain = extractDomainFromUrl(lead.website || "");
         if (!domain || !isEnrichableDomain(domain) || enrichedDomains.has(domain)) continue;
         enrichedDomains.add(domain);
@@ -1181,15 +1260,9 @@ export async function runPipeline(runId: number): Promise<void> {
         if (!result || result.emails.length === 0) continue;
 
         const bestEmail = result.emails.sort((a, b) => b.confidence - a.confidence)[0];
-
         const updateData: Record<string, any> = { email: bestEmail.value };
-
-        if (bestEmail.phone_number && !lead.phone) {
-          updateData.phone = bestEmail.phone_number;
-        }
-        if (bestEmail.linkedin && !lead.linkedin) {
-          updateData.linkedin = bestEmail.linkedin;
-        }
+        if (bestEmail.phone_number && !lead.phone) updateData.phone = bestEmail.phone_number;
+        if (bestEmail.linkedin && !lead.linkedin) updateData.linkedin = bestEmail.linkedin;
         if (!lead.leaderName && bestEmail.first_name && bestEmail.last_name) {
           updateData.leaderName = `${bestEmail.first_name} ${bestEmail.last_name}`;
         }
@@ -1220,50 +1293,12 @@ export async function runPipeline(runId: number): Promise<void> {
 
         await storage.updateLead(lead.id, updateData);
         enrichedCount++;
-
-        for (const otherLead of leadsNeedingEmail) {
-          if (otherLead.id !== lead.id) {
-            const otherDomain = extractDomainFromUrl(otherLead.website || "");
-            if (otherDomain === domain) {
-              const otherUpdate: Record<string, any> = { email: bestEmail.value };
-              if (bestEmail.phone_number && !otherLead.phone) otherUpdate.phone = bestEmail.phone_number;
-
-              const otherBreakdown = scoreLead({
-                name: otherLead.communityName || "",
-                description: "",
-                type: otherLead.communityType || "",
-                location: otherLead.location || "",
-                website: otherLead.website || "",
-                email: otherUpdate.email,
-                phone: otherUpdate.phone || otherLead.phone || "",
-                linkedin: otherLead.linkedin || "",
-                ownedChannels: (otherLead.ownedChannels as Record<string, string>) || {},
-                monetizationSignals: (otherLead.monetizationSignals as Record<string, any>) || {},
-                engagementSignals: (otherLead.engagementSignals as Record<string, any>) || {},
-                tripFitSignals: (otherLead.tripFitSignals as Record<string, any>) || {},
-                leaderName: otherLead.leaderName || "",
-                memberCount: (otherLead.engagementSignals as any)?.member_count || 0,
-                subscriberCount: (otherLead.engagementSignals as any)?.subscriber_count || 0,
-                raw: (otherLead.raw as Record<string, any>) || {},
-              });
-
-              const otherHasContact = !!(otherUpdate.email || otherLead.website || otherUpdate.phone || otherLead.linkedin);
-              otherUpdate.score = otherBreakdown.total;
-              otherUpdate.scoreBreakdown = otherBreakdown;
-              otherUpdate.status = determineStatus(otherBreakdown.total, params.threshold, otherHasContact);
-
-              await storage.updateLead(otherLead.id, otherUpdate);
-              enrichedCount++;
-            }
-          }
-        }
-
         await new Promise((r) => setTimeout(r, 200));
       }
 
-      await appendAndSave(`Hunter.io: enriched ${enrichedCount} leads with emails from ${enrichedDomains.size} domains`);
+      await appendAndSave(`Hunter.io: enriched ${enrichedCount} leads from ${enrichedDomains.size} domains`);
     } else {
-      await appendAndSave("Hunter.io: skipped (no API key configured)");
+      await appendAndSave("Email enrichment: skipped (no Apollo or Hunter API key configured)");
     }
 
     await appendAndSave("Recalculating scores...", 90, "Step 6: Scoring & qualification");

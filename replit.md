@@ -78,9 +78,17 @@ Users can toggle which platforms to search per run via the "Data Sources" card o
 - `GET /api/leads` - List all leads (optional `?runId=` filter)
 - `GET /api/exports/csv` - Download single CSV with all leads, scores, qualified column, and discovery datetime (optional `?runId=` filter)
 
+## Contact Enrichment
+- **Primary**: Apollo.io People Match API (free 10k credits/mo) - searches by person name + organization
+- **Fallback**: Hunter.io Domain Search (paid) - searches by website domain
+- Apollo runs first; Hunter only runs if Apollo key is not configured
+- Enrichment step runs after lead creation, before final scoring
+
 ## Environment Variables
 - `DATABASE_URL` - PostgreSQL connection
 - `APIFY_TOKEN` - Apify API token (secret)
+- `APOLLO_API_KEY` - Apollo.io API key (secret, primary enrichment)
+- `HUNTER_API_KEY` - Hunter.io API key (secret, fallback enrichment, optional)
 
 ## Running
 - `npm run dev` - Start development server
