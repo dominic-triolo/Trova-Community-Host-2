@@ -78,11 +78,16 @@ async function apolloFetch(endpoint: string, body: Record<string, any>): Promise
 
     if (!res.ok) {
       if (res.status === 429) {
-        log(`[APOLLO] Rate limited`, "apollo");
+        log(`[APOLLO] Rate limited, backing off...`, "apollo");
+        await new Promise((r) => setTimeout(r, 2000));
         return null;
       }
       if (res.status === 401 || res.status === 403) {
         log(`[APOLLO] Auth error (${res.status}), check API key`, "apollo");
+        return null;
+      }
+      if (res.status === 422) {
+        log(`[APOLLO] Unprocessable entity (422) - invalid request params`, "apollo");
         return null;
       }
       log(`[APOLLO] Error ${res.status}`, "apollo");

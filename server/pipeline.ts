@@ -544,6 +544,70 @@ function expandKeywordsForPatreon(keywords: string[]): string[] {
   return expanded;
 }
 
+async function scrapePatreonEmails(
+  keywords: string[],
+  appendAndSave: (msg: string) => Promise<void>,
+): Promise<Map<string, string>> {
+  const emailMap = new Map<string, string>();
+
+  try {
+    await appendAndSave(`Email scraper: searching Patreon for emails with ${keywords.length} keywords...`);
+
+    for (const kw of keywords) {
+      try {
+        const items = await runActorAndGetResults("scraper-mind~all-social-media-email-scraper", {
+          keywords: [kw],
+          platform: "Patreon",
+          customDomains: ["@gmail.com", "@yahoo.com", "@hotmail.com", "@outlook.com", "@icloud.com", "@protonmail.com", "@aol.com", "@me.com", "@live.com", "@mail.com"],
+          proxyConfiguration: { useApifyProxy: true },
+        }, 180000);
+
+        let batchEmails = 0;
+        for (const item of items) {
+          const email = cleanEmail(item.email || "");
+          if (!email) continue;
+
+          const patreonUrl = (item.url || "").split("?")[0].toLowerCase();
+          if (patreonUrl && patreonUrl.includes("patreon.com") && !emailMap.has(patreonUrl)) {
+            emailMap.set(patreonUrl, email);
+            batchEmails++;
+          }
+        }
+
+        await appendAndSave(`Email scraper: "${kw}" found ${batchEmails} emails (${emailMap.size} total)`);
+      } catch (err: any) {
+        await appendAndSave(`[WARN] Email scraper failed for "${kw}": ${err.message}`);
+      }
+    }
+
+    await appendAndSave(`Email scraper complete: ${emailMap.size} emails found across all keywords`);
+  } catch (err: any) {
+    await appendAndSave(`[WARN] Email scraper failed: ${err.message}`);
+  }
+
+  return emailMap;
+}
+
+function isValidApolloCandidate(leaderName: string): boolean {
+  if (!leaderName) return false;
+  const nameParts = leaderName.trim().split(/\s+/);
+  if (nameParts.length < 2) return false;
+  if (nameParts[0].length <= 1 || nameParts[1].length <= 1) return false;
+  const lower = leaderName.toLowerCase();
+  const brandIndicators = [
+    "podcast", "walking is", "the ", "adventures of",
+    " radio", " tv", " show",
+  ];
+  if (brandIndicators.some((b) => lower.startsWith(b) || lower.startsWith("the "))) {
+    if (lower.startsWith("the ")) return false;
+  }
+  const exactBrandEndings = [" podcast", " radio", " show", " tv"];
+  if (exactBrandEndings.some((e) => lower.endsWith(e))) return false;
+  const allCaps = nameParts.length >= 3 && nameParts.every((p) => p === p.toUpperCase() && p.length > 2);
+  if (allCaps) return false;
+  return true;
+}
+
 async function scrapePatreonCreators(
   keywords: string[],
   maxItems: number,
@@ -1169,6 +1233,11 @@ export async function runPipeline(runId: number): Promise<void> {
       }) });
     }
 
+    let emailScraperPromise: Promise<Map<string, string>> | null = null;
+    if (enabledSources.includes("patreon")) {
+      emailScraperPromise = scrapePatreonEmails(keywords, (msg) => appendAndSave(msg));
+    }
+
     if (platformTasks.length === 0) {
       await appendAndSave("No platform sources selected, skipping platform discovery");
     }
@@ -1183,6 +1252,34 @@ export async function runPipeline(runId: number): Promise<void> {
         await appendAndSave(`${platformTasks[i].name}: ${result.value.length} results`);
       } else {
         await appendAndSave(`[WARN] ${platformTasks[i].name} failed: ${result.reason?.message || "Unknown error"}`);
+      }
+    }
+
+    if (emailScraperPromise) {
+      try {
+        const emailMap = await emailScraperPromise;
+        let emailsMerged = 0;
+        for (const pl of allPlatformLeads) {
+          if (pl.email) continue;
+          if (pl.source !== "patreon") continue;
+
+          const candidateUrls: string[] = [];
+          const mainUrl = (pl.website || "").split("?")[0].toLowerCase();
+          if (mainUrl && mainUrl.includes("patreon.com")) candidateUrls.push(mainUrl);
+          const patreonChannel = (pl.ownedChannels?.patreon || "").split("?")[0].toLowerCase();
+          if (patreonChannel && patreonChannel.includes("patreon.com")) candidateUrls.push(patreonChannel);
+
+          for (const url of candidateUrls) {
+            if (emailMap.has(url)) {
+              pl.email = emailMap.get(url)!;
+              emailsMerged++;
+              break;
+            }
+          }
+        }
+        await appendAndSave(`Email scraper: merged ${emailsMerged} emails into platform leads`);
+      } catch (err: any) {
+        await appendAndSave(`[WARN] Email scraper merge failed: ${err.message}`);
       }
     }
 
@@ -1684,10 +1781,16 @@ export async function runPipeline(runId: number): Promise<void> {
     if (isApolloAvailable() && leadsToEnrich.length > 0) {
       await appendAndSave(`Apollo.io: enriching ${leadsToEnrich.length} leads missing contact info...`);
 
+      let apolloSkipped = 0;
       for (const lead of leadsToEnrich) {
         try {
           const leaderName = lead.leaderName || lead.communityName || "";
           if (!leaderName) continue;
+
+          if (!isValidApolloCandidate(leaderName)) {
+            apolloSkipped++;
+            continue;
+          }
 
           const nameParts = leaderName.trim().split(/\s+/);
           const firstName = nameParts[0] || "";
@@ -1720,7 +1823,7 @@ export async function runPipeline(runId: number): Promise<void> {
               lastName,
               domain: enrichableDomain,
             });
-            await new Promise((r) => setTimeout(r, 200));
+            await new Promise((r) => setTimeout(r, 300));
           }
 
           if (!result) continue;
@@ -1771,13 +1874,13 @@ export async function runPipeline(runId: number): Promise<void> {
           await storage.updateLead(lead.id, updateData);
           enrichedCount++;
 
-          await new Promise((r) => setTimeout(r, 200));
+          await new Promise((r) => setTimeout(r, 300));
         } catch (err: any) {
           await appendAndSave(`[WARN] Apollo enrichment failed for lead ${lead.id}: ${err.message}`);
         }
       }
 
-      await appendAndSave(`Apollo.io: enriched ${enrichedCount} of ${leadsToEnrich.length} leads`);
+      await appendAndSave(`Apollo.io: enriched ${enrichedCount} of ${leadsToEnrich.length} leads (${apolloSkipped} skipped - invalid names)`);
     } else if (isHunterAvailable() && leadsToEnrich.length > 0) {
       await appendAndSave(`Hunter.io fallback: enriching ${leadsToEnrich.length} leads missing emails...`);
       const enrichedDomains = new Set<string>();
@@ -1922,15 +2025,44 @@ export async function reEnrichRun(runId: number): Promise<void> {
       raw: (lead.raw as Record<string, any>) || {},
     }));
 
-    await appendAndSave(`Step 1: Crawling Patreon profiles...`, 10, "Re-enrichment: Profile crawl");
+    await appendAndSave(`Step 1: Email scraper for Patreon...`, 5, "Re-enrichment: Email scraper");
+    const patreonKeywords = (params.seedKeywords || []);
+    if (patreonKeywords.length > 0) {
+      try {
+        const emailMap = await scrapePatreonEmails(patreonKeywords, appendAndSave);
+        let emailsMerged = 0;
+        for (const pl of platformLeads) {
+          if (pl.email) continue;
+
+          const candidateUrls: string[] = [];
+          const mainUrl = (pl.website || "").split("?")[0].toLowerCase();
+          if (mainUrl && mainUrl.includes("patreon.com")) candidateUrls.push(mainUrl);
+          const patreonChannel = (pl.ownedChannels?.patreon || "").split("?")[0].toLowerCase();
+          if (patreonChannel && patreonChannel.includes("patreon.com")) candidateUrls.push(patreonChannel);
+
+          for (const url of candidateUrls) {
+            if (emailMap.has(url)) {
+              pl.email = emailMap.get(url)!;
+              emailsMerged++;
+              break;
+            }
+          }
+        }
+        await appendAndSave(`Email scraper: merged ${emailsMerged} emails into leads`);
+      } catch (err: any) {
+        await appendAndSave(`[WARN] Email scraper failed: ${err.message}`);
+      }
+    }
+
+    await appendAndSave(`Step 2: Crawling Patreon profiles...`, 15, "Re-enrichment: Profile crawl");
     await crawlPatreonProfiles(platformLeads, appendAndSave);
     await appendAndSave(`Profile crawl complete`, 30);
 
-    await appendAndSave(`Step 2: Crawling creator websites...`, 35, "Re-enrichment: Website crawl");
+    await appendAndSave(`Step 3: Crawling creator websites...`, 35, "Re-enrichment: Website crawl");
     await crawlCreatorWebsites(platformLeads, appendAndSave);
     await appendAndSave(`Website crawl complete`, 55);
 
-    await appendAndSave(`Step 3: Updating leads in database...`, 60, "Re-enrichment: Saving crawl results");
+    await appendAndSave(`Step 4: Updating leads in database...`, 60, "Re-enrichment: Saving crawl results");
     let crawlUpdated = 0;
     for (const pl of platformLeads) {
       const original = leads.find((l) => l.id === pl.dbId);
@@ -1958,14 +2090,20 @@ export async function reEnrichRun(runId: number): Promise<void> {
     const refreshedLeads = await storage.listLeadsByRun(runId);
     const leadsToEnrich = refreshedLeads.filter((l) => !l.email || l.email === "");
 
-    await appendAndSave(`Step 4: Apollo enrichment for ${leadsToEnrich.length} leads without email...`, 70, "Re-enrichment: Apollo enrichment");
+    await appendAndSave(`Step 5: Apollo enrichment for ${leadsToEnrich.length} leads without email...`, 70, "Re-enrichment: Apollo enrichment");
 
     let enrichedCount = 0;
     if (isApolloAvailable() && leadsToEnrich.length > 0) {
+      let apolloSkipped = 0;
       for (const lead of leadsToEnrich) {
         try {
           const leaderName = lead.leaderName || lead.communityName || "";
           if (!leaderName) continue;
+
+          if (!isValidApolloCandidate(leaderName)) {
+            apolloSkipped++;
+            continue;
+          }
 
           const nameParts = leaderName.trim().split(/\s+/);
           const firstName = nameParts[0] || "";
@@ -1998,7 +2136,7 @@ export async function reEnrichRun(runId: number): Promise<void> {
               lastName,
               domain: enrichableDomain,
             });
-            await new Promise((r) => setTimeout(r, 200));
+            await new Promise((r) => setTimeout(r, 300));
           }
 
           if (!result) continue;
@@ -2024,17 +2162,17 @@ export async function reEnrichRun(runId: number): Promise<void> {
             enrichedCount++;
           }
 
-          await new Promise((r) => setTimeout(r, 200));
+          await new Promise((r) => setTimeout(r, 300));
         } catch (err: any) {
           await appendAndSave(`[WARN] Apollo enrichment failed for lead ${lead.id}: ${err.message}`);
         }
       }
-      await appendAndSave(`Apollo.io: enriched ${enrichedCount} of ${leadsToEnrich.length} leads`, 85);
+      await appendAndSave(`Apollo.io: enriched ${enrichedCount} of ${leadsToEnrich.length} leads (${apolloSkipped} skipped - invalid names)`, 85);
     } else {
       await appendAndSave("Apollo enrichment skipped (no API key configured)", 85);
     }
 
-    await appendAndSave(`Step 5: Re-scoring all leads...`, 88, "Re-enrichment: Scoring");
+    await appendAndSave(`Step 6: Re-scoring all leads...`, 88, "Re-enrichment: Scoring");
     const finalLeads = await storage.listLeadsByRun(runId);
     let reScored = 0;
     for (const lead of finalLeads) {

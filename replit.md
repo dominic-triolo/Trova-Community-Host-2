@@ -53,11 +53,12 @@ shared/
    - Eventbrite Events (aitorsm~eventbrite) - organizer data, followers, venues
    - Facebook Groups (apify/facebook-groups-scraper) - member counts, public groups
    - Patreon Creators (powerai~patreon-creators-search-scraper) - patron counts, tiers, social links
-2. **Profile & Website Crawl** - Cheerio scraper crawls each Patreon profile page to extract personal website, social links, real names, and emails; then crawls the personal websites (contact/about pages) for additional email extraction
+   - **Email Scraper** (scraper-mind~all-social-media-email-scraper) - runs in parallel with Patreon creator search, extracts emails directly from Patreon profiles, merged by URL match
+2. **Profile & Website Crawl** - Puppeteer scraper crawls each Patreon profile page to extract personal website, social links, real names, and emails; then crawls the personal websites (contact/about pages) for additional email extraction
 3. **Google Search** - Discover generic website URLs via Google Search Scraper (optional)
 4. **Extract** - Crawl generic websites with Cheerio Scraper (follows contact/about/team subpages to find organizer info)
 5. **Create & Score** - ICP scoring (0-100) with 6 pillars + audience size bonus + contact info bonus
-6. **Contact Enrichment** - Apollo.io for remaining leads without emails (uses personal website domain for better matching)
+6. **Contact Enrichment** - Apollo.io for remaining leads without emails (with isValidApolloCandidate filter to skip brand names/single-word identifiers)
 7. **Scoring & Qualification** - Final scoring pass and lead qualification
 8. **Export** - CSV download for qualified/watchlist leads (global or per-run)
 
@@ -73,6 +74,7 @@ Users can toggle which platforms to search per run via the "Data Sources" card o
 - `aitorsm~eventbrite` - Eventbrite event/organizer search (structured data)
 - `apify/facebook-groups-scraper` - Facebook public group search (structured data)
 - `powerai~patreon-creators-search-scraper` - Patreon creator search (patron counts, tiers)
+- `scraper-mind~all-social-media-email-scraper` - Multi-platform email extraction (Patreon, YouTube, etc.)
 
 ## API Endpoints
 - `POST /api/runs` - Start a new pipeline run
