@@ -7,6 +7,7 @@ import {
   RECOMMENDED_KEYWORDS,
   DEFAULT_RUN_PARAMS,
   AVAILABLE_SOURCES,
+  AVAILABLE_ENRICHMENTS,
   TEMPORARILY_DISABLED_SOURCES,
   type RunParams,
 } from "@shared/schema";
@@ -30,6 +31,7 @@ import {
   Plus,
   Globe,
   Filter,
+  Mail,
 } from "lucide-react";
 
 export default function Home() {
@@ -206,6 +208,39 @@ export default function Home() {
                     <p className="text-[11px] text-muted-foreground">
                       {isDisabled ? "Coming soon" : src.description}
                     </p>
+                  </div>
+                </label>
+              );
+            })}
+          </div>
+        </Card>
+
+        <Card className="p-4 space-y-4">
+          <div className="flex items-center gap-2">
+            <Mail className="w-4 h-4 text-muted-foreground" />
+            <Label className="text-sm font-medium">Enrichment Methods</Label>
+          </div>
+          <p className="text-xs text-muted-foreground">Choose which methods to use for finding contact info after discovery.</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {AVAILABLE_ENRICHMENTS.map((enr) => {
+              const paramKey = enr.id === "emailScraper" ? "enableEmailScraper" : "enableApollo";
+              const isEnabled = params[paramKey];
+              return (
+                <label
+                  key={enr.id}
+                  className="flex items-start gap-3 p-2.5 rounded-md cursor-pointer hover-elevate"
+                  data-testid={`enrichment-toggle-${enr.id}`}
+                >
+                  <Checkbox
+                    checked={isEnabled}
+                    onCheckedChange={(checked) => {
+                      setParams((p) => ({ ...p, [paramKey]: checked === true }));
+                    }}
+                    className="mt-0.5"
+                  />
+                  <div className="space-y-0.5">
+                    <span className="text-sm font-medium leading-none">{enr.label}</span>
+                    <p className="text-[11px] text-muted-foreground">{enr.description}</p>
                   </div>
                 </label>
               );

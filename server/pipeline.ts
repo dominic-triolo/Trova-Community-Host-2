@@ -802,543 +802,6 @@ async function scrapePatreonCreators(
   return leads;
 }
 
-async function crawlPatreonProfiles(
-  platformLeads: PlatformLead[],
-  appendAndSave: (msg: string) => Promise<void>,
-): Promise<void> {
-  const patreonLeads = platformLeads.filter(
-    (l) => l.source === "patreon" && l.website && l.website.includes("patreon.com")
-  );
-  if (patreonLeads.length === 0) return;
-
-  await appendAndSave(`Crawling ${patreonLeads.length} Patreon profiles (Cheerio) for contact info...`);
-
-  const batchSize = 25;
-  let profilesEnriched = 0;
-  let emailsFound = 0;
-  let websitesFound = 0;
-  let cloudflareBlocked = 0;
-
-  for (let i = 0; i < patreonLeads.length; i += batchSize) {
-    const batch = patreonLeads.slice(i, i + batchSize);
-    const batchNum = Math.floor(i / batchSize) + 1;
-    const totalBatches = Math.ceil(patreonLeads.length / batchSize);
-
-    try {
-      const items = await runActorAndGetResults("apify~cheerio-scraper", {
-        startUrls: batch.map((l) => ({ url: l.website })),
-        maxRequestsPerCrawl: batch.length,
-        maxConcurrency: 10,
-        maxRequestRetries: 1,
-        proxyConfiguration: { useApifyProxy: true, apifyProxyGroups: ["RESIDENTIAL"] },
-        pageFunction: `async function pageFunction(context) {
-          const { request, $, log } = context;
-
-          var title = $('title').text() || '';
-          if (title.includes('Just a moment') || title.includes('Attention Required') || title.includes('Access denied') || $('div#cf-wrapper').length > 0 || $('div.cf-browser-verification').length > 0) {
-            log.info('Cloudflare blocked: ' + request.url);
-            return { url: request.url, cloudflareBlocked: true };
-          }
-
-          var blockedDomains = ['patreon.com','example.com','sentry.io','cloudflare.com','w3.org','schema.org','googleapis.com','gstatic.com'];
-          function isBlockedEmail(e) {
-            if (!e) return true;
-            var lower = e.toLowerCase();
-            return blockedDomains.some(function(d) { return lower.endsWith('@' + d); });
-          }
-
-          var emails = [];
-          $('a[href^="mailto:"]').each(function() {
-            var href = $(this).attr('href') || '';
-            var email = href.replace('mailto:', '').split('?')[0].trim();
-            if (email && email.includes('@') && !isBlockedEmail(email)) emails.push(email);
-          });
-
-          var bodyText = $('body').text().replace(/\\s+/g, ' ').substring(0, 10000);
-          var emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}/g;
-          var textEmails = bodyText.match(emailRegex) || [];
-          textEmails.forEach(function(e) {
-            if (e && !e.endsWith('.png') && !e.endsWith('.jpg') && !e.endsWith('.gif') && !isBlockedEmail(e) && emails.indexOf(e) === -1) {
-              emails.push(e);
-            }
-          });
-
-          var externalLinks = [];
-          var socialLinks = {};
-          $('a[href]').each(function() {
-            var rawHref = ($(this).attr('href') || '').trim();
-            if (!rawHref || rawHref === '#' || rawHref.startsWith('javascript:')) return;
-            var href;
-            try { href = new URL(rawHref, request.url).href; } catch(e) { return; }
-            if (!href.startsWith('http')) return;
-            if (href.includes('linkedin.com/in/')) socialLinks.linkedin = href;
-            else if (href.includes('twitter.com/') || href.includes('x.com/')) socialLinks.twitter = href;
-            else if (href.includes('instagram.com/')) socialLinks.instagram = href;
-            else if (href.includes('facebook.com/')) socialLinks.facebook = href;
-            else if (href.includes('youtube.com/') || href.includes('youtu.be/')) socialLinks.youtube = href;
-            else if (href.includes('discord.gg') || href.includes('discord.com/')) socialLinks.discord = href;
-            else if (href.includes('tiktok.com/')) socialLinks.tiktok = href;
-            else if (href.startsWith('http') && !href.includes('patreon.com') && !href.includes('google.com') && !href.includes('apple.com') && !href.includes('spotify.com')) {
-              externalLinks.push(href);
-            }
-          });
-
-          var creatorName = '';
-          var ogTitle = $('meta[property="og:title"]').attr('content') || '';
-          if (ogTitle) creatorName = ogTitle.replace(/ \\| creating.*| is creating.*/i, '').replace(/ \\| Patreon/i, '').trim();
-          if (!creatorName) {
-            var h1 = $('h1').first().text().trim();
-            if (h1) creatorName = h1;
-          }
-
-          var aboutText = '';
-          var metaDesc = $('meta[name="description"]').attr('content') || '';
-          var ogDesc = $('meta[property="og:description"]').attr('content') || '';
-          aboutText = ogDesc || metaDesc || '';
-
-          $('script[type="application/ld+json"]').each(function() {
-            try {
-              var data = JSON.parse($(this).html() || '{}');
-              if (data.description && data.description.length > aboutText.length) aboutText = data.description;
-              if (data.name && !creatorName) creatorName = data.name;
-              if (data.email) {
-                var e = data.email.trim();
-                if (e.includes('@') && !isBlockedEmail(e) && emails.indexOf(e) === -1) emails.push(e);
-              }
-              if (data.sameAs && Array.isArray(data.sameAs)) {
-                data.sameAs.forEach(function(link) {
-                  if (typeof link === 'string' && link.startsWith('http')) externalLinks.push(link);
-                });
-              }
-            } catch(e) {}
-          });
-
-          var socialPlatforms = ['patreon.com','google.com','apple.com','microsoft.com','spotify.com','amazon.com','facebook.com','twitter.com','x.com','instagram.com','youtube.com','tiktok.com','discord.com','discord.gg','reddit.com','tumblr.com','pinterest.com','linkedin.com','twitch.tv','github.com','medium.com','wordpress.com','blogspot.com','bit.ly','linktr.ee','beacons.ai','carrd.co','ko-fi.com','buymeacoffee.com','gumroad.com','etsy.com','redbubble.com','teepublic.com','paypal.com','venmo.com','cashapp.com','substack.com'];
-          var personalWebsite = '';
-          for (var i = 0; i < externalLinks.length; i++) {
-            if (personalWebsite) break;
-            try {
-              var u = new URL(externalLinks[i]);
-              var dominated = socialPlatforms.some(function(d) { return u.hostname.includes(d); });
-              if (!dominated) personalWebsite = externalLinks[i];
-            } catch(e) {}
-          }
-
-          return {
-            url: request.url,
-            emails: emails,
-            socialLinks: socialLinks,
-            personalWebsite: personalWebsite,
-            externalLinks: externalLinks.slice(0, 20),
-            creatorName: creatorName,
-            aboutText: (aboutText || '').substring(0, 2000),
-            cloudflareBlocked: false,
-          };
-        }`,
-      }, 120000);
-
-      for (const item of items) {
-        if (item.cloudflareBlocked) {
-          cloudflareBlocked++;
-          continue;
-        }
-
-        const matchingLead = batch.find((l) => {
-          const leadUrl = normalizePatreonUrl(l.website);
-          const itemUrl = normalizePatreonUrl(item.url || "");
-          return leadUrl === itemUrl;
-        });
-        if (!matchingLead) continue;
-
-        let changed = false;
-
-        if (item.emails && item.emails.length > 0 && !matchingLead.email) {
-          const validEmail = item.emails.map((e: string) => cleanEmail(e)).find((e: string) => e);
-          if (validEmail) {
-            matchingLead.email = validEmail;
-            emailsFound++;
-            changed = true;
-          }
-        }
-
-        if (item.personalWebsite) {
-          const channels = matchingLead.ownedChannels || {};
-          if (!channels.website || channels.website === "detected") {
-            channels.website = item.personalWebsite;
-            matchingLead.ownedChannels = channels;
-            websitesFound++;
-            changed = true;
-          }
-        }
-
-        if (item.socialLinks) {
-          const channels = matchingLead.ownedChannels || {};
-          for (const [key, val] of Object.entries(item.socialLinks as Record<string, string>)) {
-            if (val && (!channels[key] || channels[key] === "detected")) {
-              channels[key] = val;
-              changed = true;
-            }
-          }
-          matchingLead.ownedChannels = channels;
-        }
-
-        if (!matchingLead.email && item.aboutText) {
-          const aboutEmails = extractEmailsFromText(item.aboutText);
-          if (aboutEmails.length > 0) {
-            matchingLead.email = aboutEmails[0];
-            emailsFound++;
-            changed = true;
-          }
-        }
-
-        let realName = "";
-        if (item.creatorName && item.creatorName.length > 2 && item.creatorName.includes(" ") && item.creatorName.length < 60) {
-          realName = item.creatorName;
-        }
-        if (!realName && item.aboutText) {
-          const namePatterns = [
-            /(?:I'm|I am|My name is|Hi,? I'm|Hey,? I'm)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)/,
-            /(?:This is|Created by|Founded by|By)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)/,
-          ];
-          for (const pattern of namePatterns) {
-            const match = item.aboutText.match(pattern);
-            if (match && match[1] && match[1].length < 40) {
-              realName = match[1].trim();
-              break;
-            }
-          }
-        }
-        if (realName) {
-          const currentName = matchingLead.leaderName || "";
-          const isBrandName = currentName === matchingLead.communityName || !currentName.includes(" ");
-          if (isBrandName) {
-            matchingLead.leaderName = realName;
-            changed = true;
-          }
-        }
-
-        if (changed) profilesEnriched++;
-      }
-
-      await appendAndSave(`Profile crawl batch ${batchNum}/${totalBatches}: enriched ${profilesEnriched} profiles, ${websitesFound} websites, ${emailsFound} emails so far (${items.length} pages, ${cloudflareBlocked} CF-blocked)`);
-    } catch (err: any) {
-      await appendAndSave(`[WARN] Patreon profile crawl batch ${batchNum} failed: ${err.message}`);
-    }
-  }
-
-  if (cloudflareBlocked > 0) {
-    await appendAndSave(`[INFO] Cloudflare blocked ${cloudflareBlocked}/${patreonLeads.length} profile pages - cross-platform email lookup will still proceed`);
-  }
-  await appendAndSave(`Patreon profiles: ${websitesFound} websites found, ${emailsFound} emails found, ${profilesEnriched} profiles enriched`);
-}
-
-function normalizeUrl(url: string): string {
-  if (!url) return "";
-  let normalized = url.split("#")[0].split("?")[0].toLowerCase().trim();
-  normalized = normalized.replace(/^http:\/\//, "https://");
-  normalized = normalized.replace(/^https?:\/\/www\./, "https://");
-  normalized = normalized.replace(/\/+$/, "");
-  return normalized;
-}
-
-async function crossPlatformEmailLookup(
-  platformLeads: PlatformLead[],
-  appendAndSave: (msg: string) => Promise<void>,
-): Promise<void> {
-  const supportedHosts = ["youtube.com", "facebook.com", "twitter.com", "x.com", "instagram.com", "tiktok.com", "twitch.tv", "linkedin.com"];
-
-  const leadsWithSocialUrls: { lead: PlatformLead; urls: string[] }[] = [];
-  const globalDedup = new Set<string>();
-
-  for (const lead of platformLeads) {
-    if (lead.email) continue;
-    const channels = lead.ownedChannels || {};
-    const urls: string[] = [];
-    for (const [key, val] of Object.entries(channels)) {
-      if (!val || key === "website" || key === "patreon") continue;
-      if (typeof val !== "string" || !val.startsWith("http")) continue;
-      try {
-        const host = new URL(val).hostname.replace(/^www\./, "");
-        if (!supportedHosts.some((h) => host === h || host.endsWith("." + h))) continue;
-      } catch {
-        continue;
-      }
-      const norm = normalizeUrl(val);
-      if (norm && !globalDedup.has(norm)) {
-        globalDedup.add(norm);
-        urls.push(val);
-      }
-    }
-    if (urls.length > 0) {
-      leadsWithSocialUrls.push({ lead, urls });
-    }
-  }
-
-  if (leadsWithSocialUrls.length === 0) {
-    await appendAndSave("Cross-platform email lookup: no social URLs found to check");
-    return;
-  }
-
-  const allUrls = leadsWithSocialUrls.flatMap((l) => l.urls);
-  await appendAndSave(`Cross-platform email lookup: checking ${allUrls.length} unique social URLs from ${leadsWithSocialUrls.length} leads...`);
-
-  const urlToLeadIndex = new Map<string, number>();
-  for (let li = 0; li < leadsWithSocialUrls.length; li++) {
-    for (const url of leadsWithSocialUrls[li].urls) {
-      const norm = normalizeUrl(url);
-      if (norm) urlToLeadIndex.set(norm, li);
-    }
-  }
-
-  const batchSize = 25;
-  let totalFound = 0;
-  let merged = 0;
-  const mergedLeadIndices = new Set<number>();
-
-  for (let i = 0; i < allUrls.length; i += batchSize) {
-    const batch = allUrls.slice(i, i + batchSize);
-    const batchNum = Math.floor(i / batchSize) + 1;
-    const totalBatches = Math.ceil(allUrls.length / batchSize);
-
-    try {
-      const items = await runActorAndGetResults("scraper-mind~all-social-media-email-scraper", {
-        urls: batch.map((url) => ({ url })),
-        proxyConfiguration: { useApifyProxy: true, apifyProxyGroups: ["RESIDENTIAL"] },
-      }, 120000);
-
-      if (items.length > 0 && totalFound === 0) {
-        const sampleKeys = Object.keys(items[0]).sort().join(", ");
-        await appendAndSave(`Cross-platform scraper fields: ${sampleKeys}`);
-        const sampleUrls = items.slice(0, 2).map((it: any) => `url=${it.url || "?"} socialUrl=${it.socialUrl || "?"} profileUrl=${it.profileUrl || "?"} inputUrl=${it.inputUrl || "?"}`);
-        await appendAndSave(`Cross-platform URL samples: ${sampleUrls.join(" | ")}`);
-      }
-
-      for (const item of items) {
-        const email = cleanEmail(item.email || "");
-        if (!email) continue;
-        totalFound++;
-
-        const candidateUrls = [
-          item.url, item.socialUrl, item.profileUrl, item.inputUrl,
-          item.link, item.socialLink, item.source_url, item.sourceUrl,
-        ].filter(Boolean);
-
-        let matched = false;
-        for (const candidateUrl of candidateUrls) {
-          const norm = normalizeUrl(candidateUrl);
-          if (!norm) continue;
-          const leadIdx = urlToLeadIndex.get(norm);
-          if (leadIdx !== undefined && !mergedLeadIndices.has(leadIdx)) {
-            const entry = leadsWithSocialUrls[leadIdx];
-            if (!entry.lead.email) {
-              entry.lead.email = email;
-              merged++;
-              mergedLeadIndices.add(leadIdx);
-              matched = true;
-              break;
-            }
-          }
-        }
-
-        if (!matched) {
-          for (const candidateUrl of candidateUrls) {
-            if (!candidateUrl) continue;
-            try {
-              const host = new URL(candidateUrl).hostname.replace(/^www\./, "");
-              const path = new URL(candidateUrl).pathname.replace(/\/+$/, "").toLowerCase();
-              for (let li = 0; li < leadsWithSocialUrls.length; li++) {
-                if (mergedLeadIndices.has(li)) continue;
-                const entry = leadsWithSocialUrls[li];
-                if (entry.lead.email) continue;
-                for (const leadUrl of entry.urls) {
-                  try {
-                    const lHost = new URL(leadUrl).hostname.replace(/^www\./, "");
-                    const lPath = new URL(leadUrl).pathname.replace(/\/+$/, "").toLowerCase();
-                    if (host === lHost && path === lPath) {
-                      entry.lead.email = email;
-                      merged++;
-                      mergedLeadIndices.add(li);
-                      matched = true;
-                      break;
-                    }
-                  } catch {}
-                }
-                if (matched) break;
-              }
-            } catch {}
-            if (matched) break;
-          }
-        }
-      }
-
-      await appendAndSave(`Cross-platform batch ${batchNum}/${totalBatches}: found ${totalFound} emails, merged ${merged} so far`);
-    } catch (err: any) {
-      await appendAndSave(`[WARN] Cross-platform batch ${batchNum} failed: ${err.message}`);
-    }
-  }
-
-  await appendAndSave(`Cross-platform email lookup: found ${totalFound} emails, merged ${merged} into leads`);
-}
-
-async function crawlCreatorWebsites(
-  platformLeads: PlatformLead[],
-  appendAndSave: (msg: string) => Promise<void>,
-): Promise<void> {
-  const skipDomains = ["patreon.com", "youtube.com", "instagram.com", "facebook.com", "twitter.com", "x.com", "tiktok.com", "discord.com", "discord.gg", "reddit.com", "linkedin.com", "linktr.ee", "beacons.ai", "tumblr.com", "pinterest.com", "twitch.tv", "github.com", "medium.com", "wordpress.com"];
-
-  const leadsWithWebsites = platformLeads.filter((l) => {
-    if (l.email) return false;
-    const channels = l.ownedChannels || {};
-    let website = channels.website || "";
-    if (!website || !website.startsWith("http")) {
-      website = l.website || "";
-    }
-    if (!website || !website.startsWith("http")) return false;
-    const domain = extractDomain(website);
-    if (!domain) return false;
-    if (skipDomains.some((s) => domain.includes(s))) return false;
-    if (!channels.website) channels.website = website;
-    l.ownedChannels = channels;
-    return true;
-  });
-
-  if (leadsWithWebsites.length === 0) return;
-
-  await appendAndSave(`Crawling ${leadsWithWebsites.length} creator websites for email addresses...`);
-
-  const batchSize = 15;
-  let emailsFound = 0;
-
-  for (let i = 0; i < leadsWithWebsites.length; i += batchSize) {
-    const batch = leadsWithWebsites.slice(i, i + batchSize);
-    const batchNum = Math.floor(i / batchSize) + 1;
-    const totalBatches = Math.ceil(leadsWithWebsites.length / batchSize);
-
-    try {
-      const startUrls = batch.map((l) => ({ url: l.ownedChannels.website }));
-
-      const items = await runActorAndGetResults("apify~cheerio-scraper", {
-        startUrls,
-        maxRequestsPerCrawl: batch.length * 4,
-        maxConcurrency: 10,
-        maxRequestRetries: 1,
-        linkSelector: "a[href]",
-        pseudoUrls: startUrls.map((su) => {
-          try {
-            const base = new URL(su.url);
-            return { purl: `${base.origin}/[.*]` };
-          } catch {
-            return { purl: su.url };
-          }
-        }),
-        pageFunction: `async function pageFunction(context) {
-          const { request, $, log, enqueueLinks } = context;
-          var bodyText = $('body').text().replace(/\\s+/g, ' ').substring(0, 8000);
-
-          var blockedDomains = ['patreon.com','example.com','sentry.io','cloudflare.com','w3.org','schema.org','googleapis.com','gstatic.com'];
-          function isBlockedEmail(e) {
-            if (!e) return true;
-            var lower = e.toLowerCase();
-            return blockedDomains.some(function(d) { return lower.endsWith('@' + d); });
-          }
-
-          var emails = [];
-          $('a[href^="mailto:"]').each(function() {
-            var href = $(this).attr('href') || '';
-            var email = href.replace('mailto:', '').split('?')[0].trim();
-            if (email && email.includes('@') && !isBlockedEmail(email)) emails.push(email);
-          });
-
-          var footerText = '';
-          $('footer, .footer, #footer, [role="contentinfo"]').each(function() {
-            footerText += ' ' + $(this).text();
-          });
-
-          var schemaEmails = [];
-          $('script[type="application/ld+json"]').each(function() {
-            try {
-              var data = JSON.parse($(this).html() || '{}');
-              if (data.email) schemaEmails.push(data.email);
-              if (data.contactPoint) {
-                var cp = Array.isArray(data.contactPoint) ? data.contactPoint : [data.contactPoint];
-                cp.forEach(function(c) { if (c.email) schemaEmails.push(c.email); });
-              }
-            } catch(e) {}
-          });
-
-          var contactPatterns = /\\b(contact|about|team|staff|who-we-are|connect|get-in-touch)\\b/i;
-          if (!request.userData || !request.userData.isSubpage) {
-            var contactLinks = [];
-            $('a[href]').each(function() {
-              var href = $(this).attr('href') || '';
-              var text = $(this).text().toLowerCase().trim();
-              if (contactPatterns.test(href) || contactPatterns.test(text)) {
-                try { contactLinks.push(new URL(href, request.url).href); } catch(e) {}
-              }
-            });
-            var unique = contactLinks.filter(function(v, i, a) { return a.indexOf(v) === i; }).slice(0, 3);
-            if (unique.length > 0) {
-              try {
-                await enqueueLinks({ urls: unique, userData: { isSubpage: true, parentUrl: request.url } });
-              } catch(e) {}
-            }
-          }
-
-          return {
-            url: request.url,
-            parentUrl: (request.userData && request.userData.parentUrl) || request.url,
-            isSubpage: !!(request.userData && request.userData.isSubpage),
-            bodyText: bodyText + ' ' + footerText,
-            emails: emails,
-            schemaEmails: schemaEmails,
-          };
-        }`,
-      }, 180000);
-
-      const siteEmails = new Map<string, string[]>();
-
-      for (const item of items) {
-        const rootUrl = item.parentUrl || item.url;
-        const rootDomain = extractDomain(rootUrl);
-        if (!rootDomain) continue;
-
-        const allEmails: string[] = siteEmails.get(rootDomain) || [];
-
-        if (item.emails) allEmails.push(...item.emails);
-        if (item.schemaEmails) allEmails.push(...item.schemaEmails);
-
-        const textEmails = extractEmailsFromText(item.bodyText || "");
-        allEmails.push(...textEmails);
-
-        siteEmails.set(rootDomain, allEmails);
-      }
-
-      for (const lead of batch) {
-        if (lead.email) continue;
-        const websiteUrl = lead.ownedChannels.website || "";
-        const domain = extractDomain(websiteUrl);
-        if (!domain) continue;
-
-        const emails = siteEmails.get(domain) || [];
-        const unique = Array.from(new Set(emails))
-          .map((e) => cleanEmail(e))
-          .filter((e) => e && !e.endsWith(".png") && !e.endsWith(".jpg") && !e.endsWith(".gif"));
-
-        if (unique.length > 0) {
-          lead.email = unique[0];
-          emailsFound++;
-        }
-      }
-
-      await appendAndSave(`Website crawl batch ${batchNum}/${totalBatches}: ${emailsFound} emails found so far`);
-    } catch (err: any) {
-      await appendAndSave(`[WARN] Website crawl batch ${batchNum} failed: ${err.message}`);
-    }
-  }
-
-  await appendAndSave(`Website crawl complete: found ${emailsFound} emails from creator websites`);
-}
-
 async function scrapeFacebookGroups(
   keywords: string[],
   maxItems: number,
@@ -1456,7 +919,7 @@ export async function runPipeline(runId: number): Promise<void> {
     }
 
     let emailScraperPromise: Promise<Map<string, string>> | null = null;
-    if (enabledSources.includes("patreon")) {
+    if (params.enableEmailScraper !== false && enabledSources.includes("patreon")) {
       emailScraperPromise = scrapePatreonEmails(keywords, (msg) => appendAndSave(msg));
     }
 
@@ -1477,7 +940,7 @@ export async function runPipeline(runId: number): Promise<void> {
       }
     }
 
-    if (emailScraperPromise) {
+    if (params.enableEmailScraper !== false && emailScraperPromise) {
       try {
         const emailMap = await emailScraperPromise;
         let emailsMerged = 0;
@@ -1505,14 +968,10 @@ export async function runPipeline(runId: number): Promise<void> {
       }
     }
 
-    await appendAndSave(`Platform discovery complete: ${allPlatformLeads.length} results`, 35, "Step 2: Profile & website crawl");
+    await appendAndSave(`Platform discovery complete: ${allPlatformLeads.length} results`, 35, "Step 2: Creating & scoring leads");
 
-    await crawlPatreonProfiles(allPlatformLeads, (msg) => appendAndSave(msg));
-    await crossPlatformEmailLookup(allPlatformLeads, (msg) => appendAndSave(msg));
-    await crawlCreatorWebsites(allPlatformLeads, (msg) => appendAndSave(msg));
-
-    const emailsAfterCrawl = allPlatformLeads.filter((l) => l.email).length;
-    await appendAndSave(`After crawl: ${emailsAfterCrawl}/${allPlatformLeads.length} leads have emails`, 45, "Step 3: Google Search discovery");
+    const emailsAfterDiscovery = allPlatformLeads.filter((l) => l.email).length;
+    await appendAndSave(`After discovery: ${emailsAfterDiscovery}/${allPlatformLeads.length} leads have emails`, 45, "Step 3: Google Search discovery");
 
     let allDiscoveredUrls: { url: string; domain: string; source: string }[] = [];
 
@@ -2005,94 +1464,149 @@ export async function runPipeline(runId: number): Promise<void> {
       .sort((a, b) => (b.score || 0) - (a.score || 0));
     let enrichedCount = 0;
 
-    if (isApolloAvailable() && leadsToEnrich.length > 0) {
-      const totalWithoutEmail = runLeads.filter((l) => !l.email).length;
-      const skippedLowScore = totalWithoutEmail - leadsToEnrich.length;
-      await appendAndSave(`Apollo.io: enriching top ${Math.min(leadsToEnrich.length, APOLLO_MAX_CALLS_PER_RUN)} of ${totalWithoutEmail} leads without email (${skippedLowScore} below score ${APOLLO_MIN_SCORE}, max ${APOLLO_MAX_CALLS_PER_RUN} API calls)...`);
+    if (params.enableApollo !== false) {
+      if (isApolloAvailable() && leadsToEnrich.length > 0) {
+        const totalWithoutEmail = runLeads.filter((l) => !l.email).length;
+        const skippedLowScore = totalWithoutEmail - leadsToEnrich.length;
+        await appendAndSave(`Apollo.io: enriching top ${Math.min(leadsToEnrich.length, APOLLO_MAX_CALLS_PER_RUN)} of ${totalWithoutEmail} leads without email (${skippedLowScore} below score ${APOLLO_MIN_SCORE}, max ${APOLLO_MAX_CALLS_PER_RUN} API calls)...`);
 
-      let apolloSkipped = 0;
-      let apolloCalls = 0;
-      for (const lead of leadsToEnrich) {
-        if (apolloCalls >= APOLLO_MAX_CALLS_PER_RUN) {
-          await appendAndSave(`Apollo.io: reached ${APOLLO_MAX_CALLS_PER_RUN} call limit, stopping`);
-          break;
-        }
-        try {
-          const leaderName = lead.leaderName || lead.communityName || "";
-          if (!leaderName) continue;
-
-          if (!isValidApolloCandidate(leaderName)) {
-            apolloSkipped++;
-            continue;
+        let apolloSkipped = 0;
+        let apolloCalls = 0;
+        for (const lead of leadsToEnrich) {
+          if (apolloCalls >= APOLLO_MAX_CALLS_PER_RUN) {
+            await appendAndSave(`Apollo.io: reached ${APOLLO_MAX_CALLS_PER_RUN} call limit, stopping`);
+            break;
           }
+          try {
+            const leaderName = lead.leaderName || lead.communityName || "";
+            if (!leaderName) continue;
 
-          const nameParts = leaderName.trim().split(/\s+/);
-          const firstName = nameParts[0] || "";
-          const lastName = nameParts.length > 1 ? nameParts.slice(1).join(" ") : "";
-          const hasRealName = nameParts.length >= 2 && firstName.length > 1 && lastName.length > 1;
-
-          const channels = (lead.ownedChannels as Record<string, string>) || {};
-          let domain = apolloExtractDomain(lead.website || "");
-          if (!domain || !apolloIsEnrichable(domain)) {
-            if (channels.website) {
-              domain = apolloExtractDomain(channels.website);
+            if (!isValidApolloCandidate(leaderName)) {
+              apolloSkipped++;
+              continue;
             }
-          }
-          const enrichableDomain = domain && apolloIsEnrichable(domain) ? domain : undefined;
 
-          const linkedinUrl = channels.linkedin && channels.linkedin.startsWith("http") ? channels.linkedin : undefined;
+            const nameParts = leaderName.trim().split(/\s+/);
+            const firstName = nameParts[0] || "";
+            const lastName = nameParts.length > 1 ? nameParts.slice(1).join(" ") : "";
+            const hasRealName = nameParts.length >= 2 && firstName.length > 1 && lastName.length > 1;
 
-          apolloCalls++;
-          let result = await apolloPersonMatch({
-            name: leaderName,
-            firstName: hasRealName ? firstName : undefined,
-            lastName: hasRealName ? lastName : undefined,
-            domain: enrichableDomain,
-            organizationName: lead.communityName !== leaderName ? lead.communityName || undefined : undefined,
-            linkedinUrl,
-          });
+            const channels = (lead.ownedChannels as Record<string, string>) || {};
+            let domain = apolloExtractDomain(lead.website || "");
+            if (!domain || !apolloIsEnrichable(domain)) {
+              if (channels.website) {
+                domain = apolloExtractDomain(channels.website);
+              }
+            }
+            const enrichableDomain = domain && apolloIsEnrichable(domain) ? domain : undefined;
 
-          if (!result && hasRealName && !linkedinUrl && apolloCalls < APOLLO_MAX_CALLS_PER_RUN) {
+            const linkedinUrl = channels.linkedin && channels.linkedin.startsWith("http") ? channels.linkedin : undefined;
+
             apolloCalls++;
-            result = await apolloPersonMatch({
-              firstName,
-              lastName,
+            let result = await apolloPersonMatch({
+              name: leaderName,
+              firstName: hasRealName ? firstName : undefined,
+              lastName: hasRealName ? lastName : undefined,
               domain: enrichableDomain,
+              organizationName: lead.communityName !== leaderName ? lead.communityName || undefined : undefined,
+              linkedinUrl,
             });
+
+            if (!result && hasRealName && !linkedinUrl && apolloCalls < APOLLO_MAX_CALLS_PER_RUN) {
+              apolloCalls++;
+              result = await apolloPersonMatch({
+                firstName,
+                lastName,
+                domain: enrichableDomain,
+              });
+              await new Promise((r) => setTimeout(r, 300));
+            }
+
+            if (!result) continue;
+
+            const updateData: Record<string, any> = {};
+
+            if (result.email) updateData.email = result.email;
+            if (result.phone && !lead.phone) updateData.phone = result.phone;
+            if (result.linkedin && !lead.linkedin) updateData.linkedin = result.linkedin;
+            if (result.location && !lead.location) updateData.location = result.location;
+            if (!lead.leaderName && result.fullName) updateData.leaderName = result.fullName;
+
+            const existingChannels = (lead.ownedChannels as Record<string, string>) || {};
+            const updatedChannels = { ...existingChannels };
+            if (result.twitter && !existingChannels.twitter) updatedChannels.twitter = result.twitter;
+            if (result.facebook && !existingChannels.facebook) updatedChannels.facebook = result.facebook;
+            if (result.linkedin && !existingChannels.linkedin) updatedChannels.linkedin = result.linkedin;
+            if (Object.keys(updatedChannels).length > Object.keys(existingChannels).length) {
+              updateData.ownedChannels = updatedChannels;
+            }
+
+            if (Object.keys(updateData).length === 0) continue;
+
+            const breakdown = scoreLead({
+              name: lead.communityName || "",
+              description: "",
+              type: lead.communityType || "",
+              location: updateData.location || lead.location || "",
+              website: lead.website || "",
+              email: updateData.email || lead.email || "",
+              phone: updateData.phone || lead.phone || "",
+              linkedin: updateData.linkedin || lead.linkedin || "",
+              ownedChannels: updateData.ownedChannels || existingChannels,
+              monetizationSignals: (lead.monetizationSignals as Record<string, any>) || {},
+              engagementSignals: (lead.engagementSignals as Record<string, any>) || {},
+              tripFitSignals: (lead.tripFitSignals as Record<string, any>) || {},
+              leaderName: updateData.leaderName || lead.leaderName || "",
+              memberCount: (lead.engagementSignals as any)?.member_count || 0,
+              subscriberCount: (lead.engagementSignals as any)?.subscriber_count || 0,
+              raw: (lead.raw as Record<string, any>) || {},
+            });
+
+            const hasContact = !!(updateData.email || lead.website || updateData.phone || updateData.linkedin);
+            updateData.score = breakdown.total;
+            updateData.scoreBreakdown = breakdown;
+            updateData.status = determineStatus(breakdown.total, params.threshold, hasContact);
+
+            await storage.updateLead(lead.id, updateData);
+            enrichedCount++;
+
             await new Promise((r) => setTimeout(r, 300));
+          } catch (err: any) {
+            await appendAndSave(`[WARN] Apollo enrichment failed for lead ${lead.id}: ${err.message}`);
           }
+        }
 
-          if (!result) continue;
+        await appendAndSave(`Apollo.io: enriched ${enrichedCount} of ${leadsToEnrich.length} leads (${apolloSkipped} skipped invalid names, ${apolloCalls} API calls used)`);
+      } else if (isHunterAvailable() && leadsToEnrich.length > 0) {
+        await appendAndSave(`Hunter.io fallback: enriching ${leadsToEnrich.length} leads missing emails...`);
+        const enrichedDomains = new Set<string>();
 
-          const updateData: Record<string, any> = {};
+        for (const lead of leadsToEnrich) {
+          const domain = extractDomainFromUrl(lead.website || "");
+          if (!domain || !isEnrichableDomain(domain) || enrichedDomains.has(domain)) continue;
+          enrichedDomains.add(domain);
 
-          if (result.email) updateData.email = result.email;
-          if (result.phone && !lead.phone) updateData.phone = result.phone;
-          if (result.linkedin && !lead.linkedin) updateData.linkedin = result.linkedin;
-          if (result.location && !lead.location) updateData.location = result.location;
-          if (!lead.leaderName && result.fullName) updateData.leaderName = result.fullName;
+          const result = await hunterDomainSearch(domain);
+          if (!result || result.emails.length === 0) continue;
 
-          const existingChannels = (lead.ownedChannels as Record<string, string>) || {};
-          const updatedChannels = { ...existingChannels };
-          if (result.twitter && !existingChannels.twitter) updatedChannels.twitter = result.twitter;
-          if (result.facebook && !existingChannels.facebook) updatedChannels.facebook = result.facebook;
-          if (result.linkedin && !existingChannels.linkedin) updatedChannels.linkedin = result.linkedin;
-          if (Object.keys(updatedChannels).length > Object.keys(existingChannels).length) {
-            updateData.ownedChannels = updatedChannels;
+          const bestEmail = result.emails.sort((a, b) => b.confidence - a.confidence)[0];
+          const updateData: Record<string, any> = { email: bestEmail.value };
+          if (bestEmail.phone_number && !lead.phone) updateData.phone = bestEmail.phone_number;
+          if (bestEmail.linkedin && !lead.linkedin) updateData.linkedin = bestEmail.linkedin;
+          if (!lead.leaderName && bestEmail.first_name && bestEmail.last_name) {
+            updateData.leaderName = `${bestEmail.first_name} ${bestEmail.last_name}`;
           }
-
-          if (Object.keys(updateData).length === 0) continue;
 
           const breakdown = scoreLead({
             name: lead.communityName || "",
             description: "",
             type: lead.communityType || "",
-            location: updateData.location || lead.location || "",
+            location: lead.location || "",
             website: lead.website || "",
             email: updateData.email || lead.email || "",
             phone: updateData.phone || lead.phone || "",
             linkedin: updateData.linkedin || lead.linkedin || "",
-            ownedChannels: updateData.ownedChannels || existingChannels,
+            ownedChannels: (lead.ownedChannels as Record<string, string>) || {},
             monetizationSignals: (lead.monetizationSignals as Record<string, any>) || {},
             engagementSignals: (lead.engagementSignals as Record<string, any>) || {},
             tripFitSignals: (lead.tripFitSignals as Record<string, any>) || {},
@@ -2109,66 +1623,15 @@ export async function runPipeline(runId: number): Promise<void> {
 
           await storage.updateLead(lead.id, updateData);
           enrichedCount++;
-
-          await new Promise((r) => setTimeout(r, 300));
-        } catch (err: any) {
-          await appendAndSave(`[WARN] Apollo enrichment failed for lead ${lead.id}: ${err.message}`);
-        }
-      }
-
-      await appendAndSave(`Apollo.io: enriched ${enrichedCount} of ${leadsToEnrich.length} leads (${apolloSkipped} skipped invalid names, ${apolloCalls} API calls used)`);
-    } else if (isHunterAvailable() && leadsToEnrich.length > 0) {
-      await appendAndSave(`Hunter.io fallback: enriching ${leadsToEnrich.length} leads missing emails...`);
-      const enrichedDomains = new Set<string>();
-
-      for (const lead of leadsToEnrich) {
-        const domain = extractDomainFromUrl(lead.website || "");
-        if (!domain || !isEnrichableDomain(domain) || enrichedDomains.has(domain)) continue;
-        enrichedDomains.add(domain);
-
-        const result = await hunterDomainSearch(domain);
-        if (!result || result.emails.length === 0) continue;
-
-        const bestEmail = result.emails.sort((a, b) => b.confidence - a.confidence)[0];
-        const updateData: Record<string, any> = { email: bestEmail.value };
-        if (bestEmail.phone_number && !lead.phone) updateData.phone = bestEmail.phone_number;
-        if (bestEmail.linkedin && !lead.linkedin) updateData.linkedin = bestEmail.linkedin;
-        if (!lead.leaderName && bestEmail.first_name && bestEmail.last_name) {
-          updateData.leaderName = `${bestEmail.first_name} ${bestEmail.last_name}`;
+          await new Promise((r) => setTimeout(r, 200));
         }
 
-        const breakdown = scoreLead({
-          name: lead.communityName || "",
-          description: "",
-          type: lead.communityType || "",
-          location: lead.location || "",
-          website: lead.website || "",
-          email: updateData.email || lead.email || "",
-          phone: updateData.phone || lead.phone || "",
-          linkedin: updateData.linkedin || lead.linkedin || "",
-          ownedChannels: (lead.ownedChannels as Record<string, string>) || {},
-          monetizationSignals: (lead.monetizationSignals as Record<string, any>) || {},
-          engagementSignals: (lead.engagementSignals as Record<string, any>) || {},
-          tripFitSignals: (lead.tripFitSignals as Record<string, any>) || {},
-          leaderName: updateData.leaderName || lead.leaderName || "",
-          memberCount: (lead.engagementSignals as any)?.member_count || 0,
-          subscriberCount: (lead.engagementSignals as any)?.subscriber_count || 0,
-          raw: (lead.raw as Record<string, any>) || {},
-        });
-
-        const hasContact = !!(updateData.email || lead.website || updateData.phone || updateData.linkedin);
-        updateData.score = breakdown.total;
-        updateData.scoreBreakdown = breakdown;
-        updateData.status = determineStatus(breakdown.total, params.threshold, hasContact);
-
-        await storage.updateLead(lead.id, updateData);
-        enrichedCount++;
-        await new Promise((r) => setTimeout(r, 200));
+        await appendAndSave(`Hunter.io: enriched ${enrichedCount} leads from ${enrichedDomains.size} domains`);
+      } else {
+        await appendAndSave("Email enrichment: skipped (no Apollo or Hunter API key configured)");
       }
-
-      await appendAndSave(`Hunter.io: enriched ${enrichedCount} leads from ${enrichedDomains.size} domains`);
     } else {
-      await appendAndSave("Email enrichment: skipped (no Apollo or Hunter API key configured)");
+      await appendAndSave("Apollo enrichment skipped (disabled by user)");
     }
 
     await appendAndSave("Recalculating scores...", 90, "Step 7: Scoring & qualification");
@@ -2261,48 +1724,40 @@ export async function reEnrichRun(runId: number): Promise<void> {
       raw: (lead.raw as Record<string, any>) || {},
     }));
 
-    await appendAndSave(`Step 1: Email scraper for Patreon...`, 5, "Re-enrichment: Email scraper");
-    const patreonKeywords = (params.seedKeywords || []);
-    if (patreonKeywords.length > 0) {
-      try {
-        const emailMap = await scrapePatreonEmails(patreonKeywords, appendAndSave);
-        let emailsMerged = 0;
-        for (const pl of platformLeads) {
-          if (pl.email) continue;
+    if (params.enableEmailScraper !== false) {
+      await appendAndSave(`Step 1: Email scraper for Patreon...`, 5, "Re-enrichment: Email scraper");
+      const patreonKeywords = (params.seedKeywords || []);
+      if (patreonKeywords.length > 0) {
+        try {
+          const emailMap = await scrapePatreonEmails(patreonKeywords, appendAndSave);
+          let emailsMerged = 0;
+          for (const pl of platformLeads) {
+            if (pl.email) continue;
 
-          const candidateUrls: string[] = [];
-          const mainUrl = normalizePatreonUrl(pl.website || "");
-          if (mainUrl && mainUrl.includes("patreon.com")) candidateUrls.push(mainUrl);
-          const patreonChannel = normalizePatreonUrl(pl.ownedChannels?.patreon || "");
-          if (patreonChannel && patreonChannel.includes("patreon.com") && patreonChannel !== mainUrl) candidateUrls.push(patreonChannel);
+            const candidateUrls: string[] = [];
+            const mainUrl = normalizePatreonUrl(pl.website || "");
+            if (mainUrl && mainUrl.includes("patreon.com")) candidateUrls.push(mainUrl);
+            const patreonChannel = normalizePatreonUrl(pl.ownedChannels?.patreon || "");
+            if (patreonChannel && patreonChannel.includes("patreon.com") && patreonChannel !== mainUrl) candidateUrls.push(patreonChannel);
 
-          for (const url of candidateUrls) {
-            if (emailMap.has(url)) {
-              pl.email = emailMap.get(url)!;
-              emailsMerged++;
-              break;
+            for (const url of candidateUrls) {
+              if (emailMap.has(url)) {
+                pl.email = emailMap.get(url)!;
+                emailsMerged++;
+                break;
+              }
             }
           }
+          await appendAndSave(`Email scraper: merged ${emailsMerged} emails into leads (map has ${emailMap.size} entries)`);
+        } catch (err: any) {
+          await appendAndSave(`[WARN] Email scraper failed: ${err.message}`);
         }
-        await appendAndSave(`Email scraper: merged ${emailsMerged} emails into leads (map has ${emailMap.size} entries)`);
-      } catch (err: any) {
-        await appendAndSave(`[WARN] Email scraper failed: ${err.message}`);
       }
+    } else {
+      await appendAndSave("Email scraper skipped (disabled by user)", 5);
     }
 
-    await appendAndSave(`Step 2: Crawling Patreon profiles...`, 15, "Re-enrichment: Profile crawl");
-    await crawlPatreonProfiles(platformLeads, appendAndSave);
-    await appendAndSave(`Profile crawl complete`, 25);
-
-    await appendAndSave(`Step 2b: Cross-platform email lookup...`, 28, "Re-enrichment: Cross-platform emails");
-    await crossPlatformEmailLookup(platformLeads, appendAndSave);
-    await appendAndSave(`Cross-platform lookup complete`, 32);
-
-    await appendAndSave(`Step 3: Crawling creator websites...`, 35, "Re-enrichment: Website crawl");
-    await crawlCreatorWebsites(platformLeads, appendAndSave);
-    await appendAndSave(`Website crawl complete`, 55);
-
-    await appendAndSave(`Step 4: Updating leads in database...`, 60, "Re-enrichment: Saving crawl results");
+    await appendAndSave(`Step 2: Updating leads in database...`, 25, "Re-enrichment: Saving results");
     let crawlUpdated = 0;
     for (const pl of platformLeads) {
       const original = leads.find((l) => l.id === pl.dbId);
@@ -2325,106 +1780,110 @@ export async function reEnrichRun(runId: number): Promise<void> {
         crawlUpdated++;
       }
     }
-    await appendAndSave(`Updated ${crawlUpdated} leads from crawl data`, 65);
+    await appendAndSave(`Updated ${crawlUpdated} leads from data`, 45);
 
-    const refreshedLeads = await storage.listLeadsByRun(runId);
-    const RE_APOLLO_MAX_CALLS = 25;
-    const RE_APOLLO_MIN_SCORE = 25;
-    const leadsToEnrich = refreshedLeads
-      .filter((l) => (!l.email || l.email === "") && (l.score || 0) >= RE_APOLLO_MIN_SCORE)
-      .sort((a, b) => (b.score || 0) - (a.score || 0));
-    const totalWithoutEmail = refreshedLeads.filter((l) => !l.email || l.email === "").length;
+    if (params.enableApollo !== false) {
+      const refreshedLeads = await storage.listLeadsByRun(runId);
+      const RE_APOLLO_MAX_CALLS = 25;
+      const RE_APOLLO_MIN_SCORE = 25;
+      const leadsToEnrich = refreshedLeads
+        .filter((l) => (!l.email || l.email === "") && (l.score || 0) >= RE_APOLLO_MIN_SCORE)
+        .sort((a, b) => (b.score || 0) - (a.score || 0));
+      const totalWithoutEmail = refreshedLeads.filter((l) => !l.email || l.email === "").length;
 
-    await appendAndSave(`Step 5: Apollo enrichment for top ${Math.min(leadsToEnrich.length, RE_APOLLO_MAX_CALLS)} of ${totalWithoutEmail} leads without email (max ${RE_APOLLO_MAX_CALLS} calls)...`, 70, "Re-enrichment: Apollo enrichment");
+      await appendAndSave(`Step 3: Apollo enrichment for top ${Math.min(leadsToEnrich.length, RE_APOLLO_MAX_CALLS)} of ${totalWithoutEmail} leads without email (max ${RE_APOLLO_MAX_CALLS} calls)...`, 50, "Re-enrichment: Apollo enrichment");
 
-    let enrichedCount = 0;
-    if (isApolloAvailable() && leadsToEnrich.length > 0) {
-      let apolloSkipped = 0;
-      let apolloCalls = 0;
-      for (const lead of leadsToEnrich) {
-        if (apolloCalls >= RE_APOLLO_MAX_CALLS) {
-          await appendAndSave(`Apollo.io: reached ${RE_APOLLO_MAX_CALLS} call limit, stopping`);
-          break;
-        }
-        try {
-          const leaderName = lead.leaderName || lead.communityName || "";
-          if (!leaderName) continue;
-
-          if (!isValidApolloCandidate(leaderName)) {
-            apolloSkipped++;
-            continue;
+      let enrichedCount = 0;
+      if (isApolloAvailable() && leadsToEnrich.length > 0) {
+        let apolloSkipped = 0;
+        let apolloCalls = 0;
+        for (const lead of leadsToEnrich) {
+          if (apolloCalls >= RE_APOLLO_MAX_CALLS) {
+            await appendAndSave(`Apollo.io: reached ${RE_APOLLO_MAX_CALLS} call limit, stopping`);
+            break;
           }
+          try {
+            const leaderName = lead.leaderName || lead.communityName || "";
+            if (!leaderName) continue;
 
-          const nameParts = leaderName.trim().split(/\s+/);
-          const firstName = nameParts[0] || "";
-          const lastName = nameParts.length > 1 ? nameParts.slice(1).join(" ") : "";
-          const hasRealName = nameParts.length >= 2 && firstName.length > 1 && lastName.length > 1;
-
-          const channels = (lead.ownedChannels as Record<string, string>) || {};
-          let domain = apolloExtractDomain(lead.website || "");
-          if (!domain || !apolloIsEnrichable(domain)) {
-            if (channels.website) {
-              domain = apolloExtractDomain(channels.website);
+            if (!isValidApolloCandidate(leaderName)) {
+              apolloSkipped++;
+              continue;
             }
-          }
-          const enrichableDomain = domain && apolloIsEnrichable(domain) ? domain : undefined;
 
-          const linkedinUrl = channels.linkedin && channels.linkedin.startsWith("http") ? channels.linkedin : undefined;
+            const nameParts = leaderName.trim().split(/\s+/);
+            const firstName = nameParts[0] || "";
+            const lastName = nameParts.length > 1 ? nameParts.slice(1).join(" ") : "";
+            const hasRealName = nameParts.length >= 2 && firstName.length > 1 && lastName.length > 1;
 
-          apolloCalls++;
-          let result = await apolloPersonMatch({
-            name: leaderName,
-            firstName: hasRealName ? firstName : undefined,
-            lastName: hasRealName ? lastName : undefined,
-            domain: enrichableDomain,
-            organizationName: lead.communityName !== leaderName ? lead.communityName || undefined : undefined,
-            linkedinUrl,
-          });
+            const channels = (lead.ownedChannels as Record<string, string>) || {};
+            let domain = apolloExtractDomain(lead.website || "");
+            if (!domain || !apolloIsEnrichable(domain)) {
+              if (channels.website) {
+                domain = apolloExtractDomain(channels.website);
+              }
+            }
+            const enrichableDomain = domain && apolloIsEnrichable(domain) ? domain : undefined;
 
-          if (!result && hasRealName && !linkedinUrl && apolloCalls < RE_APOLLO_MAX_CALLS) {
+            const linkedinUrl = channels.linkedin && channels.linkedin.startsWith("http") ? channels.linkedin : undefined;
+
             apolloCalls++;
-            result = await apolloPersonMatch({
-              firstName,
-              lastName,
+            let result = await apolloPersonMatch({
+              name: leaderName,
+              firstName: hasRealName ? firstName : undefined,
+              lastName: hasRealName ? lastName : undefined,
               domain: enrichableDomain,
+              organizationName: lead.communityName !== leaderName ? lead.communityName || undefined : undefined,
+              linkedinUrl,
             });
+
+            if (!result && hasRealName && !linkedinUrl && apolloCalls < RE_APOLLO_MAX_CALLS) {
+              apolloCalls++;
+              result = await apolloPersonMatch({
+                firstName,
+                lastName,
+                domain: enrichableDomain,
+              });
+              await new Promise((r) => setTimeout(r, 300));
+            }
+
+            if (!result) continue;
+
+            const updateData: Record<string, any> = {};
+            if (result.email) updateData.email = result.email;
+            if (result.phone && !lead.phone) updateData.phone = result.phone;
+            if (result.linkedin && !lead.linkedin) updateData.linkedin = result.linkedin;
+            if (result.location && !lead.location) updateData.location = result.location;
+            if (!lead.leaderName && result.fullName) updateData.leaderName = result.fullName;
+
+            const existingChannels = (lead.ownedChannels as Record<string, string>) || {};
+            const updatedChannels = { ...existingChannels };
+            if (result.twitter && !existingChannels.twitter) updatedChannels.twitter = result.twitter;
+            if (result.facebook && !existingChannels.facebook) updatedChannels.facebook = result.facebook;
+            if (result.linkedin && !existingChannels.linkedin) updatedChannels.linkedin = result.linkedin;
+            if (Object.keys(updatedChannels).length > Object.keys(existingChannels).length) {
+              updateData.ownedChannels = updatedChannels;
+            }
+
+            if (Object.keys(updateData).length > 0) {
+              await storage.updateLead(lead.id, updateData);
+              enrichedCount++;
+            }
+
             await new Promise((r) => setTimeout(r, 300));
+          } catch (err: any) {
+            await appendAndSave(`[WARN] Apollo enrichment failed for lead ${lead.id}: ${err.message}`);
           }
-
-          if (!result) continue;
-
-          const updateData: Record<string, any> = {};
-          if (result.email) updateData.email = result.email;
-          if (result.phone && !lead.phone) updateData.phone = result.phone;
-          if (result.linkedin && !lead.linkedin) updateData.linkedin = result.linkedin;
-          if (result.location && !lead.location) updateData.location = result.location;
-          if (!lead.leaderName && result.fullName) updateData.leaderName = result.fullName;
-
-          const existingChannels = (lead.ownedChannels as Record<string, string>) || {};
-          const updatedChannels = { ...existingChannels };
-          if (result.twitter && !existingChannels.twitter) updatedChannels.twitter = result.twitter;
-          if (result.facebook && !existingChannels.facebook) updatedChannels.facebook = result.facebook;
-          if (result.linkedin && !existingChannels.linkedin) updatedChannels.linkedin = result.linkedin;
-          if (Object.keys(updatedChannels).length > Object.keys(existingChannels).length) {
-            updateData.ownedChannels = updatedChannels;
-          }
-
-          if (Object.keys(updateData).length > 0) {
-            await storage.updateLead(lead.id, updateData);
-            enrichedCount++;
-          }
-
-          await new Promise((r) => setTimeout(r, 300));
-        } catch (err: any) {
-          await appendAndSave(`[WARN] Apollo enrichment failed for lead ${lead.id}: ${err.message}`);
         }
+        await appendAndSave(`Apollo.io: enriched ${enrichedCount} of ${leadsToEnrich.length} leads (${apolloSkipped} skipped invalid names, ${apolloCalls} API calls used)`, 70);
+      } else {
+        await appendAndSave("Apollo enrichment skipped (no API key configured)", 70);
       }
-      await appendAndSave(`Apollo.io: enriched ${enrichedCount} of ${leadsToEnrich.length} leads (${apolloSkipped} skipped invalid names, ${apolloCalls} API calls used)`, 85);
     } else {
-      await appendAndSave("Apollo enrichment skipped (no API key configured)", 85);
+      await appendAndSave("Apollo enrichment skipped (disabled by user)", 70);
     }
 
-    await appendAndSave(`Step 6: Re-scoring all leads...`, 88, "Re-enrichment: Scoring");
+    await appendAndSave(`Step 4: Re-scoring all leads...`, 75, "Re-enrichment: Scoring");
     const finalLeads = await storage.listLeadsByRun(runId);
     let reScored = 0;
     for (const lead of finalLeads) {

@@ -47,23 +47,23 @@ shared/
 
 ## Pipeline Steps
 1. **Platform Discovery** - Run user-selected Apify scrapers in parallel:
-   - Meetup Groups (easyapi~meetup-groups-scraper) - member counts, descriptions, locations
-   - YouTube Channels (streamers~youtube-scraper) - subscribers, monetization, social links
-   - Reddit Communities (trudax~reddit-scraper-lite) - member counts, descriptions
-   - Eventbrite Events (aitorsm~eventbrite) - organizer data, followers, venues
-   - Facebook Groups (apify/facebook-groups-scraper) - member counts, public groups
-   - Patreon Creators (powerai~patreon-creators-search-scraper) - patron counts, tiers, social links
-   - **Email Scraper** (scraper-mind~all-social-media-email-scraper) - runs in parallel with Patreon creator search, extracts emails directly from Patreon profiles, merged by URL match
-2. **Profile & Website Crawl** - Puppeteer scraper crawls each Patreon profile page to extract personal website, social links, real names, and emails; then cross-platform email lookup runs the email scraper on collected social URLs (YouTube, Facebook, Twitter, etc.) from ownedChannels for leads still missing emails; then crawls personal websites (contact/about pages) for additional email extraction
-3. **Google Search** - Discover generic website URLs via Google Search Scraper (optional)
-4. **Extract** - Crawl generic websites with Cheerio Scraper (follows contact/about/team subpages to find organizer info)
-5. **Create & Score** - ICP scoring (0-100) with 6 pillars + audience size bonus + contact info bonus
-6. **Contact Enrichment** - Apollo.io for remaining leads without emails (with isValidApolloCandidate filter to skip brand names/single-word identifiers)
-7. **Scoring & Qualification** - Final scoring pass and lead qualification
-8. **Export** - CSV download for qualified/watchlist leads (global or per-run)
+   - Patreon Creators (powerai~patreon-creators-search-scraper) - patron counts, tiers, social links (currently the only active source)
+   - **Email Scraper** (scraper-mind~all-social-media-email-scraper) - runs in parallel, keyword-based email search on selected platforms, merged by URL match (toggleable)
+   - Other sources (Meetup, YouTube, Reddit, Eventbrite, Facebook) - grayed out, coming soon
+2. **Google Search** - Discover generic website URLs via Google Search Scraper (optional, coming soon)
+3. **Extract** - Crawl generic websites with Cheerio Scraper (follows contact/about/team subpages)
+4. **Create & Score** - ICP scoring (0-100) with 6 pillars + audience size bonus + contact info bonus
+5. **Contact Enrichment** - Apollo.io for remaining leads without emails (toggleable, capped at 25 calls/run, min score 25)
+6. **Scoring & Qualification** - Final scoring pass and lead qualification
+7. **Export** - CSV download for qualified/watchlist leads (global or per-run)
+
+## Enrichment Methods (User-Toggleable)
+Users can enable/disable enrichment methods per run via the "Enrichment Methods" card:
+- **Email Scraper** - Keyword-based email search on selected platforms via Apify (on by default)
+- **Apollo.io** - Contact lookup by name & domain using API credits (on by default)
 
 ## Source Selection
-Users can toggle which platforms to search per run via the "Data Sources" card on the discovery form. Available sources: Meetup, YouTube, Reddit, Eventbrite, Facebook Groups, Google Search + Websites. The `enabledSources` array is stored in RunParams.
+Users can toggle which platforms to search per run via the "Data Sources" card on the discovery form. Currently only Patreon is active; other sources are grayed out until ready.
 
 ## Apify Actors Used
 - `apify~google-search-scraper` - Google Search discovery
