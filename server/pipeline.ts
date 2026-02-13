@@ -674,7 +674,7 @@ async function crawlPatreonProfiles(
 
   await appendAndSave(`Crawling ${patreonLeads.length} Patreon profiles for contact info...`);
 
-  const batchSize = 25;
+  const batchSize = 15;
   let profilesEnriched = 0;
   let emailsFound = 0;
   let websitesFound = 0;
@@ -685,92 +685,126 @@ async function crawlPatreonProfiles(
     const totalBatches = Math.ceil(patreonLeads.length / batchSize);
 
     try {
-      const items = await runActorAndGetResults("apify~cheerio-scraper", {
+      const items = await runActorAndGetResults("apify/puppeteer-scraper", {
         startUrls: batch.map((l) => ({ url: l.website })),
         maxRequestsPerCrawl: batch.length,
-        maxConcurrency: 10,
-        maxRequestRetries: 1,
+        maxConcurrency: 5,
+        maxRequestRetries: 2,
+        useChrome: true,
+        proxyConfiguration: { useApifyProxy: true, apifyProxyGroups: ["RESIDENTIAL"] },
+        preNavigationHooks: `[
+          async ({ page }, goToOptions) => {
+            goToOptions.waitUntil = 'networkidle2';
+            goToOptions.timeout = 60000;
+          }
+        ]`,
         pageFunction: `async function pageFunction(context) {
-          const { request, $, log } = context;
+          const { request, page, log } = context;
 
-          var blockedDomains = ['patreon.com','example.com','sentry.io','cloudflare.com','w3.org','schema.org','googleapis.com','gstatic.com'];
-          function isBlockedEmail(e) {
-            if (!e) return true;
-            var lower = e.toLowerCase();
-            return blockedDomains.some(function(d) { return lower.endsWith('@' + d); });
+          await page.waitForTimeout(3000);
+
+          try {
+            await page.waitForSelector('a[href]', { timeout: 10000 });
+          } catch(e) {
+            log.info('No links found after waiting, page may not have loaded fully');
           }
 
-          var emails = [];
-          $('a[href^="mailto:"]').each(function() {
-            var href = $(this).attr('href') || '';
-            var email = href.replace('mailto:', '').split('?')[0].trim();
-            if (email && email.includes('@') && !isBlockedEmail(email)) emails.push(email);
-          });
-
-          var bodyText = $('body').text().replace(/\\s+/g, ' ');
-          var emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}/g;
-          var textEmails = bodyText.match(emailRegex) || [];
-          textEmails.forEach(function(e) {
-            if (e && !e.endsWith('.png') && !e.endsWith('.jpg') && !e.endsWith('.gif') && !isBlockedEmail(e) && emails.indexOf(e) === -1) {
-              emails.push(e);
+          const data = await page.evaluate(() => {
+            var blockedDomains = ['patreon.com','example.com','sentry.io','cloudflare.com','w3.org','schema.org','googleapis.com','gstatic.com'];
+            function isBlockedEmail(e) {
+              if (!e) return true;
+              var lower = e.toLowerCase();
+              return blockedDomains.some(function(d) { return lower.endsWith('@' + d); });
             }
-          });
 
-          var externalLinks = [];
-          var socialLinks = {};
-          $('a[href]').each(function() {
-            var href = ($(this).attr('href') || '').trim();
-            if (!href || href === '#') return;
-            if (href.includes('linkedin.com/in/')) socialLinks.linkedin = href;
-            else if (href.includes('twitter.com/') || href.includes('x.com/')) socialLinks.twitter = href;
-            else if (href.includes('instagram.com/')) socialLinks.instagram = href;
-            else if (href.includes('facebook.com/')) socialLinks.facebook = href;
-            else if (href.includes('youtube.com/') || href.includes('youtu.be/')) socialLinks.youtube = href;
-            else if (href.includes('discord.gg') || href.includes('discord.com/')) socialLinks.discord = href;
-            else if (href.includes('tiktok.com/')) socialLinks.tiktok = href;
-            else if (href.startsWith('http') && !href.includes('patreon.com') && !href.includes('google.com') && !href.includes('apple.com') && !href.includes('spotify.com')) {
-              externalLinks.push(href);
+            var emails = [];
+            document.querySelectorAll('a[href^="mailto:"]').forEach(function(el) {
+              var href = el.getAttribute('href') || '';
+              var email = href.replace('mailto:', '').split('?')[0].trim();
+              if (email && email.includes('@') && !isBlockedEmail(email)) emails.push(email);
+            });
+
+            var bodyText = document.body ? document.body.innerText : '';
+            var emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}/g;
+            var textEmails = bodyText.match(emailRegex) || [];
+            textEmails.forEach(function(e) {
+              if (e && !e.endsWith('.png') && !e.endsWith('.jpg') && !e.endsWith('.gif') && !isBlockedEmail(e) && emails.indexOf(e) === -1) {
+                emails.push(e);
+              }
+            });
+
+            var externalLinks = [];
+            var socialLinks = {};
+            document.querySelectorAll('a[href]').forEach(function(el) {
+              var rawHref = (el.getAttribute('href') || '').trim();
+              if (!rawHref || rawHref === '#' || rawHref.startsWith('javascript:')) return;
+              var href;
+              try { href = new URL(rawHref, document.baseURI).href; } catch(e) { return; }
+              if (!href.startsWith('http')) return;
+              if (href.includes('linkedin.com/in/')) socialLinks.linkedin = href;
+              else if (href.includes('twitter.com/') || href.includes('x.com/')) socialLinks.twitter = href;
+              else if (href.includes('instagram.com/')) socialLinks.instagram = href;
+              else if (href.includes('facebook.com/')) socialLinks.facebook = href;
+              else if (href.includes('youtube.com/') || href.includes('youtu.be/')) socialLinks.youtube = href;
+              else if (href.includes('discord.gg') || href.includes('discord.com/')) socialLinks.discord = href;
+              else if (href.includes('tiktok.com/')) socialLinks.tiktok = href;
+              else if (href.startsWith('http') && !href.includes('patreon.com') && !href.includes('google.com') && !href.includes('apple.com') && !href.includes('spotify.com')) {
+                externalLinks.push(href);
+              }
+            });
+
+            var creatorName = '';
+            var nameEl = document.querySelector('[data-tag="creator-name"]');
+            if (nameEl) creatorName = nameEl.textContent.trim();
+            if (!creatorName) {
+              var h1 = document.querySelector('h1');
+              if (h1) creatorName = h1.textContent.trim();
             }
-          });
+            if (!creatorName) {
+              var ogTitle = document.querySelector('meta[property="og:title"]');
+              if (ogTitle) creatorName = (ogTitle.getAttribute('content') || '').replace(/ \\| creating.*| is creating.*/i, '').trim();
+            }
 
-          var creatorName = '';
-          var nameEl = $('[data-tag="creator-name"]');
-          if (nameEl.length) creatorName = nameEl.text().trim();
-          if (!creatorName) {
-            nameEl = $('h1');
-            if (nameEl.length) creatorName = nameEl.first().text().trim();
-          }
+            var aboutText = '';
+            document.querySelectorAll('[data-tag="about-section"], [class*="about"], [class*="About"]').forEach(function(el) {
+              aboutText += ' ' + el.textContent;
+            });
+            if (!aboutText.trim()) {
+              var metaDesc = document.querySelector('meta[name="description"]');
+              if (metaDesc) aboutText = metaDesc.getAttribute('content') || '';
+            }
+            if (!aboutText.trim()) {
+              var ogDesc = document.querySelector('meta[property="og:description"]');
+              if (ogDesc) aboutText = ogDesc.getAttribute('content') || '';
+            }
 
-          var aboutText = '';
-          $('[data-tag="about-section"], .about-section, [class*="about"]').each(function() {
-            aboutText += ' ' + $(this).text();
-          });
-          if (!aboutText.trim()) {
-            aboutText = $('meta[name="description"]').attr('content') || '';
-          }
+            var socialPlatforms = ['patreon.com','google.com','apple.com','microsoft.com','spotify.com','amazon.com','facebook.com','twitter.com','x.com','instagram.com','youtube.com','tiktok.com','discord.com','discord.gg','reddit.com','tumblr.com','pinterest.com','linkedin.com','twitch.tv','github.com','medium.com','wordpress.com','blogspot.com','bit.ly','linktr.ee','beacons.ai','carrd.co','ko-fi.com','buymeacoffee.com','gumroad.com','etsy.com','redbubble.com','teepublic.com','paypal.com','venmo.com','cashapp.com','substack.com'];
+            var personalWebsite = '';
+            for (var i = 0; i < externalLinks.length; i++) {
+              if (personalWebsite) break;
+              try {
+                var u = new URL(externalLinks[i]);
+                var dominated = socialPlatforms.some(function(d) { return u.hostname.includes(d); });
+                if (!dominated) personalWebsite = externalLinks[i];
+              } catch(e) {}
+            }
 
-          var personalWebsite = '';
-          externalLinks.forEach(function(link) {
-            if (personalWebsite) return;
-            try {
-              var u = new URL(link);
-              var dominated = ['patreon.com','google.com','apple.com','microsoft.com','spotify.com','amazon.com','facebook.com','twitter.com','x.com','instagram.com','youtube.com','tiktok.com','discord.com','discord.gg','reddit.com','tumblr.com','pinterest.com','linkedin.com','twitch.tv','github.com','medium.com','wordpress.com','blogspot.com','bit.ly','linktr.ee','beacons.ai','carrd.co'];
-              var dominated2 = dominated.some(function(d) { return u.hostname.includes(d); });
-              if (!dominated2) personalWebsite = link;
-            } catch(e) {}
+            return {
+              emails: emails,
+              socialLinks: socialLinks,
+              personalWebsite: personalWebsite,
+              externalLinks: externalLinks.slice(0, 20),
+              creatorName: creatorName,
+              aboutText: (aboutText || '').substring(0, 2000),
+            };
           });
 
           return {
             url: request.url,
-            emails: emails,
-            socialLinks: socialLinks,
-            personalWebsite: personalWebsite,
-            externalLinks: externalLinks.slice(0, 10),
-            creatorName: creatorName,
-            aboutText: aboutText.substring(0, 2000),
+            ...data,
           };
         }`,
-      }, 180000);
+      }, 300000);
 
       for (const item of items) {
         const matchingLead = batch.find((l) => {
@@ -851,7 +885,7 @@ async function crawlPatreonProfiles(
         if (changed) profilesEnriched++;
       }
 
-      await appendAndSave(`Profile crawl batch ${batchNum}/${totalBatches}: enriched ${profilesEnriched} profiles so far`);
+      await appendAndSave(`Profile crawl batch ${batchNum}/${totalBatches}: enriched ${profilesEnriched} profiles, ${websitesFound} websites, ${emailsFound} emails so far (${items.length} pages crawled)`);
     } catch (err: any) {
       await appendAndSave(`[WARN] Patreon profile crawl batch ${batchNum} failed: ${err.message}`);
     }
@@ -1658,23 +1692,36 @@ export async function runPipeline(runId: number): Promise<void> {
           const nameParts = leaderName.trim().split(/\s+/);
           const firstName = nameParts[0] || "";
           const lastName = nameParts.length > 1 ? nameParts.slice(1).join(" ") : "";
+          const hasRealName = nameParts.length >= 2 && firstName.length > 1 && lastName.length > 1;
 
+          const channels = (lead.ownedChannels as Record<string, string>) || {};
           let domain = apolloExtractDomain(lead.website || "");
           if (!domain || !apolloIsEnrichable(domain)) {
-            const channels = (lead.ownedChannels as Record<string, string>) || {};
             if (channels.website) {
               domain = apolloExtractDomain(channels.website);
             }
           }
           const enrichableDomain = domain && apolloIsEnrichable(domain) ? domain : undefined;
 
-          const result = await apolloPersonMatch({
+          const linkedinUrl = channels.linkedin && channels.linkedin.startsWith("http") ? channels.linkedin : undefined;
+
+          let result = await apolloPersonMatch({
             name: leaderName,
-            firstName: firstName || undefined,
-            lastName: lastName || undefined,
+            firstName: hasRealName ? firstName : undefined,
+            lastName: hasRealName ? lastName : undefined,
             domain: enrichableDomain,
-            organizationName: lead.communityName || undefined,
+            organizationName: lead.communityName !== leaderName ? lead.communityName || undefined : undefined,
+            linkedinUrl,
           });
+
+          if (!result && hasRealName && !linkedinUrl) {
+            result = await apolloPersonMatch({
+              firstName,
+              lastName,
+              domain: enrichableDomain,
+            });
+            await new Promise((r) => setTimeout(r, 200));
+          }
 
           if (!result) continue;
 
@@ -1923,23 +1970,36 @@ export async function reEnrichRun(runId: number): Promise<void> {
           const nameParts = leaderName.trim().split(/\s+/);
           const firstName = nameParts[0] || "";
           const lastName = nameParts.length > 1 ? nameParts.slice(1).join(" ") : "";
+          const hasRealName = nameParts.length >= 2 && firstName.length > 1 && lastName.length > 1;
 
+          const channels = (lead.ownedChannels as Record<string, string>) || {};
           let domain = apolloExtractDomain(lead.website || "");
           if (!domain || !apolloIsEnrichable(domain)) {
-            const channels = (lead.ownedChannels as Record<string, string>) || {};
             if (channels.website) {
               domain = apolloExtractDomain(channels.website);
             }
           }
           const enrichableDomain = domain && apolloIsEnrichable(domain) ? domain : undefined;
 
-          const result = await apolloPersonMatch({
+          const linkedinUrl = channels.linkedin && channels.linkedin.startsWith("http") ? channels.linkedin : undefined;
+
+          let result = await apolloPersonMatch({
             name: leaderName,
-            firstName: firstName || undefined,
-            lastName: lastName || undefined,
+            firstName: hasRealName ? firstName : undefined,
+            lastName: hasRealName ? lastName : undefined,
             domain: enrichableDomain,
-            organizationName: lead.communityName || undefined,
+            organizationName: lead.communityName !== leaderName ? lead.communityName || undefined : undefined,
+            linkedinUrl,
           });
+
+          if (!result && hasRealName && !linkedinUrl) {
+            result = await apolloPersonMatch({
+              firstName,
+              lastName,
+              domain: enrichableDomain,
+            });
+            await new Promise((r) => setTimeout(r, 200));
+          }
 
           if (!result) continue;
 
