@@ -811,12 +811,13 @@ async function crawlPatreonProfiles(
   );
   if (patreonLeads.length === 0) return;
 
-  await appendAndSave(`Crawling ${patreonLeads.length} Patreon profiles for contact info...`);
+  await appendAndSave(`Crawling ${patreonLeads.length} Patreon profiles (Cheerio) for contact info...`);
 
-  const batchSize = 5;
+  const batchSize = 25;
   let profilesEnriched = 0;
   let emailsFound = 0;
   let websitesFound = 0;
+  let cloudflareBlocked = 0;
 
   for (let i = 0; i < patreonLeads.length; i += batchSize) {
     const batch = patreonLeads.slice(i, i + batchSize);
@@ -824,131 +825,127 @@ async function crawlPatreonProfiles(
     const totalBatches = Math.ceil(patreonLeads.length / batchSize);
 
     try {
-      const items = await runActorAndGetResults("apify~puppeteer-scraper", {
+      const items = await runActorAndGetResults("apify~cheerio-scraper", {
         startUrls: batch.map((l) => ({ url: l.website })),
         maxRequestsPerCrawl: batch.length,
-        maxConcurrency: 3,
-        maxRequestRetries: 2,
-        useChrome: true,
+        maxConcurrency: 10,
+        maxRequestRetries: 1,
         proxyConfiguration: { useApifyProxy: true, apifyProxyGroups: ["RESIDENTIAL"] },
-        preNavigationHooks: `[
-          async ({ page }, goToOptions) => {
-            goToOptions.waitUntil = 'networkidle2';
-            goToOptions.timeout = 60000;
-          }
-        ]`,
         pageFunction: `async function pageFunction(context) {
-          const { request, page, log } = context;
+          const { request, $, log } = context;
 
-          await page.waitForTimeout(3000);
-
-          try {
-            await page.waitForSelector('a[href]', { timeout: 10000 });
-          } catch(e) {
-            log.info('No links found after waiting, page may not have loaded fully');
+          var title = $('title').text() || '';
+          if (title.includes('Just a moment') || title.includes('Attention Required') || title.includes('Access denied') || $('div#cf-wrapper').length > 0 || $('div.cf-browser-verification').length > 0) {
+            log.info('Cloudflare blocked: ' + request.url);
+            return { url: request.url, cloudflareBlocked: true };
           }
 
-          const data = await page.evaluate(() => {
-            var blockedDomains = ['patreon.com','example.com','sentry.io','cloudflare.com','w3.org','schema.org','googleapis.com','gstatic.com'];
-            function isBlockedEmail(e) {
-              if (!e) return true;
-              var lower = e.toLowerCase();
-              return blockedDomains.some(function(d) { return lower.endsWith('@' + d); });
-            }
+          var blockedDomains = ['patreon.com','example.com','sentry.io','cloudflare.com','w3.org','schema.org','googleapis.com','gstatic.com'];
+          function isBlockedEmail(e) {
+            if (!e) return true;
+            var lower = e.toLowerCase();
+            return blockedDomains.some(function(d) { return lower.endsWith('@' + d); });
+          }
 
-            var emails = [];
-            document.querySelectorAll('a[href^="mailto:"]').forEach(function(el) {
-              var href = el.getAttribute('href') || '';
-              var email = href.replace('mailto:', '').split('?')[0].trim();
-              if (email && email.includes('@') && !isBlockedEmail(email)) emails.push(email);
-            });
-
-            var bodyText = document.body ? document.body.innerText : '';
-            var emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}/g;
-            var textEmails = bodyText.match(emailRegex) || [];
-            textEmails.forEach(function(e) {
-              if (e && !e.endsWith('.png') && !e.endsWith('.jpg') && !e.endsWith('.gif') && !isBlockedEmail(e) && emails.indexOf(e) === -1) {
-                emails.push(e);
-              }
-            });
-
-            var externalLinks = [];
-            var socialLinks = {};
-            document.querySelectorAll('a[href]').forEach(function(el) {
-              var rawHref = (el.getAttribute('href') || '').trim();
-              if (!rawHref || rawHref === '#' || rawHref.startsWith('javascript:')) return;
-              var href;
-              try { href = new URL(rawHref, document.baseURI).href; } catch(e) { return; }
-              if (!href.startsWith('http')) return;
-              if (href.includes('linkedin.com/in/')) socialLinks.linkedin = href;
-              else if (href.includes('twitter.com/') || href.includes('x.com/')) socialLinks.twitter = href;
-              else if (href.includes('instagram.com/')) socialLinks.instagram = href;
-              else if (href.includes('facebook.com/')) socialLinks.facebook = href;
-              else if (href.includes('youtube.com/') || href.includes('youtu.be/')) socialLinks.youtube = href;
-              else if (href.includes('discord.gg') || href.includes('discord.com/')) socialLinks.discord = href;
-              else if (href.includes('tiktok.com/')) socialLinks.tiktok = href;
-              else if (href.startsWith('http') && !href.includes('patreon.com') && !href.includes('google.com') && !href.includes('apple.com') && !href.includes('spotify.com')) {
-                externalLinks.push(href);
-              }
-            });
-
-            var creatorName = '';
-            var nameEl = document.querySelector('[data-tag="creator-name"]');
-            if (nameEl) creatorName = nameEl.textContent.trim();
-            if (!creatorName) {
-              var h1 = document.querySelector('h1');
-              if (h1) creatorName = h1.textContent.trim();
-            }
-            if (!creatorName) {
-              var ogTitle = document.querySelector('meta[property="og:title"]');
-              if (ogTitle) creatorName = (ogTitle.getAttribute('content') || '').replace(/ \\| creating.*| is creating.*/i, '').trim();
-            }
-
-            var aboutText = '';
-            document.querySelectorAll('[data-tag="about-section"], [class*="about"], [class*="About"]').forEach(function(el) {
-              aboutText += ' ' + el.textContent;
-            });
-            if (!aboutText.trim()) {
-              var metaDesc = document.querySelector('meta[name="description"]');
-              if (metaDesc) aboutText = metaDesc.getAttribute('content') || '';
-            }
-            if (!aboutText.trim()) {
-              var ogDesc = document.querySelector('meta[property="og:description"]');
-              if (ogDesc) aboutText = ogDesc.getAttribute('content') || '';
-            }
-
-            var socialPlatforms = ['patreon.com','google.com','apple.com','microsoft.com','spotify.com','amazon.com','facebook.com','twitter.com','x.com','instagram.com','youtube.com','tiktok.com','discord.com','discord.gg','reddit.com','tumblr.com','pinterest.com','linkedin.com','twitch.tv','github.com','medium.com','wordpress.com','blogspot.com','bit.ly','linktr.ee','beacons.ai','carrd.co','ko-fi.com','buymeacoffee.com','gumroad.com','etsy.com','redbubble.com','teepublic.com','paypal.com','venmo.com','cashapp.com','substack.com'];
-            var personalWebsite = '';
-            for (var i = 0; i < externalLinks.length; i++) {
-              if (personalWebsite) break;
-              try {
-                var u = new URL(externalLinks[i]);
-                var dominated = socialPlatforms.some(function(d) { return u.hostname.includes(d); });
-                if (!dominated) personalWebsite = externalLinks[i];
-              } catch(e) {}
-            }
-
-            return {
-              emails: emails,
-              socialLinks: socialLinks,
-              personalWebsite: personalWebsite,
-              externalLinks: externalLinks.slice(0, 20),
-              creatorName: creatorName,
-              aboutText: (aboutText || '').substring(0, 2000),
-            };
+          var emails = [];
+          $('a[href^="mailto:"]').each(function() {
+            var href = $(this).attr('href') || '';
+            var email = href.replace('mailto:', '').split('?')[0].trim();
+            if (email && email.includes('@') && !isBlockedEmail(email)) emails.push(email);
           });
+
+          var bodyText = $('body').text().replace(/\\s+/g, ' ').substring(0, 10000);
+          var emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}/g;
+          var textEmails = bodyText.match(emailRegex) || [];
+          textEmails.forEach(function(e) {
+            if (e && !e.endsWith('.png') && !e.endsWith('.jpg') && !e.endsWith('.gif') && !isBlockedEmail(e) && emails.indexOf(e) === -1) {
+              emails.push(e);
+            }
+          });
+
+          var externalLinks = [];
+          var socialLinks = {};
+          $('a[href]').each(function() {
+            var rawHref = ($(this).attr('href') || '').trim();
+            if (!rawHref || rawHref === '#' || rawHref.startsWith('javascript:')) return;
+            var href;
+            try { href = new URL(rawHref, request.url).href; } catch(e) { return; }
+            if (!href.startsWith('http')) return;
+            if (href.includes('linkedin.com/in/')) socialLinks.linkedin = href;
+            else if (href.includes('twitter.com/') || href.includes('x.com/')) socialLinks.twitter = href;
+            else if (href.includes('instagram.com/')) socialLinks.instagram = href;
+            else if (href.includes('facebook.com/')) socialLinks.facebook = href;
+            else if (href.includes('youtube.com/') || href.includes('youtu.be/')) socialLinks.youtube = href;
+            else if (href.includes('discord.gg') || href.includes('discord.com/')) socialLinks.discord = href;
+            else if (href.includes('tiktok.com/')) socialLinks.tiktok = href;
+            else if (href.startsWith('http') && !href.includes('patreon.com') && !href.includes('google.com') && !href.includes('apple.com') && !href.includes('spotify.com')) {
+              externalLinks.push(href);
+            }
+          });
+
+          var creatorName = '';
+          var ogTitle = $('meta[property="og:title"]').attr('content') || '';
+          if (ogTitle) creatorName = ogTitle.replace(/ \\| creating.*| is creating.*/i, '').replace(/ \\| Patreon/i, '').trim();
+          if (!creatorName) {
+            var h1 = $('h1').first().text().trim();
+            if (h1) creatorName = h1;
+          }
+
+          var aboutText = '';
+          var metaDesc = $('meta[name="description"]').attr('content') || '';
+          var ogDesc = $('meta[property="og:description"]').attr('content') || '';
+          aboutText = ogDesc || metaDesc || '';
+
+          $('script[type="application/ld+json"]').each(function() {
+            try {
+              var data = JSON.parse($(this).html() || '{}');
+              if (data.description && data.description.length > aboutText.length) aboutText = data.description;
+              if (data.name && !creatorName) creatorName = data.name;
+              if (data.email) {
+                var e = data.email.trim();
+                if (e.includes('@') && !isBlockedEmail(e) && emails.indexOf(e) === -1) emails.push(e);
+              }
+              if (data.sameAs && Array.isArray(data.sameAs)) {
+                data.sameAs.forEach(function(link) {
+                  if (typeof link === 'string' && link.startsWith('http')) externalLinks.push(link);
+                });
+              }
+            } catch(e) {}
+          });
+
+          var socialPlatforms = ['patreon.com','google.com','apple.com','microsoft.com','spotify.com','amazon.com','facebook.com','twitter.com','x.com','instagram.com','youtube.com','tiktok.com','discord.com','discord.gg','reddit.com','tumblr.com','pinterest.com','linkedin.com','twitch.tv','github.com','medium.com','wordpress.com','blogspot.com','bit.ly','linktr.ee','beacons.ai','carrd.co','ko-fi.com','buymeacoffee.com','gumroad.com','etsy.com','redbubble.com','teepublic.com','paypal.com','venmo.com','cashapp.com','substack.com'];
+          var personalWebsite = '';
+          for (var i = 0; i < externalLinks.length; i++) {
+            if (personalWebsite) break;
+            try {
+              var u = new URL(externalLinks[i]);
+              var dominated = socialPlatforms.some(function(d) { return u.hostname.includes(d); });
+              if (!dominated) personalWebsite = externalLinks[i];
+            } catch(e) {}
+          }
 
           return {
             url: request.url,
-            ...data,
+            emails: emails,
+            socialLinks: socialLinks,
+            personalWebsite: personalWebsite,
+            externalLinks: externalLinks.slice(0, 20),
+            creatorName: creatorName,
+            aboutText: (aboutText || '').substring(0, 2000),
+            cloudflareBlocked: false,
           };
         }`,
-      }, 360000);
+      }, 120000);
 
       for (const item of items) {
+        if (item.cloudflareBlocked) {
+          cloudflareBlocked++;
+          continue;
+        }
+
         const matchingLead = batch.find((l) => {
-          const leadUrl = l.website.split("?")[0].toLowerCase().replace(/\/$/, "");
-          const itemUrl = (item.url || "").split("?")[0].toLowerCase().replace(/\/$/, "");
+          const leadUrl = normalizePatreonUrl(l.website);
+          const itemUrl = normalizePatreonUrl(item.url || "");
           return leadUrl === itemUrl;
         });
         if (!matchingLead) continue;
@@ -966,22 +963,21 @@ async function crawlPatreonProfiles(
 
         if (item.personalWebsite) {
           const channels = matchingLead.ownedChannels || {};
-          channels.website = item.personalWebsite;
-          matchingLead.ownedChannels = channels;
-          websitesFound++;
-          changed = true;
+          if (!channels.website || channels.website === "detected") {
+            channels.website = item.personalWebsite;
+            matchingLead.ownedChannels = channels;
+            websitesFound++;
+            changed = true;
+          }
         }
 
         if (item.socialLinks) {
           const channels = matchingLead.ownedChannels || {};
           for (const [key, val] of Object.entries(item.socialLinks as Record<string, string>)) {
-            if (val && !channels[key]) {
+            if (val && (!channels[key] || channels[key] === "detected")) {
               channels[key] = val;
               changed = true;
             }
-          }
-          if (item.socialLinks.linkedin) {
-            matchingLead.ownedChannels = channels;
           }
           matchingLead.ownedChannels = channels;
         }
@@ -1024,14 +1020,14 @@ async function crawlPatreonProfiles(
         if (changed) profilesEnriched++;
       }
 
-      await appendAndSave(`Profile crawl batch ${batchNum}/${totalBatches}: enriched ${profilesEnriched} profiles, ${websitesFound} websites, ${emailsFound} emails so far (${items.length} pages crawled)`);
+      await appendAndSave(`Profile crawl batch ${batchNum}/${totalBatches}: enriched ${profilesEnriched} profiles, ${websitesFound} websites, ${emailsFound} emails so far (${items.length} pages, ${cloudflareBlocked} CF-blocked)`);
     } catch (err: any) {
       await appendAndSave(`[WARN] Patreon profile crawl batch ${batchNum} failed: ${err.message}`);
     }
   }
 
-  if (profilesEnriched === 0 && patreonLeads.length > 0) {
-    await appendAndSave(`[WARN] Profile crawl extracted 0 results - Cloudflare may be blocking Puppeteer. Cross-platform email lookup and website crawl will still proceed.`);
+  if (cloudflareBlocked > 0) {
+    await appendAndSave(`[INFO] Cloudflare blocked ${cloudflareBlocked}/${patreonLeads.length} profile pages - cross-platform email lookup will still proceed`);
   }
   await appendAndSave(`Patreon profiles: ${websitesFound} websites found, ${emailsFound} emails found, ${profilesEnriched} profiles enriched`);
 }
