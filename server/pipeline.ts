@@ -750,7 +750,7 @@ async function crawlPatreonProfiles(
 
   await appendAndSave(`Crawling ${patreonLeads.length} Patreon profiles for contact info...`);
 
-  const batchSize = 15;
+  const batchSize = 5;
   let profilesEnriched = 0;
   let emailsFound = 0;
   let websitesFound = 0;
@@ -764,7 +764,7 @@ async function crawlPatreonProfiles(
       const items = await runActorAndGetResults("apify~puppeteer-scraper", {
         startUrls: batch.map((l) => ({ url: l.website })),
         maxRequestsPerCrawl: batch.length,
-        maxConcurrency: 5,
+        maxConcurrency: 3,
         maxRequestRetries: 2,
         useChrome: true,
         proxyConfiguration: { useApifyProxy: true, apifyProxyGroups: ["RESIDENTIAL"] },
@@ -880,7 +880,7 @@ async function crawlPatreonProfiles(
             ...data,
           };
         }`,
-      }, 300000);
+      }, 360000);
 
       for (const item of items) {
         const matchingLead = batch.find((l) => {
