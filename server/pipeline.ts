@@ -8,6 +8,21 @@ import type { RunParams, InsertSourceUrl, InsertLead, InsertLeader } from "@shar
 
 export const activeRunIds = new Set<number>();
 
+const BLOCKED_EMAIL_DOMAINS = ['patreon.com', 'example.com', 'sentry.io', 'cloudflare.com', 'w3.org', 'schema.org', 'googleapis.com', 'gstatic.com'];
+
+function isBlockedEmail(email: string): boolean {
+  if (!email) return true;
+  const lower = email.toLowerCase().trim();
+  return BLOCKED_EMAIL_DOMAINS.some((d) => lower.endsWith(`@${d}`));
+}
+
+function cleanEmail(email: string | undefined): string {
+  if (!email) return "";
+  const cleaned = email.replace(/^u003e/i, "").trim();
+  if (isBlockedEmail(cleaned)) return "";
+  return cleaned;
+}
+
 function extractDomain(url: string): string {
   try {
     return new URL(url).hostname.replace(/^www\./, "");
@@ -678,18 +693,25 @@ async function crawlPatreonProfiles(
         pageFunction: `async function pageFunction(context) {
           const { request, $, log } = context;
 
+          var blockedDomains = ['patreon.com','example.com','sentry.io','cloudflare.com','w3.org','schema.org','googleapis.com','gstatic.com'];
+          function isBlockedEmail(e) {
+            if (!e) return true;
+            var lower = e.toLowerCase();
+            return blockedDomains.some(function(d) { return lower.endsWith('@' + d); });
+          }
+
           var emails = [];
           $('a[href^="mailto:"]').each(function() {
             var href = $(this).attr('href') || '';
             var email = href.replace('mailto:', '').split('?')[0].trim();
-            if (email && email.includes('@')) emails.push(email);
+            if (email && email.includes('@') && !isBlockedEmail(email)) emails.push(email);
           });
 
           var bodyText = $('body').text().replace(/\\s+/g, ' ');
           var emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}/g;
           var textEmails = bodyText.match(emailRegex) || [];
           textEmails.forEach(function(e) {
-            if (e && !e.endsWith('.png') && !e.endsWith('.jpg') && !e.endsWith('.gif') && emails.indexOf(e) === -1) {
+            if (e && !e.endsWith('.png') && !e.endsWith('.jpg') && !e.endsWith('.gif') && !isBlockedEmail(e) && emails.indexOf(e) === -1) {
               emails.push(e);
             }
           });
@@ -761,9 +783,12 @@ async function crawlPatreonProfiles(
         let changed = false;
 
         if (item.emails && item.emails.length > 0 && !matchingLead.email) {
-          matchingLead.email = item.emails[0];
-          emailsFound++;
-          changed = true;
+          const validEmail = item.emails.map((e: string) => cleanEmail(e)).find((e: string) => e);
+          if (validEmail) {
+            matchingLead.email = validEmail;
+            emailsFound++;
+            changed = true;
+          }
         }
 
         if (item.personalWebsite) {
@@ -890,11 +915,18 @@ async function crawlCreatorWebsites(
           const { request, $, log, enqueueLinks } = context;
           var bodyText = $('body').text().replace(/\\s+/g, ' ').substring(0, 8000);
 
+          var blockedDomains = ['patreon.com','example.com','sentry.io','cloudflare.com','w3.org','schema.org','googleapis.com','gstatic.com'];
+          function isBlockedEmail(e) {
+            if (!e) return true;
+            var lower = e.toLowerCase();
+            return blockedDomains.some(function(d) { return lower.endsWith('@' + d); });
+          }
+
           var emails = [];
           $('a[href^="mailto:"]').each(function() {
             var href = $(this).attr('href') || '';
             var email = href.replace('mailto:', '').split('?')[0].trim();
-            if (email && email.includes('@')) emails.push(email);
+            if (email && email.includes('@') && !isBlockedEmail(email)) emails.push(email);
           });
 
           var footerText = '';
@@ -968,10 +1000,9 @@ async function crawlCreatorWebsites(
         if (!domain) continue;
 
         const emails = siteEmails.get(domain) || [];
-        const unique = Array.from(new Set(emails)).filter(
-          (e) => !e.endsWith(".png") && !e.endsWith(".jpg") && !e.endsWith(".gif") &&
-            !e.includes("example.com") && !e.includes("sentry.io") && !e.includes("wixpress.com")
-        );
+        const unique = Array.from(new Set(emails))
+          .map((e) => cleanEmail(e))
+          .filter((e) => e && !e.endsWith(".png") && !e.endsWith(".jpg") && !e.endsWith(".gif"));
 
         if (unique.length > 0) {
           lead.email = unique[0];
@@ -1859,7 +1890,8 @@ export async function reEnrichRun(runId: number): Promise<void> {
       if (!original) continue;
 
       const updateData: Record<string, any> = {};
-      if (pl.email && pl.email !== original.email) updateData.email = pl.email;
+      const cleanedEmail = cleanEmail(pl.email);
+      if (cleanedEmail && cleanedEmail !== original.email) updateData.email = cleanedEmail;
       if (pl.leaderName && pl.leaderName !== original.leaderName) updateData.leaderName = pl.leaderName;
       if (pl.phone && pl.phone !== original.phone) updateData.phone = pl.phone;
 
