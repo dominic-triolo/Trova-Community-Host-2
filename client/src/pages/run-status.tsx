@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { useParams, Link } from "wouter";
 import type { Run } from "@shared/schema";
 import { Card } from "@/components/ui/card";
@@ -7,6 +7,8 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 import {
   ArrowLeft,
   CheckCircle2,
@@ -19,6 +21,7 @@ import {
   Eye,
   BarChart3,
   Download,
+  RefreshCw,
 } from "lucide-react";
 
 function StatusBadge({ status }: { status: string }) {
@@ -54,6 +57,7 @@ function downloadRunCsv(runId: string) {
 
 export default function RunStatus() {
   const { id } = useParams<{ id: string }>();
+  const { toast } = useToast();
 
   const { data: run, isLoading } = useQuery<Run>({
     queryKey: ["/api/runs", id],
@@ -61,6 +65,20 @@ export default function RunStatus() {
       const d = query.state.data as Run | undefined;
       if (d && (d.status === "succeeded" || d.status === "failed")) return false;
       return 2000;
+    },
+  });
+
+  const reEnrichMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/runs/${id}/re-enrich`);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/runs", id] });
+      toast({ title: "Re-enrichment started", description: "Crawling profiles and enriching contacts..." });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Failed to start re-enrichment", description: err.message, variant: "destructive" });
     },
   });
 
@@ -113,6 +131,18 @@ export default function RunStatus() {
                 <ArrowLeft className="w-4 h-4 mr-1" /> New Run
               </Button>
             </Link>
+            {(run.status === "succeeded" || run.status === "failed") && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => reEnrichMutation.mutate()}
+                disabled={reEnrichMutation.isPending}
+                data-testid="button-re-enrich"
+              >
+                <RefreshCw className={`w-4 h-4 mr-1 ${reEnrichMutation.isPending ? "animate-spin" : ""}`} />
+                Re-enrich
+              </Button>
+            )}
             {run.status === "succeeded" && (
               <>
                 <Link href={`/results?runId=${run.id}`}>

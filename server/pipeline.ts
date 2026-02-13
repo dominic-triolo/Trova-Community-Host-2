@@ -1789,3 +1789,219 @@ export async function runPipeline(runId: number): Promise<void> {
     });
   }
 }
+
+export async function reEnrichRun(runId: number): Promise<void> {
+  const run = await storage.getRun(runId);
+  if (!run) throw new Error(`Run ${runId} not found`);
+
+  const params = run.params as RunParams;
+  let currentLogs = "";
+
+  const appendAndSave = async (msg: string, progress?: number, step?: string) => {
+    currentLogs = appendLog(currentLogs, msg);
+    const update: Record<string, any> = { logs: currentLogs };
+    if (progress !== undefined) update.progress = progress;
+    if (step) update.step = step;
+    await storage.updateRun(runId, update);
+  };
+
+  try {
+    await storage.updateRun(runId, {
+      status: "running",
+      progress: 0,
+      step: "Re-enrichment: Loading leads",
+      startedAt: new Date(),
+      finishedAt: null,
+      logs: "",
+    });
+
+    const leads = await storage.listLeadsByRun(runId);
+    await appendAndSave(`Loaded ${leads.length} leads from run ${runId}`, 5, "Re-enrichment: Converting leads");
+
+    const platformLeads: (PlatformLead & { dbId: number })[] = leads.map((lead) => ({
+      dbId: lead.id,
+      source: "patreon",
+      communityName: lead.communityName || "",
+      communityType: lead.communityType || "",
+      description: "",
+      location: lead.location || "",
+      website: lead.website || "",
+      email: lead.email || "",
+      phone: lead.phone || "",
+      leaderName: lead.leaderName || "",
+      memberCount: (lead.engagementSignals as any)?.member_count || 0,
+      subscriberCount: (lead.engagementSignals as any)?.subscriber_count || 0,
+      ownedChannels: (lead.ownedChannels as Record<string, string>) || {},
+      monetizationSignals: (lead.monetizationSignals as Record<string, any>) || {},
+      engagementSignals: (lead.engagementSignals as Record<string, any>) || {},
+      tripFitSignals: (lead.tripFitSignals as Record<string, any>) || {},
+      raw: (lead.raw as Record<string, any>) || {},
+    }));
+
+    await appendAndSave(`Step 1: Crawling Patreon profiles...`, 10, "Re-enrichment: Profile crawl");
+    await crawlPatreonProfiles(platformLeads, appendAndSave);
+    await appendAndSave(`Profile crawl complete`, 30);
+
+    await appendAndSave(`Step 2: Crawling creator websites...`, 35, "Re-enrichment: Website crawl");
+    await crawlCreatorWebsites(platformLeads, appendAndSave);
+    await appendAndSave(`Website crawl complete`, 55);
+
+    await appendAndSave(`Step 3: Updating leads in database...`, 60, "Re-enrichment: Saving crawl results");
+    let crawlUpdated = 0;
+    for (const pl of platformLeads) {
+      const original = leads.find((l) => l.id === pl.dbId);
+      if (!original) continue;
+
+      const updateData: Record<string, any> = {};
+      if (pl.email && pl.email !== original.email) updateData.email = pl.email;
+      if (pl.leaderName && pl.leaderName !== original.leaderName) updateData.leaderName = pl.leaderName;
+      if (pl.phone && pl.phone !== original.phone) updateData.phone = pl.phone;
+
+      const origChannels = (original.ownedChannels as Record<string, string>) || {};
+      const newChannels = pl.ownedChannels || {};
+      if (JSON.stringify(newChannels) !== JSON.stringify(origChannels)) {
+        updateData.ownedChannels = { ...origChannels, ...newChannels };
+      }
+
+      if (Object.keys(updateData).length > 0) {
+        await storage.updateLead(pl.dbId, updateData);
+        crawlUpdated++;
+      }
+    }
+    await appendAndSave(`Updated ${crawlUpdated} leads from crawl data`, 65);
+
+    const refreshedLeads = await storage.listLeadsByRun(runId);
+    const leadsToEnrich = refreshedLeads.filter((l) => !l.email || l.email === "");
+
+    await appendAndSave(`Step 4: Apollo enrichment for ${leadsToEnrich.length} leads without email...`, 70, "Re-enrichment: Apollo enrichment");
+
+    let enrichedCount = 0;
+    if (isApolloAvailable() && leadsToEnrich.length > 0) {
+      for (const lead of leadsToEnrich) {
+        try {
+          const leaderName = lead.leaderName || lead.communityName || "";
+          if (!leaderName) continue;
+
+          const nameParts = leaderName.trim().split(/\s+/);
+          const firstName = nameParts[0] || "";
+          const lastName = nameParts.length > 1 ? nameParts.slice(1).join(" ") : "";
+
+          let domain = apolloExtractDomain(lead.website || "");
+          if (!domain || !apolloIsEnrichable(domain)) {
+            const channels = (lead.ownedChannels as Record<string, string>) || {};
+            if (channels.website) {
+              domain = apolloExtractDomain(channels.website);
+            }
+          }
+          const enrichableDomain = domain && apolloIsEnrichable(domain) ? domain : undefined;
+
+          const result = await apolloPersonMatch({
+            name: leaderName,
+            firstName: firstName || undefined,
+            lastName: lastName || undefined,
+            domain: enrichableDomain,
+            organizationName: lead.communityName || undefined,
+          });
+
+          if (!result) continue;
+
+          const updateData: Record<string, any> = {};
+          if (result.email) updateData.email = result.email;
+          if (result.phone && !lead.phone) updateData.phone = result.phone;
+          if (result.linkedin && !lead.linkedin) updateData.linkedin = result.linkedin;
+          if (result.location && !lead.location) updateData.location = result.location;
+          if (!lead.leaderName && result.fullName) updateData.leaderName = result.fullName;
+
+          const existingChannels = (lead.ownedChannels as Record<string, string>) || {};
+          const updatedChannels = { ...existingChannels };
+          if (result.twitter && !existingChannels.twitter) updatedChannels.twitter = result.twitter;
+          if (result.facebook && !existingChannels.facebook) updatedChannels.facebook = result.facebook;
+          if (result.linkedin && !existingChannels.linkedin) updatedChannels.linkedin = result.linkedin;
+          if (Object.keys(updatedChannels).length > Object.keys(existingChannels).length) {
+            updateData.ownedChannels = updatedChannels;
+          }
+
+          if (Object.keys(updateData).length > 0) {
+            await storage.updateLead(lead.id, updateData);
+            enrichedCount++;
+          }
+
+          await new Promise((r) => setTimeout(r, 200));
+        } catch (err: any) {
+          await appendAndSave(`[WARN] Apollo enrichment failed for lead ${lead.id}: ${err.message}`);
+        }
+      }
+      await appendAndSave(`Apollo.io: enriched ${enrichedCount} of ${leadsToEnrich.length} leads`, 85);
+    } else {
+      await appendAndSave("Apollo enrichment skipped (no API key configured)", 85);
+    }
+
+    await appendAndSave(`Step 5: Re-scoring all leads...`, 88, "Re-enrichment: Scoring");
+    const finalLeads = await storage.listLeadsByRun(runId);
+    let reScored = 0;
+    for (const lead of finalLeads) {
+      const breakdown = scoreLead({
+        name: lead.communityName || "",
+        description: "",
+        type: lead.communityType || "",
+        location: lead.location || "",
+        website: lead.website || "",
+        email: lead.email || "",
+        phone: lead.phone || "",
+        linkedin: lead.linkedin || "",
+        ownedChannels: (lead.ownedChannels as Record<string, string>) || {},
+        monetizationSignals: (lead.monetizationSignals as Record<string, any>) || {},
+        engagementSignals: (lead.engagementSignals as Record<string, any>) || {},
+        tripFitSignals: (lead.tripFitSignals as Record<string, any>) || {},
+        leaderName: lead.leaderName || "",
+        memberCount: (lead.engagementSignals as any)?.member_count || 0,
+        subscriberCount: (lead.engagementSignals as any)?.subscriber_count || 0,
+        raw: (lead.raw as Record<string, any>) || {},
+      });
+
+      const hasContact = !!(lead.email || lead.website || lead.phone || lead.linkedin);
+      const status = determineStatus(breakdown.total, params.threshold, hasContact);
+
+      await storage.updateLead(lead.id, {
+        score: breakdown.total,
+        scoreBreakdown: breakdown,
+        status,
+        lastSeenAt: new Date(),
+      });
+      reScored++;
+    }
+
+    const qualifiedCount = await storage.countLeadsByRunAndStatus(runId, "qualified");
+    const watchlistCount = await storage.countLeadsByRunAndStatus(runId, "watchlist");
+    const emailCount = finalLeads.filter((l) => l.email && l.email !== "").length;
+
+    await storage.updateRun(runId, {
+      qualified: qualifiedCount,
+      watchlist: watchlistCount,
+    });
+
+    await appendAndSave(
+      `Re-enrichment complete! ${reScored} leads re-scored, ${emailCount} have emails, ${qualifiedCount} qualified, ${watchlistCount} watchlist`,
+      100,
+      "Re-enrichment complete"
+    );
+
+    await storage.updateRun(runId, {
+      status: "succeeded",
+      progress: 100,
+      step: "Re-enrichment complete",
+      finishedAt: new Date(),
+      logs: currentLogs,
+    });
+
+    log(`Re-enrichment of run ${runId} completed successfully`, "pipeline");
+  } catch (err: any) {
+    log(`Re-enrichment of run ${runId} failed: ${err.message}`, "pipeline");
+    await storage.updateRun(runId, {
+      status: "failed",
+      step: "Re-enrichment failed",
+      logs: appendLog(currentLogs, `[ERROR] Re-enrichment failed: ${err.message}`),
+      finishedAt: new Date(),
+    });
+  }
+}

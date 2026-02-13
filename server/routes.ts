@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { runPipeline } from "./pipeline";
+import { runPipeline, reEnrichRun } from "./pipeline";
 import { runParamsSchema, DEFAULT_RUN_PARAMS } from "@shared/schema";
 import { fromError } from "zod-validation-error";
 
@@ -73,6 +73,22 @@ export async function registerRoutes(
       if (!run) return res.status(404).json({ message: "Run not found" });
 
       res.json(run);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.post("/api/runs/:id/re-enrich", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ message: "Invalid run id" });
+
+      const run = await storage.getRun(id);
+      if (!run) return res.status(404).json({ message: "Run not found" });
+      if (run.status === "running") return res.status(409).json({ message: "Run is already in progress" });
+
+      reEnrichRun(id).catch((err) => console.error("Re-enrich error:", err));
+      res.json({ message: "Re-enrichment started", runId: id });
     } catch (err: any) {
       res.status(500).json({ message: err.message });
     }
