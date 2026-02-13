@@ -646,6 +646,346 @@ async function scrapePatreonCreators(
   return leads;
 }
 
+async function crawlPatreonProfiles(
+  platformLeads: PlatformLead[],
+  appendAndSave: (msg: string) => Promise<void>,
+): Promise<void> {
+  const patreonLeads = platformLeads.filter(
+    (l) => l.source === "patreon" && l.website && l.website.includes("patreon.com")
+  );
+  if (patreonLeads.length === 0) return;
+
+  await appendAndSave(`Crawling ${patreonLeads.length} Patreon profiles for contact info...`);
+
+  const batchSize = 25;
+  let profilesEnriched = 0;
+  let emailsFound = 0;
+  let websitesFound = 0;
+
+  for (let i = 0; i < patreonLeads.length; i += batchSize) {
+    const batch = patreonLeads.slice(i, i + batchSize);
+    const batchNum = Math.floor(i / batchSize) + 1;
+    const totalBatches = Math.ceil(patreonLeads.length / batchSize);
+
+    try {
+      const items = await runActorAndGetResults("apify~cheerio-scraper", {
+        startUrls: batch.map((l) => ({ url: l.website })),
+        maxRequestsPerCrawl: batch.length,
+        maxConcurrency: 10,
+        maxRequestRetries: 1,
+        pageFunction: `async function pageFunction(context) {
+          const { request, $, log } = context;
+
+          var emails = [];
+          $('a[href^="mailto:"]').each(function() {
+            var href = $(this).attr('href') || '';
+            var email = href.replace('mailto:', '').split('?')[0].trim();
+            if (email && email.includes('@')) emails.push(email);
+          });
+
+          var bodyText = $('body').text().replace(/\\s+/g, ' ');
+          var emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}/g;
+          var textEmails = bodyText.match(emailRegex) || [];
+          textEmails.forEach(function(e) {
+            if (e && !e.endsWith('.png') && !e.endsWith('.jpg') && !e.endsWith('.gif') && emails.indexOf(e) === -1) {
+              emails.push(e);
+            }
+          });
+
+          var externalLinks = [];
+          var socialLinks = {};
+          $('a[href]').each(function() {
+            var href = ($(this).attr('href') || '').trim();
+            if (!href || href === '#') return;
+            if (href.includes('linkedin.com/in/')) socialLinks.linkedin = href;
+            else if (href.includes('twitter.com/') || href.includes('x.com/')) socialLinks.twitter = href;
+            else if (href.includes('instagram.com/')) socialLinks.instagram = href;
+            else if (href.includes('facebook.com/')) socialLinks.facebook = href;
+            else if (href.includes('youtube.com/') || href.includes('youtu.be/')) socialLinks.youtube = href;
+            else if (href.includes('discord.gg') || href.includes('discord.com/')) socialLinks.discord = href;
+            else if (href.includes('tiktok.com/')) socialLinks.tiktok = href;
+            else if (href.startsWith('http') && !href.includes('patreon.com') && !href.includes('google.com') && !href.includes('apple.com') && !href.includes('spotify.com')) {
+              externalLinks.push(href);
+            }
+          });
+
+          var creatorName = '';
+          var nameEl = $('[data-tag="creator-name"]');
+          if (nameEl.length) creatorName = nameEl.text().trim();
+          if (!creatorName) {
+            nameEl = $('h1');
+            if (nameEl.length) creatorName = nameEl.first().text().trim();
+          }
+
+          var aboutText = '';
+          $('[data-tag="about-section"], .about-section, [class*="about"]').each(function() {
+            aboutText += ' ' + $(this).text();
+          });
+          if (!aboutText.trim()) {
+            aboutText = $('meta[name="description"]').attr('content') || '';
+          }
+
+          var personalWebsite = '';
+          externalLinks.forEach(function(link) {
+            if (personalWebsite) return;
+            try {
+              var u = new URL(link);
+              var dominated = ['patreon.com','google.com','apple.com','microsoft.com','spotify.com','amazon.com','facebook.com','twitter.com','x.com','instagram.com','youtube.com','tiktok.com','discord.com','discord.gg','reddit.com','tumblr.com','pinterest.com','linkedin.com','twitch.tv','github.com','medium.com','wordpress.com','blogspot.com','bit.ly','linktr.ee','beacons.ai','carrd.co'];
+              var dominated2 = dominated.some(function(d) { return u.hostname.includes(d); });
+              if (!dominated2) personalWebsite = link;
+            } catch(e) {}
+          });
+
+          return {
+            url: request.url,
+            emails: emails,
+            socialLinks: socialLinks,
+            personalWebsite: personalWebsite,
+            externalLinks: externalLinks.slice(0, 10),
+            creatorName: creatorName,
+            aboutText: aboutText.substring(0, 2000),
+          };
+        }`,
+      }, 180000);
+
+      for (const item of items) {
+        const matchingLead = batch.find((l) => {
+          const leadUrl = l.website.split("?")[0].toLowerCase().replace(/\/$/, "");
+          const itemUrl = (item.url || "").split("?")[0].toLowerCase().replace(/\/$/, "");
+          return leadUrl === itemUrl;
+        });
+        if (!matchingLead) continue;
+
+        let changed = false;
+
+        if (item.emails && item.emails.length > 0 && !matchingLead.email) {
+          matchingLead.email = item.emails[0];
+          emailsFound++;
+          changed = true;
+        }
+
+        if (item.personalWebsite) {
+          const channels = matchingLead.ownedChannels || {};
+          channels.website = item.personalWebsite;
+          matchingLead.ownedChannels = channels;
+          websitesFound++;
+          changed = true;
+        }
+
+        if (item.socialLinks) {
+          const channels = matchingLead.ownedChannels || {};
+          for (const [key, val] of Object.entries(item.socialLinks as Record<string, string>)) {
+            if (val && !channels[key]) {
+              channels[key] = val;
+              changed = true;
+            }
+          }
+          if (item.socialLinks.linkedin) {
+            matchingLead.ownedChannels = channels;
+          }
+          matchingLead.ownedChannels = channels;
+        }
+
+        if (!matchingLead.email && item.aboutText) {
+          const aboutEmails = extractEmailsFromText(item.aboutText);
+          if (aboutEmails.length > 0) {
+            matchingLead.email = aboutEmails[0];
+            emailsFound++;
+            changed = true;
+          }
+        }
+
+        let realName = "";
+        if (item.creatorName && item.creatorName.length > 2 && item.creatorName.includes(" ") && item.creatorName.length < 60) {
+          realName = item.creatorName;
+        }
+        if (!realName && item.aboutText) {
+          const namePatterns = [
+            /(?:I'm|I am|My name is|Hi,? I'm|Hey,? I'm)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)/,
+            /(?:This is|Created by|Founded by|By)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)/,
+          ];
+          for (const pattern of namePatterns) {
+            const match = item.aboutText.match(pattern);
+            if (match && match[1] && match[1].length < 40) {
+              realName = match[1].trim();
+              break;
+            }
+          }
+        }
+        if (realName) {
+          const currentName = matchingLead.leaderName || "";
+          const isBrandName = currentName === matchingLead.communityName || !currentName.includes(" ");
+          if (isBrandName) {
+            matchingLead.leaderName = realName;
+            changed = true;
+          }
+        }
+
+        if (changed) profilesEnriched++;
+      }
+
+      await appendAndSave(`Profile crawl batch ${batchNum}/${totalBatches}: enriched ${profilesEnriched} profiles so far`);
+    } catch (err: any) {
+      await appendAndSave(`[WARN] Patreon profile crawl batch ${batchNum} failed: ${err.message}`);
+    }
+  }
+
+  await appendAndSave(`Patreon profiles: ${websitesFound} websites found, ${emailsFound} emails found, ${profilesEnriched} profiles enriched`);
+}
+
+async function crawlCreatorWebsites(
+  platformLeads: PlatformLead[],
+  appendAndSave: (msg: string) => Promise<void>,
+): Promise<void> {
+  const skipDomains = ["patreon.com", "youtube.com", "instagram.com", "facebook.com", "twitter.com", "x.com", "tiktok.com", "discord.com", "discord.gg", "reddit.com", "linkedin.com", "linktr.ee", "beacons.ai", "tumblr.com", "pinterest.com", "twitch.tv", "github.com", "medium.com", "wordpress.com"];
+
+  const leadsWithWebsites = platformLeads.filter((l) => {
+    if (l.email) return false;
+    const channels = l.ownedChannels || {};
+    let website = channels.website || "";
+    if (!website || !website.startsWith("http")) {
+      website = l.website || "";
+    }
+    if (!website || !website.startsWith("http")) return false;
+    const domain = extractDomain(website);
+    if (!domain) return false;
+    if (skipDomains.some((s) => domain.includes(s))) return false;
+    if (!channels.website) channels.website = website;
+    l.ownedChannels = channels;
+    return true;
+  });
+
+  if (leadsWithWebsites.length === 0) return;
+
+  await appendAndSave(`Crawling ${leadsWithWebsites.length} creator websites for email addresses...`);
+
+  const batchSize = 15;
+  let emailsFound = 0;
+
+  for (let i = 0; i < leadsWithWebsites.length; i += batchSize) {
+    const batch = leadsWithWebsites.slice(i, i + batchSize);
+    const batchNum = Math.floor(i / batchSize) + 1;
+    const totalBatches = Math.ceil(leadsWithWebsites.length / batchSize);
+
+    try {
+      const startUrls = batch.map((l) => ({ url: l.ownedChannels.website }));
+
+      const items = await runActorAndGetResults("apify~cheerio-scraper", {
+        startUrls,
+        maxRequestsPerCrawl: batch.length * 4,
+        maxConcurrency: 10,
+        maxRequestRetries: 1,
+        linkSelector: "a[href]",
+        pseudoUrls: startUrls.map((su) => {
+          try {
+            const base = new URL(su.url);
+            return { purl: `${base.origin}/[.*]` };
+          } catch {
+            return { purl: su.url };
+          }
+        }),
+        pageFunction: `async function pageFunction(context) {
+          const { request, $, log, enqueueLinks } = context;
+          var bodyText = $('body').text().replace(/\\s+/g, ' ').substring(0, 8000);
+
+          var emails = [];
+          $('a[href^="mailto:"]').each(function() {
+            var href = $(this).attr('href') || '';
+            var email = href.replace('mailto:', '').split('?')[0].trim();
+            if (email && email.includes('@')) emails.push(email);
+          });
+
+          var footerText = '';
+          $('footer, .footer, #footer, [role="contentinfo"]').each(function() {
+            footerText += ' ' + $(this).text();
+          });
+
+          var schemaEmails = [];
+          $('script[type="application/ld+json"]').each(function() {
+            try {
+              var data = JSON.parse($(this).html() || '{}');
+              if (data.email) schemaEmails.push(data.email);
+              if (data.contactPoint) {
+                var cp = Array.isArray(data.contactPoint) ? data.contactPoint : [data.contactPoint];
+                cp.forEach(function(c) { if (c.email) schemaEmails.push(c.email); });
+              }
+            } catch(e) {}
+          });
+
+          var contactPatterns = /\\b(contact|about|team|staff|who-we-are|connect|get-in-touch)\\b/i;
+          if (!request.userData || !request.userData.isSubpage) {
+            var contactLinks = [];
+            $('a[href]').each(function() {
+              var href = $(this).attr('href') || '';
+              var text = $(this).text().toLowerCase().trim();
+              if (contactPatterns.test(href) || contactPatterns.test(text)) {
+                try { contactLinks.push(new URL(href, request.url).href); } catch(e) {}
+              }
+            });
+            var unique = contactLinks.filter(function(v, i, a) { return a.indexOf(v) === i; }).slice(0, 3);
+            if (unique.length > 0) {
+              try {
+                await enqueueLinks({ urls: unique, userData: { isSubpage: true, parentUrl: request.url } });
+              } catch(e) {}
+            }
+          }
+
+          return {
+            url: request.url,
+            parentUrl: (request.userData && request.userData.parentUrl) || request.url,
+            isSubpage: !!(request.userData && request.userData.isSubpage),
+            bodyText: bodyText + ' ' + footerText,
+            emails: emails,
+            schemaEmails: schemaEmails,
+          };
+        }`,
+      }, 180000);
+
+      const siteEmails = new Map<string, string[]>();
+
+      for (const item of items) {
+        const rootUrl = item.parentUrl || item.url;
+        const rootDomain = extractDomain(rootUrl);
+        if (!rootDomain) continue;
+
+        const allEmails: string[] = siteEmails.get(rootDomain) || [];
+
+        if (item.emails) allEmails.push(...item.emails);
+        if (item.schemaEmails) allEmails.push(...item.schemaEmails);
+
+        const textEmails = extractEmailsFromText(item.bodyText || "");
+        allEmails.push(...textEmails);
+
+        siteEmails.set(rootDomain, allEmails);
+      }
+
+      for (const lead of batch) {
+        if (lead.email) continue;
+        const websiteUrl = lead.ownedChannels.website || "";
+        const domain = extractDomain(websiteUrl);
+        if (!domain) continue;
+
+        const emails = siteEmails.get(domain) || [];
+        const unique = Array.from(new Set(emails)).filter(
+          (e) => !e.endsWith(".png") && !e.endsWith(".jpg") && !e.endsWith(".gif") &&
+            !e.includes("example.com") && !e.includes("sentry.io") && !e.includes("wixpress.com")
+        );
+
+        if (unique.length > 0) {
+          lead.email = unique[0];
+          emailsFound++;
+        }
+      }
+
+      await appendAndSave(`Website crawl batch ${batchNum}/${totalBatches}: ${emailsFound} emails found so far`);
+    } catch (err: any) {
+      await appendAndSave(`[WARN] Website crawl batch ${batchNum} failed: ${err.message}`);
+    }
+  }
+
+  await appendAndSave(`Website crawl complete: found ${emailsFound} emails from creator websites`);
+}
+
 async function scrapeFacebookGroups(
   keywords: string[],
   maxItems: number,
@@ -778,7 +1118,13 @@ export async function runPipeline(runId: number): Promise<void> {
       }
     }
 
-    await appendAndSave(`Platform discovery complete: ${allPlatformLeads.length} results`, 35, "Step 2: Google Search discovery");
+    await appendAndSave(`Platform discovery complete: ${allPlatformLeads.length} results`, 35, "Step 2: Profile & website crawl");
+
+    await crawlPatreonProfiles(allPlatformLeads, (msg) => appendAndSave(msg));
+    await crawlCreatorWebsites(allPlatformLeads, (msg) => appendAndSave(msg));
+
+    const emailsAfterCrawl = allPlatformLeads.filter((l) => l.email).length;
+    await appendAndSave(`After crawl: ${emailsAfterCrawl}/${allPlatformLeads.length} leads have emails`, 45, "Step 3: Google Search discovery");
 
     let allDiscoveredUrls: { url: string; domain: string; source: string }[] = [];
 
@@ -863,7 +1209,7 @@ export async function runPipeline(runId: number): Promise<void> {
     await appendAndSave(
       `Discovery complete: ${allPlatformLeads.length} platform + ${allDiscoveredUrls.length} website leads`,
       50,
-      "Step 3: Extract website data"
+      "Step 4: Extract website data"
     );
 
     const websiteUrls = allDiscoveredUrls
@@ -1026,7 +1372,7 @@ export async function runPipeline(runId: number): Promise<void> {
     await appendAndSave(
       `Extraction complete: ${extractedPages.length} pages + ${allPlatformLeads.length} platform results`,
       65,
-      "Step 4: Create & score leads"
+      "Step 5: Create & score leads"
     );
 
     let createdCount = 0;
@@ -1261,7 +1607,7 @@ export async function runPipeline(runId: number): Promise<void> {
 
     await storage.updateRun(runId, { leadsExtracted: createdCount });
 
-    await appendAndSave(`Created ${createdCount} total leads`, 80, "Step 5: Contact enrichment");
+    await appendAndSave(`Created ${createdCount} total leads`, 80, "Step 6: Contact enrichment");
 
     const runLeads = await storage.listLeadsByRun(runId);
     const leadsToEnrich = runLeads.filter((l) => !l.email);
@@ -1279,7 +1625,13 @@ export async function runPipeline(runId: number): Promise<void> {
           const firstName = nameParts[0] || "";
           const lastName = nameParts.length > 1 ? nameParts.slice(1).join(" ") : "";
 
-          const domain = apolloExtractDomain(lead.website || "");
+          let domain = apolloExtractDomain(lead.website || "");
+          if (!domain || !apolloIsEnrichable(domain)) {
+            const channels = (lead.ownedChannels as Record<string, string>) || {};
+            if (channels.website) {
+              domain = apolloExtractDomain(channels.website);
+            }
+          }
           const enrichableDomain = domain && apolloIsEnrichable(domain) ? domain : undefined;
 
           const result = await apolloPersonMatch({
@@ -1399,7 +1751,7 @@ export async function runPipeline(runId: number): Promise<void> {
       await appendAndSave("Email enrichment: skipped (no Apollo or Hunter API key configured)");
     }
 
-    await appendAndSave("Recalculating scores...", 90, "Step 6: Scoring & qualification");
+    await appendAndSave("Recalculating scores...", 90, "Step 7: Scoring & qualification");
 
     const qualifiedCount = await storage.countLeadsByRunAndStatus(runId, "qualified");
     const watchlistCount = await storage.countLeadsByRunAndStatus(runId, "watchlist");
@@ -1412,7 +1764,7 @@ export async function runPipeline(runId: number): Promise<void> {
     await appendAndSave(
       `Scoring complete: ${qualifiedCount} qualified, ${watchlistCount} watchlist`,
       95,
-      "Step 7: Finalizing"
+      "Step 8: Finalizing"
     );
 
     await storage.updateRun(runId, {
