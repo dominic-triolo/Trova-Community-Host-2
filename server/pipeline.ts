@@ -650,6 +650,13 @@ async function scrapePatreonCreators(
         proxyConfiguration: { useApifyProxy: true, apifyProxyGroups: ["RESIDENTIAL"] },
       }, 180000);
 
+      if (items.length > 0 && leads.length === 0) {
+        const sampleKeys = Object.keys(items[0]).sort().join(", ");
+        await appendAndSave(`Patreon raw fields: ${sampleKeys}`);
+        const socialData = items[0].socialLinks || items[0].socials || items[0].social_links || items[0].links || "none";
+        await appendAndSave(`Patreon social data sample: ${JSON.stringify(socialData).substring(0, 500)}`);
+      }
+
       let skippedDupe = 0;
       let skippedFilter = 0;
 
@@ -690,15 +697,67 @@ async function scrapePatreonCreators(
 
         const patreonLink = creatorUrl || "active";
         const channels: Record<string, string> = { patreon: patreonLink };
-        const socialsText = `${description} ${JSON.stringify(item.socialLinks || item.socials || {})}`;
-        if (socialsText.includes("youtube.com")) channels.youtube = "detected";
-        if (socialsText.includes("instagram.com")) channels.instagram = "detected";
-        if (socialsText.includes("twitter.com") || socialsText.includes("x.com")) channels.twitter = "detected";
-        if (socialsText.includes("discord")) channels.discord = "detected";
-        if (socialsText.includes("facebook.com")) channels.facebook = "detected";
+
+        const socialObj = item.socialLinks || item.socials || item.social_links || {};
+        const allLinks: string[] = [];
+        if (typeof socialObj === "object" && socialObj !== null) {
+          for (const val of Object.values(socialObj)) {
+            if (typeof val === "string" && val.startsWith("http")) allLinks.push(val);
+            if (Array.isArray(val)) val.forEach((v: any) => { if (typeof v === "string" && v.startsWith("http")) allLinks.push(v); });
+          }
+        }
+        if (item.externalLinks && Array.isArray(item.externalLinks)) {
+          for (const link of item.externalLinks) {
+            const url = typeof link === "string" ? link : link?.url || link?.href || "";
+            if (url && url.startsWith("http")) allLinks.push(url);
+          }
+        }
+        if (item.links && Array.isArray(item.links)) {
+          for (const link of item.links) {
+            const url = typeof link === "string" ? link : link?.url || link?.href || "";
+            if (url && url.startsWith("http")) allLinks.push(url);
+          }
+        }
+
+        const urlRegex = /https?:\/\/[^\s"'<>,)}\]]+/g;
+        const descUrls = description.match(urlRegex) || [];
+        allLinks.push(...descUrls);
+        const rawStr = JSON.stringify(item);
+        const rawUrls = rawStr.match(urlRegex) || [];
+        for (const u of rawUrls) {
+          if (!u.includes("patreon.com") && !u.includes("apify") && !allLinks.includes(u)) {
+            allLinks.push(u);
+          }
+        }
+
+        for (const link of allLinks) {
+          try {
+            const host = new URL(link).hostname.replace(/^www\./, "");
+            if (host.includes("youtube.com") || host.includes("youtu.be")) { if (!channels.youtube || channels.youtube === "detected") channels.youtube = link; }
+            else if (host.includes("instagram.com")) { if (!channels.instagram || channels.instagram === "detected") channels.instagram = link; }
+            else if (host.includes("twitter.com") || host === "x.com" || host.endsWith(".x.com")) { if (!channels.twitter || channels.twitter === "detected") channels.twitter = link; }
+            else if (host.includes("discord.gg") || host.includes("discord.com")) { if (!channels.discord || channels.discord === "detected") channels.discord = link; }
+            else if (host.includes("facebook.com")) { if (!channels.facebook || channels.facebook === "detected") channels.facebook = link; }
+            else if (host.includes("tiktok.com")) { if (!channels.tiktok || channels.tiktok === "detected") channels.tiktok = link; }
+            else if (host.includes("twitch.tv")) { if (!channels.twitch || channels.twitch === "detected") channels.twitch = link; }
+            else if (host.includes("linkedin.com")) { if (!channels.linkedin || channels.linkedin === "detected") channels.linkedin = link; }
+          } catch {}
+        }
 
         const creatorEmail = item.email || extractEmailsFromText(description)[0] || "";
-        const creatorWebsite = item.website || item.externalUrl || "";
+        const creatorWebsite = item.website || item.externalUrl || item.personalWebsite || "";
+        if (!creatorWebsite) {
+          for (const link of allLinks) {
+            try {
+              const host = new URL(link).hostname.replace(/^www\./, "");
+              const socialHosts = ["youtube.com", "youtu.be", "instagram.com", "twitter.com", "x.com", "discord.gg", "discord.com", "facebook.com", "tiktok.com", "twitch.tv", "linkedin.com", "patreon.com", "google.com", "apple.com", "spotify.com", "amazon.com", "reddit.com", "tumblr.com", "pinterest.com", "github.com", "medium.com", "wordpress.com", "linktr.ee", "beacons.ai", "ko-fi.com", "buymeacoffee.com", "gumroad.com", "substack.com", "bit.ly", "apify.com"];
+              if (!socialHosts.some((s) => host.includes(s))) {
+                channels.website = link;
+                break;
+              }
+            } catch {}
+          }
+        }
         if (creatorWebsite) channels.website = creatorWebsite;
 
         const monetization: Record<string, any> = { patreon: true };
@@ -730,7 +789,11 @@ async function scrapePatreonCreators(
         });
       }
 
-      await appendAndSave(`Patreon: ${leads.length} creators (skipped ${skippedDupe} dupes, ${skippedFilter} filtered)`);
+      const withSocials = leads.filter((l) => {
+        const ch = l.ownedChannels || {};
+        return Object.entries(ch).some(([k, v]) => k !== "patreon" && k !== "website" && v && v !== "detected" && v.startsWith("http"));
+      }).length;
+      await appendAndSave(`Patreon: ${leads.length} creators (${withSocials} with real social URLs, skipped ${skippedDupe} dupes, ${skippedFilter} filtered)`);
     } catch (err: any) {
       await appendAndSave(`[WARN] Patreon search failed for "${kw}": ${err.message}`);
     }
@@ -967,6 +1030,9 @@ async function crawlPatreonProfiles(
     }
   }
 
+  if (profilesEnriched === 0 && patreonLeads.length > 0) {
+    await appendAndSave(`[WARN] Profile crawl extracted 0 results - Cloudflare may be blocking Puppeteer. Cross-platform email lookup and website crawl will still proceed.`);
+  }
   await appendAndSave(`Patreon profiles: ${websitesFound} websites found, ${emailsFound} emails found, ${profilesEnriched} profiles enriched`);
 }
 
