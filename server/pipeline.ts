@@ -1033,7 +1033,7 @@ export async function runPipeline(runId: number): Promise<void> {
         const mailtoEmails: string[] = (item.mailtoEmails || []) as string[];
         const schemaEmails: string[] = (item.schemaEmails || []) as string[];
         const textEmails = extractEmailsFromText(pageText);
-        const emails = [...new Set([...mailtoEmails, ...schemaEmails, ...textEmails])];
+        const emails = Array.from(new Set([...mailtoEmails, ...schemaEmails, ...textEmails]));
         const phones = extractPhonesFromText(pageText);
         const channels = detectOwnedChannels(pageText, url);
         const monetization = detectMonetization(pageText);
