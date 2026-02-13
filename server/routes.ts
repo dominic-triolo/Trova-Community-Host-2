@@ -105,26 +105,58 @@ export async function registerRoutes(
       }
 
       const headers = [
-        "communityName", "communityType", "leaderName", "leaderRole",
-        "location", "website", "email", "phone", "linkedin",
-        "score", "qualified", "discoveredAt",
-        "ownedChannels", "monetizationSignals",
+        "Community Name", "Community Type", "Leader Name", "Leader Role",
+        "Location", "Website", "Email", "Phone", "LinkedIn",
+        "Patreon URL", "Personal Website",
+        "Member/Patron Count", "Post Count",
+        "YouTube", "Instagram", "Twitter", "Facebook", "TikTok",
+        "Score", "Qualified", "Status",
+        "Niche Score", "Trust Score", "Engagement Score", "Monetization Score", "Channels Score", "Trip Fit Score",
+        "Discovered At",
       ];
+
+      const esc = (v: any) => {
+        if (v === null || v === undefined || v === "") return "";
+        const s = String(v).replace(/"/g, '""');
+        return `"${s}"`;
+      };
 
       const csvRows = [headers.join(",")];
       for (const lead of leads) {
-        const row = headers.map((h) => {
-          if (h === "qualified") {
-            return lead.status === "qualified" ? "Yes" : "No";
-          }
-          if (h === "discoveredAt") {
-            return `"${lead.firstSeenAt ? new Date(lead.firstSeenAt).toISOString() : ""}"`;
-          }
-          const val = (lead as any)[h];
-          if (val === null || val === undefined) return "";
-          if (typeof val === "object") return `"${JSON.stringify(val).replace(/"/g, '""')}"`;
-          return `"${String(val).replace(/"/g, '""')}"`;
-        });
+        const engagement = (lead.engagementSignals as Record<string, any>) || {};
+        const channels = (lead.ownedChannels as Record<string, string>) || {};
+        const breakdown = (lead.scoreBreakdown as any) || {};
+
+        const row = [
+          esc(lead.communityName),
+          esc(lead.communityType),
+          esc(lead.leaderName),
+          esc(lead.leaderRole),
+          esc(lead.location),
+          esc(lead.website),
+          esc(lead.email),
+          esc(lead.phone),
+          esc(lead.linkedin),
+          esc(channels.patreon || ""),
+          esc(channels.website || ""),
+          engagement.member_count ?? engagement.subscriber_count ?? "",
+          engagement.post_count ?? engagement.total_videos ?? "",
+          esc(channels.youtube || ""),
+          esc(channels.instagram || ""),
+          esc(channels.twitter || ""),
+          esc(channels.facebook || ""),
+          esc(channels.tiktok || ""),
+          lead.score ?? 0,
+          lead.status === "qualified" ? "Yes" : "No",
+          esc(lead.status),
+          breakdown.nicheIdentity ?? "",
+          breakdown.trustLeadership ?? "",
+          breakdown.engagement ?? "",
+          breakdown.monetization ?? "",
+          breakdown.ownedChannels ?? "",
+          breakdown.tripFit ?? "",
+          esc(lead.firstSeenAt ? new Date(lead.firstSeenAt).toISOString() : ""),
+        ];
         csvRows.push(row.join(","));
       }
 
