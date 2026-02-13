@@ -6,6 +6,8 @@ import { hunterDomainSearch, extractDomainFromUrl, isEnrichableDomain, isHunterA
 import { log } from "./index";
 import type { RunParams, InsertSourceUrl, InsertLead, InsertLeader } from "@shared/schema";
 
+export const activeRunIds = new Set<number>();
+
 function extractDomain(url: string): string {
   try {
     return new URL(url).hostname.replace(/^www\./, "");
@@ -1067,6 +1069,7 @@ export async function runPipeline(runId: number): Promise<void> {
     if (!run || !run.params) throw new Error("Run not found or missing params");
 
     const params = run.params as RunParams;
+    activeRunIds.add(runId);
     await storage.updateRun(runId, { status: "running", startedAt: new Date() });
 
     await appendAndSave("Pipeline started", 2, "Step 1: Platform-specific discovery");
@@ -1787,6 +1790,8 @@ export async function runPipeline(runId: number): Promise<void> {
       logs: appendLog(currentLogs, `[ERROR] Pipeline failed: ${err.message}`),
       finishedAt: new Date(),
     });
+  } finally {
+    activeRunIds.delete(runId);
   }
 }
 
@@ -1806,6 +1811,7 @@ export async function reEnrichRun(runId: number): Promise<void> {
   };
 
   try {
+    activeRunIds.add(runId);
     await storage.updateRun(runId, {
       status: "running",
       progress: 0,
@@ -2003,5 +2009,7 @@ export async function reEnrichRun(runId: number): Promise<void> {
       logs: appendLog(currentLogs, `[ERROR] Re-enrichment failed: ${err.message}`),
       finishedAt: new Date(),
     });
+  } finally {
+    activeRunIds.delete(runId);
   }
 }

@@ -1,14 +1,37 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { runPipeline, reEnrichRun } from "./pipeline";
+import { runPipeline, reEnrichRun, activeRunIds } from "./pipeline";
 import { runParamsSchema, DEFAULT_RUN_PARAMS } from "@shared/schema";
 import { fromError } from "zod-validation-error";
+import { log } from "./index";
+
+async function recoverStuckRuns() {
+  try {
+    const runs = await storage.listRuns();
+    const stuckRuns = runs.filter((r) => r.status === "running" && !activeRunIds.has(r.id));
+    for (const run of stuckRuns) {
+      log(`Recovering stuck run ${run.id} (was in status "running" with no active process)`, "startup");
+      await storage.updateRun(run.id, {
+        status: "failed",
+        step: "Failed (server restarted)",
+        finishedAt: new Date(),
+        logs: (run.logs || "") + `\n[${new Date().toLocaleTimeString("en-US", { hour12: false })}] [ERROR] Run interrupted by server restart. Use Re-enrich to retry.\n`,
+      });
+    }
+    if (stuckRuns.length > 0) {
+      log(`Recovered ${stuckRuns.length} stuck run(s)`, "startup");
+    }
+  } catch (err: any) {
+    log(`Failed to recover stuck runs: ${err.message}`, "startup");
+  }
+}
 
 export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+  recoverStuckRuns();
 
   app.post("/api/auth", (req, res) => {
     const { password } = req.body || {};
