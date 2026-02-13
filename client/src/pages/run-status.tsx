@@ -22,6 +22,7 @@ import {
   BarChart3,
   Download,
   RefreshCw,
+  StopCircle,
 } from "lucide-react";
 
 function StatusBadge({ status }: { status: string }) {
@@ -65,6 +66,20 @@ export default function RunStatus() {
       const d = query.state.data as Run | undefined;
       if (d && (d.status === "succeeded" || d.status === "failed")) return false;
       return 2000;
+    },
+  });
+
+  const cancelMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/runs/${id}/cancel`);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/runs", id] });
+      toast({ title: "Run stopping", description: "The run will stop at the next checkpoint." });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Failed to stop run", description: err.message, variant: "destructive" });
     },
   });
 
@@ -131,6 +146,18 @@ export default function RunStatus() {
                 <ArrowLeft className="w-4 h-4 mr-1" /> New Run
               </Button>
             </Link>
+            {(run.status === "running" || run.status === "queued") && (
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={() => cancelMutation.mutate()}
+                disabled={cancelMutation.isPending}
+                data-testid="button-stop-run"
+              >
+                <StopCircle className={`w-4 h-4 mr-1 ${cancelMutation.isPending ? "animate-spin" : ""}`} />
+                Stop Run
+              </Button>
+            )}
             {(run.status === "succeeded" || run.status === "failed") && (
               <Button
                 variant="outline"

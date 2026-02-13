@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { runPipeline, reEnrichRun, activeRunIds } from "./pipeline";
+import { runPipeline, reEnrichRun, activeRunIds, cancelledRunIds } from "./pipeline";
 import { runParamsSchema, DEFAULT_RUN_PARAMS } from "@shared/schema";
 import { fromError } from "zod-validation-error";
 import { log } from "./index";
@@ -96,6 +96,34 @@ export async function registerRoutes(
       if (!run) return res.status(404).json({ message: "Run not found" });
 
       res.json(run);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.post("/api/runs/:id/cancel", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ message: "Invalid run id" });
+
+      const run = await storage.getRun(id);
+      if (!run) return res.status(404).json({ message: "Run not found" });
+      if (run.status !== "running" && run.status !== "queued") {
+        return res.status(409).json({ message: "Run is not currently active" });
+      }
+
+      cancelledRunIds.add(id);
+
+      if (run.status === "queued") {
+        await storage.updateRun(id, {
+          status: "failed",
+          step: "Cancelled by user",
+          finishedAt: new Date(),
+          logs: (run.logs || "") + `\n[${new Date().toLocaleTimeString("en-US", { hour12: false })}] Run cancelled by user\n`,
+        });
+      }
+
+      res.json({ message: "Cancellation requested", runId: id });
     } catch (err: any) {
       res.status(500).json({ message: err.message });
     }

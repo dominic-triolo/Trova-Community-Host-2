@@ -7,6 +7,14 @@ import { log } from "./index";
 import type { RunParams, InsertSourceUrl, InsertLead, InsertLeader } from "@shared/schema";
 
 export const activeRunIds = new Set<number>();
+export const cancelledRunIds = new Set<number>();
+
+class RunCancelledError extends Error {
+  constructor(runId: number) {
+    super(`Run ${runId} was cancelled by user`);
+    this.name = "RunCancelledError";
+  }
+}
 
 const BLOCKED_EMAIL_DOMAINS = ['patreon.com', 'example.com', 'sentry.io', 'cloudflare.com', 'w3.org', 'schema.org', 'googleapis.com', 'gstatic.com'];
 
@@ -870,6 +878,7 @@ export async function runPipeline(runId: number): Promise<void> {
   let currentLogs = "";
 
   const appendAndSave = async (msg: string, progress?: number, step?: string) => {
+    if (cancelledRunIds.has(runId)) throw new RunCancelledError(runId);
     currentLogs = appendLog(currentLogs, msg);
     log(msg, "pipeline");
     const update: any = { logs: currentLogs };
@@ -1663,15 +1672,26 @@ export async function runPipeline(runId: number): Promise<void> {
 
     log(`Pipeline run ${runId} completed successfully`, "pipeline");
   } catch (err: any) {
-    log(`Pipeline run ${runId} failed: ${err.message}`, "pipeline");
-    await storage.updateRun(runId, {
-      status: "failed",
-      step: "Failed",
-      logs: appendLog(currentLogs, `[ERROR] Pipeline failed: ${err.message}`),
-      finishedAt: new Date(),
-    });
+    if (err instanceof RunCancelledError || cancelledRunIds.has(runId)) {
+      log(`Pipeline run ${runId} cancelled by user`, "pipeline");
+      await storage.updateRun(runId, {
+        status: "failed",
+        step: "Cancelled by user",
+        logs: appendLog(currentLogs, `Run cancelled by user`),
+        finishedAt: new Date(),
+      });
+    } else {
+      log(`Pipeline run ${runId} failed: ${err.message}`, "pipeline");
+      await storage.updateRun(runId, {
+        status: "failed",
+        step: "Failed",
+        logs: appendLog(currentLogs, `[ERROR] Pipeline failed: ${err.message}`),
+        finishedAt: new Date(),
+      });
+    }
   } finally {
     activeRunIds.delete(runId);
+    cancelledRunIds.delete(runId);
   }
 }
 
@@ -1683,6 +1703,7 @@ export async function reEnrichRun(runId: number): Promise<void> {
   let currentLogs = "";
 
   const appendAndSave = async (msg: string, progress?: number, step?: string) => {
+    if (cancelledRunIds.has(runId)) throw new RunCancelledError(runId);
     currentLogs = appendLog(currentLogs, msg);
     const update: Record<string, any> = { logs: currentLogs };
     if (progress !== undefined) update.progress = progress;
@@ -1943,14 +1964,25 @@ export async function reEnrichRun(runId: number): Promise<void> {
 
     log(`Re-enrichment of run ${runId} completed successfully`, "pipeline");
   } catch (err: any) {
-    log(`Re-enrichment of run ${runId} failed: ${err.message}`, "pipeline");
-    await storage.updateRun(runId, {
-      status: "failed",
-      step: "Re-enrichment failed",
-      logs: appendLog(currentLogs, `[ERROR] Re-enrichment failed: ${err.message}`),
-      finishedAt: new Date(),
-    });
+    if (err instanceof RunCancelledError || cancelledRunIds.has(runId)) {
+      log(`Re-enrichment of run ${runId} cancelled by user`, "pipeline");
+      await storage.updateRun(runId, {
+        status: "failed",
+        step: "Cancelled by user",
+        logs: appendLog(currentLogs, `Run cancelled by user`),
+        finishedAt: new Date(),
+      });
+    } else {
+      log(`Re-enrichment of run ${runId} failed: ${err.message}`, "pipeline");
+      await storage.updateRun(runId, {
+        status: "failed",
+        step: "Re-enrichment failed",
+        logs: appendLog(currentLogs, `[ERROR] Re-enrichment failed: ${err.message}`),
+        finishedAt: new Date(),
+      });
+    }
   } finally {
     activeRunIds.delete(runId);
+    cancelledRunIds.delete(runId);
   }
 }
