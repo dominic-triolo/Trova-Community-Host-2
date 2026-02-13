@@ -1082,9 +1082,18 @@ async function crossPlatformEmailLookup(
   const allUrls = leadsWithSocialUrls.flatMap((l) => l.urls);
   await appendAndSave(`Cross-platform email lookup: checking ${allUrls.length} unique social URLs from ${leadsWithSocialUrls.length} leads...`);
 
-  const urlToEmail = new Map<string, string>();
+  const urlToLeadIndex = new Map<string, number>();
+  for (let li = 0; li < leadsWithSocialUrls.length; li++) {
+    for (const url of leadsWithSocialUrls[li].urls) {
+      const norm = normalizeUrl(url);
+      if (norm) urlToLeadIndex.set(norm, li);
+    }
+  }
+
   const batchSize = 25;
   let totalFound = 0;
+  let merged = 0;
+  const mergedLeadIndices = new Set<number>();
 
   for (let i = 0; i < allUrls.length; i += batchSize) {
     const batch = allUrls.slice(i, i + batchSize);
@@ -1097,32 +1106,74 @@ async function crossPlatformEmailLookup(
         proxyConfiguration: { useApifyProxy: true, apifyProxyGroups: ["RESIDENTIAL"] },
       }, 120000);
 
+      if (items.length > 0 && totalFound === 0) {
+        const sampleKeys = Object.keys(items[0]).sort().join(", ");
+        await appendAndSave(`Cross-platform scraper fields: ${sampleKeys}`);
+        const sampleUrls = items.slice(0, 2).map((it: any) => `url=${it.url || "?"} socialUrl=${it.socialUrl || "?"} profileUrl=${it.profileUrl || "?"} inputUrl=${it.inputUrl || "?"}`);
+        await appendAndSave(`Cross-platform URL samples: ${sampleUrls.join(" | ")}`);
+      }
+
       for (const item of items) {
         const email = cleanEmail(item.email || "");
         if (!email) continue;
-        const norm = normalizeUrl(item.url || "");
-        if (norm && !urlToEmail.has(norm)) {
-          urlToEmail.set(norm, email);
-          totalFound++;
+        totalFound++;
+
+        const candidateUrls = [
+          item.url, item.socialUrl, item.profileUrl, item.inputUrl,
+          item.link, item.socialLink, item.source_url, item.sourceUrl,
+        ].filter(Boolean);
+
+        let matched = false;
+        for (const candidateUrl of candidateUrls) {
+          const norm = normalizeUrl(candidateUrl);
+          if (!norm) continue;
+          const leadIdx = urlToLeadIndex.get(norm);
+          if (leadIdx !== undefined && !mergedLeadIndices.has(leadIdx)) {
+            const entry = leadsWithSocialUrls[leadIdx];
+            if (!entry.lead.email) {
+              entry.lead.email = email;
+              merged++;
+              mergedLeadIndices.add(leadIdx);
+              matched = true;
+              break;
+            }
+          }
+        }
+
+        if (!matched) {
+          for (const candidateUrl of candidateUrls) {
+            if (!candidateUrl) continue;
+            try {
+              const host = new URL(candidateUrl).hostname.replace(/^www\./, "");
+              const path = new URL(candidateUrl).pathname.replace(/\/+$/, "").toLowerCase();
+              for (let li = 0; li < leadsWithSocialUrls.length; li++) {
+                if (mergedLeadIndices.has(li)) continue;
+                const entry = leadsWithSocialUrls[li];
+                if (entry.lead.email) continue;
+                for (const leadUrl of entry.urls) {
+                  try {
+                    const lHost = new URL(leadUrl).hostname.replace(/^www\./, "");
+                    const lPath = new URL(leadUrl).pathname.replace(/\/+$/, "").toLowerCase();
+                    if (host === lHost && path === lPath) {
+                      entry.lead.email = email;
+                      merged++;
+                      mergedLeadIndices.add(li);
+                      matched = true;
+                      break;
+                    }
+                  } catch {}
+                }
+                if (matched) break;
+              }
+            } catch {}
+            if (matched) break;
+          }
         }
       }
 
-      await appendAndSave(`Cross-platform batch ${batchNum}/${totalBatches}: found ${totalFound} emails so far`);
+      await appendAndSave(`Cross-platform batch ${batchNum}/${totalBatches}: found ${totalFound} emails, merged ${merged} so far`);
     } catch (err: any) {
       await appendAndSave(`[WARN] Cross-platform batch ${batchNum} failed: ${err.message}`);
-    }
-  }
-
-  let merged = 0;
-  for (const { lead, urls } of leadsWithSocialUrls) {
-    if (lead.email) continue;
-    for (const url of urls) {
-      const norm = normalizeUrl(url);
-      if (urlToEmail.has(norm)) {
-        lead.email = urlToEmail.get(norm)!;
-        merged++;
-        break;
-      }
     }
   }
 
@@ -1947,14 +1998,25 @@ export async function runPipeline(runId: number): Promise<void> {
     await appendAndSave(`Created ${createdCount} total leads`, 80, "Step 6: Contact enrichment");
 
     const runLeads = await storage.listLeadsByRun(runId);
-    const leadsToEnrich = runLeads.filter((l) => !l.email);
+    const APOLLO_MAX_CALLS_PER_RUN = 25;
+    const APOLLO_MIN_SCORE = 25;
+    const leadsToEnrich = runLeads
+      .filter((l) => !l.email && (l.score || 0) >= APOLLO_MIN_SCORE)
+      .sort((a, b) => (b.score || 0) - (a.score || 0));
     let enrichedCount = 0;
 
     if (isApolloAvailable() && leadsToEnrich.length > 0) {
-      await appendAndSave(`Apollo.io: enriching ${leadsToEnrich.length} leads missing contact info...`);
+      const totalWithoutEmail = runLeads.filter((l) => !l.email).length;
+      const skippedLowScore = totalWithoutEmail - leadsToEnrich.length;
+      await appendAndSave(`Apollo.io: enriching top ${Math.min(leadsToEnrich.length, APOLLO_MAX_CALLS_PER_RUN)} of ${totalWithoutEmail} leads without email (${skippedLowScore} below score ${APOLLO_MIN_SCORE}, max ${APOLLO_MAX_CALLS_PER_RUN} API calls)...`);
 
       let apolloSkipped = 0;
+      let apolloCalls = 0;
       for (const lead of leadsToEnrich) {
+        if (apolloCalls >= APOLLO_MAX_CALLS_PER_RUN) {
+          await appendAndSave(`Apollo.io: reached ${APOLLO_MAX_CALLS_PER_RUN} call limit, stopping`);
+          break;
+        }
         try {
           const leaderName = lead.leaderName || lead.communityName || "";
           if (!leaderName) continue;
@@ -1980,6 +2042,7 @@ export async function runPipeline(runId: number): Promise<void> {
 
           const linkedinUrl = channels.linkedin && channels.linkedin.startsWith("http") ? channels.linkedin : undefined;
 
+          apolloCalls++;
           let result = await apolloPersonMatch({
             name: leaderName,
             firstName: hasRealName ? firstName : undefined,
@@ -1989,7 +2052,8 @@ export async function runPipeline(runId: number): Promise<void> {
             linkedinUrl,
           });
 
-          if (!result && hasRealName && !linkedinUrl) {
+          if (!result && hasRealName && !linkedinUrl && apolloCalls < APOLLO_MAX_CALLS_PER_RUN) {
+            apolloCalls++;
             result = await apolloPersonMatch({
               firstName,
               lastName,
@@ -2052,7 +2116,7 @@ export async function runPipeline(runId: number): Promise<void> {
         }
       }
 
-      await appendAndSave(`Apollo.io: enriched ${enrichedCount} of ${leadsToEnrich.length} leads (${apolloSkipped} skipped - invalid names)`);
+      await appendAndSave(`Apollo.io: enriched ${enrichedCount} of ${leadsToEnrich.length} leads (${apolloSkipped} skipped invalid names, ${apolloCalls} API calls used)`);
     } else if (isHunterAvailable() && leadsToEnrich.length > 0) {
       await appendAndSave(`Hunter.io fallback: enriching ${leadsToEnrich.length} leads missing emails...`);
       const enrichedDomains = new Set<string>();
@@ -2264,14 +2328,24 @@ export async function reEnrichRun(runId: number): Promise<void> {
     await appendAndSave(`Updated ${crawlUpdated} leads from crawl data`, 65);
 
     const refreshedLeads = await storage.listLeadsByRun(runId);
-    const leadsToEnrich = refreshedLeads.filter((l) => !l.email || l.email === "");
+    const RE_APOLLO_MAX_CALLS = 25;
+    const RE_APOLLO_MIN_SCORE = 25;
+    const leadsToEnrich = refreshedLeads
+      .filter((l) => (!l.email || l.email === "") && (l.score || 0) >= RE_APOLLO_MIN_SCORE)
+      .sort((a, b) => (b.score || 0) - (a.score || 0));
+    const totalWithoutEmail = refreshedLeads.filter((l) => !l.email || l.email === "").length;
 
-    await appendAndSave(`Step 5: Apollo enrichment for ${leadsToEnrich.length} leads without email...`, 70, "Re-enrichment: Apollo enrichment");
+    await appendAndSave(`Step 5: Apollo enrichment for top ${Math.min(leadsToEnrich.length, RE_APOLLO_MAX_CALLS)} of ${totalWithoutEmail} leads without email (max ${RE_APOLLO_MAX_CALLS} calls)...`, 70, "Re-enrichment: Apollo enrichment");
 
     let enrichedCount = 0;
     if (isApolloAvailable() && leadsToEnrich.length > 0) {
       let apolloSkipped = 0;
+      let apolloCalls = 0;
       for (const lead of leadsToEnrich) {
+        if (apolloCalls >= RE_APOLLO_MAX_CALLS) {
+          await appendAndSave(`Apollo.io: reached ${RE_APOLLO_MAX_CALLS} call limit, stopping`);
+          break;
+        }
         try {
           const leaderName = lead.leaderName || lead.communityName || "";
           if (!leaderName) continue;
@@ -2297,6 +2371,7 @@ export async function reEnrichRun(runId: number): Promise<void> {
 
           const linkedinUrl = channels.linkedin && channels.linkedin.startsWith("http") ? channels.linkedin : undefined;
 
+          apolloCalls++;
           let result = await apolloPersonMatch({
             name: leaderName,
             firstName: hasRealName ? firstName : undefined,
@@ -2306,7 +2381,8 @@ export async function reEnrichRun(runId: number): Promise<void> {
             linkedinUrl,
           });
 
-          if (!result && hasRealName && !linkedinUrl) {
+          if (!result && hasRealName && !linkedinUrl && apolloCalls < RE_APOLLO_MAX_CALLS) {
+            apolloCalls++;
             result = await apolloPersonMatch({
               firstName,
               lastName,
@@ -2343,7 +2419,7 @@ export async function reEnrichRun(runId: number): Promise<void> {
           await appendAndSave(`[WARN] Apollo enrichment failed for lead ${lead.id}: ${err.message}`);
         }
       }
-      await appendAndSave(`Apollo.io: enriched ${enrichedCount} of ${leadsToEnrich.length} leads (${apolloSkipped} skipped - invalid names)`, 85);
+      await appendAndSave(`Apollo.io: enriched ${enrichedCount} of ${leadsToEnrich.length} leads (${apolloSkipped} skipped invalid names, ${apolloCalls} API calls used)`, 85);
     } else {
       await appendAndSave("Apollo enrichment skipped (no API key configured)", 85);
     }
