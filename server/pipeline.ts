@@ -970,6 +970,103 @@ async function crawlPatreonProfiles(
   await appendAndSave(`Patreon profiles: ${websitesFound} websites found, ${emailsFound} emails found, ${profilesEnriched} profiles enriched`);
 }
 
+function normalizeUrl(url: string): string {
+  if (!url) return "";
+  let normalized = url.split("#")[0].split("?")[0].toLowerCase().trim();
+  normalized = normalized.replace(/^http:\/\//, "https://");
+  normalized = normalized.replace(/^https?:\/\/www\./, "https://");
+  normalized = normalized.replace(/\/+$/, "");
+  return normalized;
+}
+
+async function crossPlatformEmailLookup(
+  platformLeads: PlatformLead[],
+  appendAndSave: (msg: string) => Promise<void>,
+): Promise<void> {
+  const supportedHosts = ["youtube.com", "facebook.com", "twitter.com", "x.com", "instagram.com", "tiktok.com", "twitch.tv", "linkedin.com"];
+
+  const leadsWithSocialUrls: { lead: PlatformLead; urls: string[] }[] = [];
+  const globalDedup = new Set<string>();
+
+  for (const lead of platformLeads) {
+    if (lead.email) continue;
+    const channels = lead.ownedChannels || {};
+    const urls: string[] = [];
+    for (const [key, val] of Object.entries(channels)) {
+      if (!val || key === "website" || key === "patreon") continue;
+      if (typeof val !== "string" || !val.startsWith("http")) continue;
+      try {
+        const host = new URL(val).hostname.replace(/^www\./, "");
+        if (!supportedHosts.some((h) => host === h || host.endsWith("." + h))) continue;
+      } catch {
+        continue;
+      }
+      const norm = normalizeUrl(val);
+      if (norm && !globalDedup.has(norm)) {
+        globalDedup.add(norm);
+        urls.push(val);
+      }
+    }
+    if (urls.length > 0) {
+      leadsWithSocialUrls.push({ lead, urls });
+    }
+  }
+
+  if (leadsWithSocialUrls.length === 0) {
+    await appendAndSave("Cross-platform email lookup: no social URLs found to check");
+    return;
+  }
+
+  const allUrls = leadsWithSocialUrls.flatMap((l) => l.urls);
+  await appendAndSave(`Cross-platform email lookup: checking ${allUrls.length} unique social URLs from ${leadsWithSocialUrls.length} leads...`);
+
+  const urlToEmail = new Map<string, string>();
+  const batchSize = 25;
+  let totalFound = 0;
+
+  for (let i = 0; i < allUrls.length; i += batchSize) {
+    const batch = allUrls.slice(i, i + batchSize);
+    const batchNum = Math.floor(i / batchSize) + 1;
+    const totalBatches = Math.ceil(allUrls.length / batchSize);
+
+    try {
+      const items = await runActorAndGetResults("scraper-mind~all-social-media-email-scraper", {
+        urls: batch.map((url) => ({ url })),
+        proxyConfiguration: { useApifyProxy: true, apifyProxyGroups: ["RESIDENTIAL"] },
+      }, 120000);
+
+      for (const item of items) {
+        const email = cleanEmail(item.email || "");
+        if (!email) continue;
+        const norm = normalizeUrl(item.url || "");
+        if (norm && !urlToEmail.has(norm)) {
+          urlToEmail.set(norm, email);
+          totalFound++;
+        }
+      }
+
+      await appendAndSave(`Cross-platform batch ${batchNum}/${totalBatches}: found ${totalFound} emails so far`);
+    } catch (err: any) {
+      await appendAndSave(`[WARN] Cross-platform batch ${batchNum} failed: ${err.message}`);
+    }
+  }
+
+  let merged = 0;
+  for (const { lead, urls } of leadsWithSocialUrls) {
+    if (lead.email) continue;
+    for (const url of urls) {
+      const norm = normalizeUrl(url);
+      if (urlToEmail.has(norm)) {
+        lead.email = urlToEmail.get(norm)!;
+        merged++;
+        break;
+      }
+    }
+  }
+
+  await appendAndSave(`Cross-platform email lookup: found ${totalFound} emails, merged ${merged} into leads`);
+}
+
 async function crawlCreatorWebsites(
   platformLeads: PlatformLead[],
   appendAndSave: (msg: string) => Promise<void>,
@@ -1298,6 +1395,7 @@ export async function runPipeline(runId: number): Promise<void> {
     await appendAndSave(`Platform discovery complete: ${allPlatformLeads.length} results`, 35, "Step 2: Profile & website crawl");
 
     await crawlPatreonProfiles(allPlatformLeads, (msg) => appendAndSave(msg));
+    await crossPlatformEmailLookup(allPlatformLeads, (msg) => appendAndSave(msg));
     await crawlCreatorWebsites(allPlatformLeads, (msg) => appendAndSave(msg));
 
     const emailsAfterCrawl = allPlatformLeads.filter((l) => l.email).length;
@@ -2068,7 +2166,11 @@ export async function reEnrichRun(runId: number): Promise<void> {
 
     await appendAndSave(`Step 2: Crawling Patreon profiles...`, 15, "Re-enrichment: Profile crawl");
     await crawlPatreonProfiles(platformLeads, appendAndSave);
-    await appendAndSave(`Profile crawl complete`, 30);
+    await appendAndSave(`Profile crawl complete`, 25);
+
+    await appendAndSave(`Step 2b: Cross-platform email lookup...`, 28, "Re-enrichment: Cross-platform emails");
+    await crossPlatformEmailLookup(platformLeads, appendAndSave);
+    await appendAndSave(`Cross-platform lookup complete`, 32);
 
     await appendAndSave(`Step 3: Crawling creator websites...`, 35, "Re-enrichment: Website crawl");
     await crawlCreatorWebsites(platformLeads, appendAndSave);

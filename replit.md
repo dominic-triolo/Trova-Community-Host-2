@@ -54,7 +54,7 @@ shared/
    - Facebook Groups (apify/facebook-groups-scraper) - member counts, public groups
    - Patreon Creators (powerai~patreon-creators-search-scraper) - patron counts, tiers, social links
    - **Email Scraper** (scraper-mind~all-social-media-email-scraper) - runs in parallel with Patreon creator search, extracts emails directly from Patreon profiles, merged by URL match
-2. **Profile & Website Crawl** - Puppeteer scraper crawls each Patreon profile page to extract personal website, social links, real names, and emails; then crawls the personal websites (contact/about pages) for additional email extraction
+2. **Profile & Website Crawl** - Puppeteer scraper crawls each Patreon profile page to extract personal website, social links, real names, and emails; then cross-platform email lookup runs the email scraper on collected social URLs (YouTube, Facebook, Twitter, etc.) from ownedChannels for leads still missing emails; then crawls personal websites (contact/about pages) for additional email extraction
 3. **Google Search** - Discover generic website URLs via Google Search Scraper (optional)
 4. **Extract** - Crawl generic websites with Cheerio Scraper (follows contact/about/team subpages to find organizer info)
 5. **Create & Score** - ICP scoring (0-100) with 6 pillars + audience size bonus + contact info bonus
