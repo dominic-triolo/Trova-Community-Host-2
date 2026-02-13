@@ -475,14 +475,78 @@ async function scrapeEventbriteEvents(
   return leads;
 }
 
+function parsePatreonCount(val: any): number {
+  if (typeof val === "number") return val;
+  if (typeof val === "string") {
+    const cleaned = val.replace(/[^0-9]/g, "");
+    return cleaned ? parseInt(cleaned, 10) : 0;
+  }
+  return 0;
+}
+
+function expandKeywordsForPatreon(keywords: string[]): string[] {
+  const suffixes = [
+    "",
+    "community",
+    "creator",
+    "podcast",
+    "club",
+    "group",
+    "travel",
+    "adventure",
+    "outdoor",
+    "fitness",
+    "wellness",
+  ];
+
+  const expanded: string[] = [];
+  const seen = new Set<string>();
+
+  for (const kw of keywords) {
+    const base = kw.toLowerCase().trim();
+    if (!seen.has(base)) {
+      seen.add(base);
+      expanded.push(kw);
+    }
+  }
+
+  for (const kw of keywords) {
+    for (const suffix of suffixes) {
+      if (!suffix) continue;
+      const words = kw.toLowerCase().trim().split(/\s+/);
+      if (words.includes(suffix)) continue;
+      const combo = `${kw} ${suffix}`.trim();
+      const key = combo.toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        expanded.push(combo);
+      }
+    }
+  }
+
+  return expanded;
+}
+
 async function scrapePatreonCreators(
   keywords: string[],
   maxItems: number,
   appendAndSave: (msg: string) => Promise<void>,
+  filters?: { minMemberCount?: number; maxMemberCount?: number; minPostCount?: number },
 ): Promise<PlatformLead[]> {
   const leads: PlatformLead[] = [];
+  const seenUrls = new Set<string>();
 
-  for (const kw of keywords) {
+  const existingLeads = await storage.listLeads();
+  for (const l of existingLeads) {
+    if (l.website && l.website.includes("patreon.com")) {
+      seenUrls.add(l.website.split("?")[0].toLowerCase());
+    }
+  }
+
+  const expandedKeywords = expandKeywordsForPatreon(keywords);
+  await appendAndSave(`Patreon: expanded ${keywords.length} keywords to ${expandedKeywords.length} search queries`);
+
+  for (const kw of expandedKeywords) {
     if (leads.length >= maxItems) break;
     try {
       await appendAndSave(`Patreon: searching for "${kw}"...`);
@@ -493,17 +557,46 @@ async function scrapePatreonCreators(
         proxyConfiguration: { useApifyProxy: true, apifyProxyGroups: ["RESIDENTIAL"] },
       }, 180000);
 
+      let skippedDupe = 0;
+      let skippedFilter = 0;
+
       for (const item of items) {
         if (leads.length >= maxItems) break;
 
-        const creatorName = item.name || item.title || item.fullName || "";
+        const creatorName = item.creatorName || item.name || item.title || item.fullName || "";
         if (!creatorName) continue;
+
+        const creatorUrl = (item.creatorUrl || item.url || item.profileUrl || "").split("?")[0];
+        if (creatorUrl && seenUrls.has(creatorUrl.toLowerCase())) {
+          skippedDupe++;
+          continue;
+        }
+
         const description = item.description || item.about || item.summary || "";
-        const patronCount = item.patronCount || item.memberCount || item.patrons || 0;
-        const url = item.url || item.profileUrl || "";
+        const memberCount = parsePatreonCount(item.membersCount || item.patronCount || item.memberCount || item.patrons);
+        const postCount = parsePatreonCount(item.postsCount || item.postCount || 0);
+
+        if (filters) {
+          if (filters.minMemberCount && filters.minMemberCount > 0 && memberCount < filters.minMemberCount) {
+            skippedFilter++;
+            continue;
+          }
+          if (filters.maxMemberCount && filters.maxMemberCount > 0 && memberCount > filters.maxMemberCount) {
+            skippedFilter++;
+            continue;
+          }
+          if (filters.minPostCount && filters.minPostCount > 0 && postCount < filters.minPostCount) {
+            skippedFilter++;
+            continue;
+          }
+        }
+
+        if (creatorUrl) seenUrls.add(creatorUrl.toLowerCase());
+
         const fullText = `${creatorName} ${description}`;
 
-        const channels: Record<string, string> = { patreon: url || "active" };
+        const patreonLink = creatorUrl || "active";
+        const channels: Record<string, string> = { patreon: patreonLink };
         const socialsText = `${description} ${JSON.stringify(item.socialLinks || item.socials || {})}`;
         if (socialsText.includes("youtube.com")) channels.youtube = "detected";
         if (socialsText.includes("instagram.com")) channels.instagram = "detected";
@@ -525,17 +618,18 @@ async function scrapePatreonCreators(
           communityType: detectCommunityType(fullText),
           description: description.substring(0, 2000),
           location: "",
-          website: creatorWebsite || url,
+          website: creatorUrl || creatorWebsite || "",
           email: creatorEmail,
           phone: "",
           leaderName: creatorName,
-          memberCount: patronCount,
+          memberCount,
           subscriberCount: 0,
           ownedChannels: channels,
           monetizationSignals: { ...monetization, ...detectMonetization(description) },
           engagementSignals: {
-            member_count: patronCount,
-            attendance_proxy: patronCount,
+            member_count: memberCount,
+            post_count: postCount,
+            attendance_proxy: memberCount,
             recurring: true,
           },
           tripFitSignals: detectTripFit(fullText),
@@ -543,7 +637,7 @@ async function scrapePatreonCreators(
         });
       }
 
-      await appendAndSave(`Patreon: found ${leads.length} creators so far`);
+      await appendAndSave(`Patreon: ${leads.length} creators (skipped ${skippedDupe} dupes, ${skippedFilter} filtered)`);
     } catch (err: any) {
       await appendAndSave(`[WARN] Patreon search failed for "${kw}": ${err.message}`);
     }
@@ -660,7 +754,11 @@ export async function runPipeline(runId: number): Promise<void> {
       platformTasks.push({ name: "Facebook", promise: scrapeFacebookGroups(keywords, maxPerPlatform, (msg) => appendAndSave(msg)) });
     }
     if (enabledSources.includes("patreon")) {
-      platformTasks.push({ name: "Patreon", promise: scrapePatreonCreators(keywords, maxPerPlatform, (msg) => appendAndSave(msg)) });
+      platformTasks.push({ name: "Patreon", promise: scrapePatreonCreators(keywords, maxPerPlatform, (msg) => appendAndSave(msg), {
+        minMemberCount: params.minMemberCount || 0,
+        maxMemberCount: params.maxMemberCount || 0,
+        minPostCount: params.minPostCount || 0,
+      }) });
     }
 
     if (platformTasks.length === 0) {

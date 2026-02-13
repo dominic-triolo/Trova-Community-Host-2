@@ -29,6 +29,7 @@ import {
   X,
   Plus,
   Globe,
+  Filter,
 } from "lucide-react";
 
 export default function Home() {
@@ -212,6 +213,49 @@ export default function Home() {
           </div>
         </Card>
 
+        <Card className="p-4 space-y-4">
+          <div className="flex items-center gap-2">
+            <Filter className="w-4 h-4 text-muted-foreground" />
+            <Label className="text-sm font-medium">Creator Filters</Label>
+          </div>
+          <p className="text-xs text-muted-foreground">Filter results by audience size and activity. Set to 0 to disable a filter.</p>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">Min Members</Label>
+              <Input
+                type="number"
+                value={params.minMemberCount}
+                onChange={(e) =>
+                  setParams((p) => ({ ...p, minMemberCount: parseInt(e.target.value) || 0 }))
+                }
+                data-testid="input-min-members"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">Max Members</Label>
+              <Input
+                type="number"
+                value={params.maxMemberCount}
+                onChange={(e) =>
+                  setParams((p) => ({ ...p, maxMemberCount: parseInt(e.target.value) || 0 }))
+                }
+                data-testid="input-max-members"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">Min Posts</Label>
+              <Input
+                type="number"
+                value={params.minPostCount}
+                onChange={(e) =>
+                  setParams((p) => ({ ...p, minPostCount: parseInt(e.target.value) || 0 }))
+                }
+                data-testid="input-min-posts"
+              />
+            </div>
+          </div>
+        </Card>
+
         <Card className="p-4 space-y-5">
           <div className="flex items-center gap-2">
             <Settings2 className="w-4 h-4 text-muted-foreground" />
@@ -239,7 +283,7 @@ export default function Home() {
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">Max URLs to Discover</Label>
+                <Label className="text-xs text-muted-foreground">Max Leads to Discover</Label>
                 <Input
                   type="number"
                   value={params.maxDiscoveredUrls}

@@ -105,6 +105,9 @@ export const runParamsSchema = z.object({
   maxDiscoveredUrls: z.number().min(1).max(5000).default(200),
   maxGoogleResultsPerQuery: z.number().min(1).max(100).default(10),
   enabledSources: z.array(z.enum(["meetup", "youtube", "reddit", "eventbrite", "facebook", "patreon", "google"])).min(1, "At least one source must be selected").default(DEFAULT_ENABLED_SOURCES),
+  minMemberCount: z.number().min(0).default(0),
+  maxMemberCount: z.number().min(0).default(0),
+  minPostCount: z.number().min(0).default(0),
 });
 
 export type RunParams = z.infer<typeof runParamsSchema>;
@@ -165,4 +168,7 @@ export const DEFAULT_RUN_PARAMS: RunParams = {
   maxDiscoveredUrls: 200,
   maxGoogleResultsPerQuery: 10,
   enabledSources: [...DEFAULT_ENABLED_SOURCES],
+  minMemberCount: 0,
+  maxMemberCount: 0,
+  minPostCount: 0,
 };
