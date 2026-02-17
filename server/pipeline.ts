@@ -1353,6 +1353,259 @@ async function enrichFromYouTubeAboutPages(
   }
 }
 
+const INSTAGRAM_BIO_MAX = 30;
+
+async function enrichFromInstagramBios(
+  leads: PlatformLead[],
+  appendAndSave: (msg: string) => Promise<void>,
+): Promise<void> {
+  const leadsWithInstagram = leads.filter(l =>
+    l.ownedChannels?.instagram && l.ownedChannels.instagram.startsWith("http")
+  ).slice(0, INSTAGRAM_BIO_MAX);
+
+  if (leadsWithInstagram.length === 0) return;
+
+  await appendAndSave(`Instagram bios: checking ${leadsWithInstagram.length} profiles for email/website...`);
+
+  const usernames: string[] = [];
+  for (const lead of leadsWithInstagram) {
+    const igUrl = lead.ownedChannels!.instagram!;
+    const match = igUrl.match(/instagram\.com\/([^/?#]+)/i);
+    if (match && match[1]) {
+      const handle = match[1].replace(/^@/, "").toLowerCase();
+      if (handle && handle !== "p" && handle !== "explore" && handle !== "reel" && handle !== "stories") {
+        usernames.push(handle);
+      }
+    }
+  }
+
+  if (usernames.length === 0) return;
+
+  try {
+    const results = await runActorAndGetResults("apify/instagram-profile-scraper", {
+      usernames,
+    }, 120000);
+
+    let enrichedCount = 0;
+    for (const result of results) {
+      const igUsername = (result.username || "").toLowerCase();
+      if (!igUsername) continue;
+
+      const matchLead = leadsWithInstagram.find(l => {
+        const igUrl = (l.ownedChannels?.instagram || "").toLowerCase();
+        return igUrl.includes(`/${igUsername}`) || igUrl.includes(`/${igUsername}/`);
+      });
+
+      if (!matchLead) continue;
+
+      let foundAnything = false;
+
+      const bio = result.biography || "";
+      const bioEmails = extractEmailsFromText(bio);
+      const bioObfuscatedEmails = extractObfuscatedEmails(bio);
+      const allBioEmails = [...bioEmails, ...bioObfuscatedEmails];
+      const validEmail = allBioEmails.find(e => !isBlockedEmail(e));
+      if (validEmail && !matchLead.email) {
+        matchLead.email = validEmail;
+        foundAnything = true;
+      }
+
+      const externalUrl = result.externalUrl || "";
+      const externalUrls: Array<{ url?: string }> = result.externalUrls || [];
+      const allExternalUrls = [externalUrl, ...externalUrls.map(u => u.url || "")].filter(Boolean);
+
+      for (const link of allExternalUrls) {
+        if (!link.startsWith("http")) continue;
+        try {
+          const host = new URL(link).hostname.replace(/^www\./, "");
+
+          if (host.includes("linkedin.com") && link.includes("/in/") && !matchLead.ownedChannels?.linkedin) {
+            if (!matchLead.ownedChannels) matchLead.ownedChannels = {};
+            matchLead.ownedChannels.linkedin = link.split("?")[0];
+            foundAnything = true;
+          }
+
+          if ((host.includes("linktr.ee") || host.includes("beacons.ai") || host.includes("bio.link") || host.includes("solo.to") || host.includes("carrd.co") || host.includes("campsite.bio")) && !matchLead.ownedChannels?.linktree) {
+            if (!matchLead.ownedChannels) matchLead.ownedChannels = {};
+            matchLead.ownedChannels.linktree = link.split("?")[0];
+            foundAnything = true;
+          }
+
+          const socialHosts = ["youtube.com", "youtu.be", "instagram.com", "twitter.com", "x.com", "discord.gg", "discord.com", "facebook.com", "tiktok.com", "twitch.tv", "linkedin.com", "patreon.com", "google.com", "apple.com", "spotify.com", "amazon.com", "reddit.com", "tumblr.com", "pinterest.com", "github.com", "medium.com", "wordpress.com", "linktr.ee", "beacons.ai", "ko-fi.com", "buymeacoffee.com", "gumroad.com", "substack.com", "bit.ly"];
+          if (!socialHosts.some(s => host.includes(s)) && !matchLead.ownedChannels?.website) {
+            if (!matchLead.ownedChannels) matchLead.ownedChannels = {};
+            matchLead.ownedChannels.website = link.split("?")[0];
+            foundAnything = true;
+          }
+        } catch {}
+      }
+
+      const fullName = result.fullName || "";
+      if (fullName && !matchLead.leaderName) {
+        const words = fullName.trim().split(/\s+/);
+        if (words.length >= 2 && words.every((w: string) => /^[A-Z][a-z]+$/.test(w))) {
+          matchLead.leaderName = fullName.trim();
+          foundAnything = true;
+        }
+      }
+
+      if (result.followersCount && result.followersCount > 0) {
+        if (!matchLead.engagementSignals) matchLead.engagementSignals = {};
+        (matchLead.engagementSignals as any).instagram_followers = result.followersCount;
+        foundAnything = true;
+      }
+
+      if (foundAnything) enrichedCount++;
+    }
+
+    await appendAndSave(`Instagram bios: enriched ${enrichedCount}/${leadsWithInstagram.length} leads with new data`);
+  } catch (err: any) {
+    await appendAndSave(`[WARN] Instagram bio scraping failed: ${err.message}`);
+  }
+}
+
+const TWITTER_BIO_MAX = 30;
+
+async function enrichFromTwitterBios(
+  leads: PlatformLead[],
+  appendAndSave: (msg: string) => Promise<void>,
+): Promise<void> {
+  const leadsWithTwitter = leads.filter(l => {
+    const tw = l.ownedChannels?.twitter;
+    return tw && (tw.startsWith("http") || tw.startsWith("@"));
+  }).slice(0, TWITTER_BIO_MAX);
+
+  if (leadsWithTwitter.length === 0) return;
+
+  await appendAndSave(`Twitter bios: checking ${leadsWithTwitter.length} profiles for email/website...`);
+
+  const handleMap = new Map<string, PlatformLead>();
+  const handles: string[] = [];
+
+  for (const lead of leadsWithTwitter) {
+    const tw = lead.ownedChannels!.twitter!;
+    let handle = "";
+    if (tw.startsWith("http")) {
+      const match = tw.match(/(?:twitter\.com|x\.com)\/([^/?#]+)/i);
+      if (match && match[1]) handle = match[1].replace(/^@/, "").toLowerCase();
+    } else if (tw.startsWith("@")) {
+      handle = tw.replace(/^@/, "").toLowerCase();
+    }
+    if (handle && handle !== "home" && handle !== "explore" && handle !== "search" && handle !== "i" && handle !== "intent") {
+      handles.push(handle);
+      handleMap.set(handle, lead);
+    }
+  }
+
+  if (handles.length === 0) return;
+
+  const paddedHandles = [...handles];
+  while (paddedHandles.length < 5) {
+    paddedHandles.push(handles[0]);
+  }
+
+  try {
+    const results = await runActorAndGetResults("apidojo/twitter-user-scraper", {
+      twitterHandles: paddedHandles,
+      getFollowers: false,
+      getFollowing: false,
+      getRetweeters: false,
+      includeUnavailableUsers: false,
+      maxItems: Math.max(handles.length + 5, 10),
+    }, 120000);
+
+    let enrichedCount = 0;
+    const seenHandles = new Set<string>();
+
+    for (const result of results) {
+      const userName = (result.userName || "").toLowerCase();
+      if (!userName || seenHandles.has(userName)) continue;
+      seenHandles.add(userName);
+
+      const matchLead = handleMap.get(userName);
+      if (!matchLead) continue;
+
+      let foundAnything = false;
+
+      const bio = result.description || "";
+      const bioEmails = extractEmailsFromText(bio);
+      const bioObfuscatedEmails = extractObfuscatedEmails(bio);
+      const allBioEmails = [...bioEmails, ...bioObfuscatedEmails];
+      const validEmail = allBioEmails.find(e => !isBlockedEmail(e));
+      if (validEmail && !matchLead.email) {
+        matchLead.email = validEmail;
+        foundAnything = true;
+      }
+
+      const websiteUrls: string[] = [];
+      if (result.entities?.url?.urls) {
+        for (const u of result.entities.url.urls) {
+          const expanded = u.expanded_url || u.url || "";
+          if (expanded && expanded.startsWith("http")) websiteUrls.push(expanded);
+        }
+      }
+      if (result.entities?.description?.urls) {
+        for (const u of result.entities.description.urls) {
+          const expanded = u.expanded_url || u.url || "";
+          if (expanded && expanded.startsWith("http")) websiteUrls.push(expanded);
+        }
+      }
+
+      for (const link of websiteUrls) {
+        try {
+          const host = new URL(link).hostname.replace(/^www\./, "");
+
+          if (host.includes("linkedin.com") && link.includes("/in/") && !matchLead.ownedChannels?.linkedin) {
+            if (!matchLead.ownedChannels) matchLead.ownedChannels = {};
+            matchLead.ownedChannels.linkedin = link.split("?")[0];
+            foundAnything = true;
+          }
+
+          if ((host.includes("linktr.ee") || host.includes("beacons.ai") || host.includes("bio.link") || host.includes("solo.to") || host.includes("carrd.co") || host.includes("campsite.bio")) && !matchLead.ownedChannels?.linktree) {
+            if (!matchLead.ownedChannels) matchLead.ownedChannels = {};
+            matchLead.ownedChannels.linktree = link.split("?")[0];
+            foundAnything = true;
+          }
+
+          const socialHosts = ["youtube.com", "youtu.be", "instagram.com", "twitter.com", "x.com", "discord.gg", "discord.com", "facebook.com", "tiktok.com", "twitch.tv", "linkedin.com", "patreon.com", "google.com", "apple.com", "spotify.com", "amazon.com", "reddit.com", "tumblr.com", "pinterest.com", "github.com", "medium.com", "wordpress.com", "linktr.ee", "beacons.ai", "ko-fi.com", "buymeacoffee.com", "gumroad.com", "substack.com", "bit.ly"];
+          if (!socialHosts.some(s => host.includes(s)) && !matchLead.ownedChannels?.website) {
+            if (!matchLead.ownedChannels) matchLead.ownedChannels = {};
+            matchLead.ownedChannels.website = link.split("?")[0];
+            foundAnything = true;
+          }
+        } catch {}
+      }
+
+      const displayName = result.name || "";
+      if (displayName && !matchLead.leaderName) {
+        const words = displayName.trim().split(/\s+/);
+        if (words.length >= 2 && words.every((w: string) => /^[A-Z][a-z]+$/.test(w))) {
+          matchLead.leaderName = displayName.trim();
+          foundAnything = true;
+        }
+      }
+
+      if (result.followers && result.followers > 0) {
+        if (!matchLead.engagementSignals) matchLead.engagementSignals = {};
+        (matchLead.engagementSignals as any).twitter_followers = result.followers;
+        foundAnything = true;
+      }
+
+      const location = result.location || "";
+      if (location && !matchLead.location) {
+        matchLead.location = location;
+        foundAnything = true;
+      }
+
+      if (foundAnything) enrichedCount++;
+    }
+
+    await appendAndSave(`Twitter bios: enriched ${enrichedCount}/${leadsWithTwitter.length} leads with new data`);
+  } catch (err: any) {
+    await appendAndSave(`[WARN] Twitter bio scraping failed: ${err.message}`);
+  }
+}
+
 async function crawlCreatorWebsitesForEmails(
   leads: PlatformLead[],
   appendAndSave: (msg: string) => Promise<void>,
@@ -1549,18 +1802,35 @@ export async function runPipeline(runId: number): Promise<void> {
       await enrichFromYouTubeAboutPages(allPlatformLeads, appendAndSave);
     }
 
+    const leadsWithInstagram = allPlatformLeads.filter(l =>
+      l.ownedChannels?.instagram && l.ownedChannels.instagram.startsWith("http")
+    );
+    if (leadsWithInstagram.length > 0) {
+      await appendAndSave(`Instagram bios: ${leadsWithInstagram.length} leads have Instagram profiles`, 31, "Step 2b: Instagram bio scrape");
+      await enrichFromInstagramBios(allPlatformLeads, appendAndSave);
+    }
+
+    const leadsWithTwitter = allPlatformLeads.filter(l => {
+      const tw = l.ownedChannels?.twitter;
+      return tw && (tw.startsWith("http") || tw.startsWith("@"));
+    });
+    if (leadsWithTwitter.length > 0) {
+      await appendAndSave(`Twitter bios: ${leadsWithTwitter.length} leads have Twitter/X profiles`, 32, "Step 2c: Twitter/X bio scrape");
+      await enrichFromTwitterBios(allPlatformLeads, appendAndSave);
+    }
+
     const newLinktreeLeads = allPlatformLeads.filter(l =>
       !l.email && l.ownedChannels?.linktree && l.ownedChannels.linktree.startsWith("http") &&
       !leadsWithLinktreeInitial.includes(l)
     );
     if (newLinktreeLeads.length > 0) {
-      await appendAndSave(`Link aggregator scrape (pass 2): ${newLinktreeLeads.length} new aggregator URLs from YouTube/social`, 33, "Step 2b: Link aggregator scrape (new)");
+      await appendAndSave(`Link aggregator scrape (pass 2): ${newLinktreeLeads.length} new aggregator URLs from YouTube/IG/Twitter`, 33, "Step 2d: Link aggregator scrape (new)");
       await enrichFromLinkAggregators(allPlatformLeads, appendAndSave);
     }
 
     const leadsWithoutContactInfo = allPlatformLeads.filter(l => !l.email && !l.ownedChannels?.website && !l.ownedChannels?.linkedin);
     if (leadsWithoutContactInfo.length > 0) {
-      await appendAndSave(`Google enrichment: ${leadsWithoutContactInfo.length} leads need website/LinkedIn lookup`, 35, "Step 2c: Google contact search");
+      await appendAndSave(`Google enrichment: ${leadsWithoutContactInfo.length} leads need website/LinkedIn lookup`, 35, "Step 2e: Google contact search");
       await googleSearchEnrichCreators(allPlatformLeads, appendAndSave);
     } else {
       await appendAndSave("Google enrichment: skipped (all leads already have contact info)");

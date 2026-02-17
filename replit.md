@@ -49,9 +49,11 @@ shared/
 1. **Platform Discovery** - Patreon creator search (social links, about text, tiers, earnings) + bare domain/email extraction from about text + obfuscated email extraction ("[at]", "(at)" patterns) + real name extraction from about text (regex patterns for "I'm X", "my name is X", etc.) + brand name parsing ("Jenne Sluder Yoga" → "Jenne Sluder") + link aggregator URL extraction (Linktree, Beacons, etc.)
 1b. **Link Aggregator Scrape (Pass 1)** - Cheerio scraper on Linktree/Beacons/bio.link pages from Patreon about text (max 15 pages/run)
 2a. **YouTube About Page Scrape** - Scrape ALL YouTube channels (no email/website filter) for business emails, websites, LinkedIn, and link aggregator URLs
-2b. **Link Aggregator Scrape (Pass 2)** - Scrape any NEW aggregator URLs discovered via YouTube about pages
-2c. **Google Contact Search** - Smart Google search: uses real names for name-bearing creators, Patreon slug for pseudonymous creators, skips LinkedIn search for pseudonyms. Batched 5 at a time.
-2d. **Slug Domain Probe** - Try Patreon slug as .com domain (e.g., patreon.com/britchida → britchida.com) for creators without websites
+2b. **Instagram Bio Scrape** - Scrape Instagram profiles (`apify/instagram-profile-scraper`, $1.60/1K) for emails, websites, Linktree links, real names, and follower counts (max 30/run)
+2c. **Twitter/X Bio Scrape** - Scrape Twitter profiles (`apidojo/twitter-user-scraper`, $0.40/1K) for emails, website links, Linktree links, real names, locations, and follower counts (max 30/run)
+2d. **Link Aggregator Scrape (Pass 2)** - Scrape any NEW aggregator URLs discovered via YouTube/Instagram/Twitter
+2e. **Google Contact Search** - Smart Google search: uses real names for name-bearing creators, Patreon slug for pseudonymous creators, skips LinkedIn search for pseudonyms. Batched 5 at a time.
+2f. **Slug Domain Probe** - Try Patreon slug as .com domain (e.g., patreon.com/britchida → britchida.com) for creators without websites
 3. **Website Contact Crawl** - Crawl personal websites + slug-probed domains for emails (Cheerio scraper on contact/about pages, max 30 sites/run, email-domain validation)
 4. **Create & Score** - ICP scoring (0-100) with 6 pillars + audience size bonus + contact info bonus
 5. **Apollo.io Enrichment** - Contact lookup by name + domain + LinkedIn URL (toggleable, 50 calls/run, min score 15, deduped across runs via apolloEnrichedAt, skips pseudonyms via isValidApolloCandidate)
@@ -67,6 +69,8 @@ Users can enable/disable enrichment methods per run via the "Enrichment Methods"
 The pipeline collects cross-platform profile links (YouTube, Instagram, Twitter, Facebook, LinkedIn, TikTok, Discord, Twitch, Substack, personal website) from Patreon results. These are used to:
 - Extract real names from Patreon "about" text using regex patterns ("I'm X", "my name is X", "we are X and Y", etc.)
 - Scrape Linktree/Beacons/bio.link aggregator pages for emails, LinkedIn, and personal websites
+- Scrape Instagram bios for emails, external URLs, Linktree links, real names, and follower counts
+- Scrape Twitter/X bios for emails, website links, Linktree links, real names, locations, and follower counts
 - Crawl personal websites for contact emails
 - Pass LinkedIn URLs to Apollo for better match rates
 - Use real names (when available) instead of brand names for Google/Apollo searches
@@ -85,6 +89,8 @@ The discovery form uses platform-specific tabs. Currently Patreon is active; Fac
 - `aitorsm~eventbrite` - Eventbrite event/organizer search (structured data)
 - `apify/facebook-groups-scraper` - Facebook public group search (structured data)
 - `louisdeconinck~patreon-scraper` - Patreon creator search (social links, about text, tiers, earnings)
+- `apify/instagram-profile-scraper` - Instagram profile bio/email/website scraping ($1.60/1K profiles)
+- `apidojo/twitter-user-scraper` - Twitter/X profile bio/website/location scraping ($0.40/1K users)
 - `code_crafter~leads-finder` - Email enrichment fallback ($1.50/1k leads, verified emails by domain)
 
 ## API Endpoints
