@@ -99,11 +99,10 @@ export const DEFAULT_ENABLED_SOURCES: SourceId[] = ["patreon"];
 export const TEMPORARILY_DISABLED_SOURCES: SourceId[] = ["meetup", "youtube", "reddit", "eventbrite", "facebook", "google"];
 
 export const AVAILABLE_ENRICHMENTS = [
-  { id: "emailScraper", label: "Email Scraper", description: "Keyword-based email search on selected platforms via Apify" },
-  { id: "apollo", label: "Apollo.io", description: "Contact lookup by name & domain (uses API credits)" },
+  { id: "apollo", label: "Apollo.io", description: "Contact lookup by name, domain & LinkedIn URL (uses API credits)" },
 ] as const;
 
-export type EnrichmentId = "emailScraper" | "apollo";
+export type EnrichmentId = "apollo";
 
 export const runParamsSchema = z.object({
   seedKeywords: z.array(z.string()).min(1, "At least one keyword is required"),
@@ -115,7 +114,6 @@ export const runParamsSchema = z.object({
   minMemberCount: z.number().min(0).default(0),
   maxMemberCount: z.number().min(0).default(0),
   minPostCount: z.number().min(0).default(0),
-  enableEmailScraper: z.boolean().default(true),
   enableApollo: z.boolean().default(true),
 });
 
@@ -180,6 +178,5 @@ export const DEFAULT_RUN_PARAMS: RunParams = {
   minMemberCount: 0,
   maxMemberCount: 0,
   minPostCount: 0,
-  enableEmailScraper: true,
   enableApollo: true,
 };

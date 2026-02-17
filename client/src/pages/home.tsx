@@ -223,7 +223,7 @@ export default function Home() {
           <p className="text-xs text-muted-foreground">Choose which methods to use for finding contact info after discovery.</p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {AVAILABLE_ENRICHMENTS.map((enr) => {
-              const paramKey = enr.id === "emailScraper" ? "enableEmailScraper" : "enableApollo";
+              const paramKey = "enableApollo";
               const isEnabled = params[paramKey];
               return (
                 <label

@@ -39,17 +39,6 @@ function extractDomain(url: string): string {
   }
 }
 
-function normalizePatreonUrl(url: string): string {
-  if (!url) return "";
-  let normalized = url.split("?")[0].split("#")[0].toLowerCase().trim();
-  normalized = normalized.replace(/^http:\/\//, "https://");
-  normalized = normalized.replace(/^https?:\/\/www\./, "https://");
-  if (!normalized.startsWith("https://")) {
-    if (normalized.startsWith("patreon.com")) normalized = "https://" + normalized;
-  }
-  normalized = normalized.replace(/\/+$/, "");
-  return normalized;
-}
 
 function classifyUrl(url: string): string {
   const domain = extractDomain(url);
@@ -564,48 +553,10 @@ function expandKeywordsForPatreon(keywords: string[]): string[] {
   return expanded;
 }
 
-async function scrapePatreonEmails(
-  keywords: string[],
-  appendAndSave: (msg: string) => Promise<void>,
-): Promise<Map<string, string>> {
-  const emailMap = new Map<string, string>();
-
-  try {
-    await appendAndSave(`Email scraper: searching Patreon for emails with ${keywords.length} keywords...`);
-
-    for (const kw of keywords) {
-      try {
-        const items = await runActorAndGetResults("scraper-mind~all-social-media-email-scraper", {
-          keywords: [kw],
-          platform: "Patreon",
-          customDomains: ["@gmail.com", "@yahoo.com", "@hotmail.com", "@outlook.com", "@icloud.com", "@protonmail.com", "@aol.com", "@me.com", "@live.com", "@mail.com"],
-          proxyConfiguration: { useApifyProxy: true },
-        }, 180000);
-
-        let batchEmails = 0;
-        for (const item of items) {
-          const email = cleanEmail(item.email || "");
-          if (!email) continue;
-
-          const patreonUrl = normalizePatreonUrl(item.url || "");
-          if (patreonUrl && patreonUrl.includes("patreon.com") && !emailMap.has(patreonUrl)) {
-            emailMap.set(patreonUrl, email);
-            batchEmails++;
-          }
-        }
-
-        await appendAndSave(`Email scraper: "${kw}" found ${batchEmails} emails (${emailMap.size} total)`);
-      } catch (err: any) {
-        await appendAndSave(`[WARN] Email scraper failed for "${kw}": ${err.message}`);
-      }
-    }
-
-    await appendAndSave(`Email scraper complete: ${emailMap.size} emails found across all keywords`);
-  } catch (err: any) {
-    await appendAndSave(`[WARN] Email scraper failed: ${err.message}`);
-  }
-
-  return emailMap;
+function isPatreonCdnUrl(url: string): boolean {
+  if (!url) return false;
+  const lower = url.toLowerCase();
+  return lower.includes("patreonusercontent.com") || lower.includes("patreon-media") || lower.includes("token-hash=");
 }
 
 function isValidApolloCandidate(leaderName: string): boolean {
@@ -651,18 +602,23 @@ async function scrapePatreonCreators(
     if (leads.length >= maxItems) break;
     try {
       await appendAndSave(`Patreon: searching for "${kw}"...`);
-      const searchUrl = `https://www.patreon.com/search?q=${encodeURIComponent(kw)}`;
-      const items = await runActorAndGetResults("powerai~patreon-creators-search-scraper", {
-        searchUrl,
-        maxItems: Math.min(50, maxItems - leads.length),
-        proxyConfiguration: { useApifyProxy: true, apifyProxyGroups: ["RESIDENTIAL"] },
-      }, 180000);
+      const items = await runActorAndGetResults("louisdeconinck~patreon-scraper", {
+        searchQueries: [kw],
+        maxRequestsPerCrawl: Math.min(100, maxItems - leads.length + 20),
+      }, 300000);
 
       if (items.length > 0 && leads.length === 0) {
         const sampleKeys = Object.keys(items[0]).sort().join(", ");
         await appendAndSave(`Patreon raw fields: ${sampleKeys}`);
-        const socialData = items[0].socialLinks || items[0].socials || items[0].social_links || items[0].links || "none";
-        await appendAndSave(`Patreon social data sample: ${JSON.stringify(socialData).substring(0, 500)}`);
+        const socialSample = {
+          youtube: items[0].youtube,
+          instagram: items[0].instagram,
+          twitter: items[0].twitter,
+          facebook: items[0].facebook,
+          tiktok: items[0].tiktok,
+          twitch: items[0].twitch,
+        };
+        await appendAndSave(`Patreon social data sample: ${JSON.stringify(socialSample)}`);
       }
 
       let skippedDupe = 0;
@@ -671,18 +627,18 @@ async function scrapePatreonCreators(
       for (const item of items) {
         if (leads.length >= maxItems) break;
 
-        const creatorName = item.creatorName || item.name || item.title || item.fullName || "";
+        const creatorName = item.creator_name || item.name || item.creatorName || "";
         if (!creatorName) continue;
 
-        const creatorUrl = (item.creatorUrl || item.url || item.profileUrl || "").split("?")[0];
+        const creatorUrl = (item.url || item.profile_url || "").split("?")[0];
         if (creatorUrl && seenUrls.has(creatorUrl.toLowerCase())) {
           skippedDupe++;
           continue;
         }
 
-        const description = item.description || item.about || item.summary || "";
-        const memberCount = parsePatreonCount(item.membersCount || item.patronCount || item.memberCount || item.patrons);
-        const postCount = parsePatreonCount(item.postsCount || item.postCount || 0);
+        const description = item.about || item.description || item.creation_name || "";
+        const memberCount = parsePatreonCount(item.patron_count || item.total_members || item.paid_members || 0);
+        const postCount = parsePatreonCount(item.post_count || item.total_posts || 0);
 
         if (filters) {
           if (filters.minMemberCount && filters.minMemberCount > 0 && memberCount < filters.minMemberCount) {
@@ -706,57 +662,44 @@ async function scrapePatreonCreators(
         const patreonLink = creatorUrl || "active";
         const channels: Record<string, string> = { patreon: patreonLink };
 
-        const socialObj = item.socialLinks || item.socials || item.social_links || {};
-        const allLinks: string[] = [];
-        if (typeof socialObj === "object" && socialObj !== null) {
-          for (const val of Object.values(socialObj)) {
-            if (typeof val === "string" && val.startsWith("http")) allLinks.push(val);
-            if (Array.isArray(val)) val.forEach((v: any) => { if (typeof v === "string" && v.startsWith("http")) allLinks.push(v); });
-          }
-        }
-        if (item.externalLinks && Array.isArray(item.externalLinks)) {
-          for (const link of item.externalLinks) {
-            const url = typeof link === "string" ? link : link?.url || link?.href || "";
-            if (url && url.startsWith("http")) allLinks.push(url);
-          }
-        }
-        if (item.links && Array.isArray(item.links)) {
-          for (const link of item.links) {
-            const url = typeof link === "string" ? link : link?.url || link?.href || "";
-            if (url && url.startsWith("http")) allLinks.push(url);
-          }
-        }
+        if (item.youtube && typeof item.youtube === "string" && item.youtube.startsWith("http")) channels.youtube = item.youtube;
+        if (item.instagram && typeof item.instagram === "string" && item.instagram.startsWith("http")) channels.instagram = item.instagram;
+        if (item.twitter && typeof item.twitter === "string" && item.twitter.startsWith("http")) channels.twitter = item.twitter;
+        if (item.facebook && typeof item.facebook === "string" && item.facebook.startsWith("http")) channels.facebook = item.facebook;
+        if (item.tiktok && typeof item.tiktok === "string" && item.tiktok.startsWith("http")) channels.tiktok = item.tiktok;
+        if (item.twitch && typeof item.twitch === "string" && item.twitch.startsWith("http")) channels.twitch = item.twitch;
 
+        const allLinks: string[] = [];
         const urlRegex = /https?:\/\/[^\s"'<>,)}\]]+/g;
         const descUrls = description.match(urlRegex) || [];
         allLinks.push(...descUrls);
-        const rawStr = JSON.stringify(item);
-        const rawUrls = rawStr.match(urlRegex) || [];
-        for (const u of rawUrls) {
-          if (!u.includes("patreon.com") && !u.includes("apify") && !allLinks.includes(u)) {
-            allLinks.push(u);
-          }
-        }
+
+        const aboutText = item.about || "";
+        const aboutUrls = aboutText.match(urlRegex) || [];
+        allLinks.push(...aboutUrls);
 
         for (const link of allLinks) {
           try {
             const host = new URL(link).hostname.replace(/^www\./, "");
-            if (host.includes("youtube.com") || host.includes("youtu.be")) { if (!channels.youtube || channels.youtube === "detected") channels.youtube = link; }
-            else if (host.includes("instagram.com")) { if (!channels.instagram || channels.instagram === "detected") channels.instagram = link; }
-            else if (host.includes("twitter.com") || host === "x.com" || host.endsWith(".x.com")) { if (!channels.twitter || channels.twitter === "detected") channels.twitter = link; }
-            else if (host.includes("discord.gg") || host.includes("discord.com")) { if (!channels.discord || channels.discord === "detected") channels.discord = link; }
-            else if (host.includes("facebook.com")) { if (!channels.facebook || channels.facebook === "detected") channels.facebook = link; }
-            else if (host.includes("tiktok.com")) { if (!channels.tiktok || channels.tiktok === "detected") channels.tiktok = link; }
-            else if (host.includes("twitch.tv")) { if (!channels.twitch || channels.twitch === "detected") channels.twitch = link; }
-            else if (host.includes("linkedin.com")) { if (!channels.linkedin || channels.linkedin === "detected") channels.linkedin = link; }
+            if (isPatreonCdnUrl(link)) continue;
+            if ((host.includes("youtube.com") || host.includes("youtu.be")) && !channels.youtube) channels.youtube = link;
+            else if (host.includes("instagram.com") && !channels.instagram) channels.instagram = link;
+            else if ((host.includes("twitter.com") || host === "x.com" || host.endsWith(".x.com")) && !channels.twitter) channels.twitter = link;
+            else if ((host.includes("discord.gg") || host.includes("discord.com")) && !channels.discord) channels.discord = link;
+            else if (host.includes("facebook.com") && !channels.facebook) channels.facebook = link;
+            else if (host.includes("tiktok.com") && !channels.tiktok) channels.tiktok = link;
+            else if (host.includes("twitch.tv") && !channels.twitch) channels.twitch = link;
+            else if (host.includes("linkedin.com") && !channels.linkedin) channels.linkedin = link;
+            else if (host.includes("substack.com") && !channels.substack) channels.substack = link;
           } catch {}
         }
 
-        const creatorEmail = item.email || extractEmailsFromText(description)[0] || "";
-        const creatorWebsite = item.website || item.externalUrl || item.personalWebsite || "";
-        if (!creatorWebsite) {
+        const creatorEmail = extractEmailsFromText(`${description} ${aboutText}`)[0] || "";
+
+        if (!channels.website) {
           for (const link of allLinks) {
             try {
+              if (isPatreonCdnUrl(link)) continue;
               const host = new URL(link).hostname.replace(/^www\./, "");
               const socialHosts = ["youtube.com", "youtu.be", "instagram.com", "twitter.com", "x.com", "discord.gg", "discord.com", "facebook.com", "tiktok.com", "twitch.tv", "linkedin.com", "patreon.com", "google.com", "apple.com", "spotify.com", "amazon.com", "reddit.com", "tumblr.com", "pinterest.com", "github.com", "medium.com", "wordpress.com", "linktr.ee", "beacons.ai", "ko-fi.com", "buymeacoffee.com", "gumroad.com", "substack.com", "bit.ly", "apify.com"];
               if (!socialHosts.some((s) => host.includes(s))) {
@@ -766,11 +709,10 @@ async function scrapePatreonCreators(
             } catch {}
           }
         }
-        if (creatorWebsite) channels.website = creatorWebsite;
 
         const monetization: Record<string, any> = { patreon: true };
-        if (item.tiers || item.membershipTiers) monetization.paid_membership = true;
-        if (item.isMonthly !== undefined) monetization.recurring = true;
+        if (item.tiers && Array.isArray(item.tiers) && item.tiers.length > 0) monetization.paid_membership = true;
+        if (item.earnings_per_month) monetization.monthly_earnings = item.earnings_per_month;
 
         leads.push({
           source: "patreon",
@@ -778,7 +720,7 @@ async function scrapePatreonCreators(
           communityType: detectCommunityType(fullText),
           description: description.substring(0, 2000),
           location: "",
-          website: creatorUrl || creatorWebsite || "",
+          website: creatorUrl || "",
           email: creatorEmail,
           phone: "",
           leaderName: creatorName,
@@ -789,6 +731,7 @@ async function scrapePatreonCreators(
           engagementSignals: {
             member_count: memberCount,
             post_count: postCount,
+            paid_members: parsePatreonCount(item.paid_members || 0),
             attendance_proxy: memberCount,
             recurring: true,
           },
@@ -886,6 +829,7 @@ async function crawlCreatorWebsitesForEmails(
     if (lead.email) continue;
     const website = lead.ownedChannels?.website;
     if (!website || typeof website !== "string" || !website.startsWith("http")) continue;
+    if (isPatreonCdnUrl(website)) continue;
     const domain = extractDomain(website);
     if (!domain) continue;
     if (socialHosts.some((s) => domain.includes(s))) continue;
@@ -1017,11 +961,6 @@ export async function runPipeline(runId: number): Promise<void> {
       }) });
     }
 
-    let emailScraperPromise: Promise<Map<string, string>> | null = null;
-    if (params.enableEmailScraper !== false && enabledSources.includes("patreon")) {
-      emailScraperPromise = scrapePatreonEmails(keywords, (msg) => appendAndSave(msg));
-    }
-
     if (platformTasks.length === 0) {
       await appendAndSave("No platform sources selected, skipping platform discovery");
     }
@@ -1039,35 +978,7 @@ export async function runPipeline(runId: number): Promise<void> {
       }
     }
 
-    if (params.enableEmailScraper !== false && emailScraperPromise) {
-      try {
-        const emailMap = await emailScraperPromise;
-        let emailsMerged = 0;
-        for (const pl of allPlatformLeads) {
-          if (pl.email) continue;
-          if (pl.source !== "patreon") continue;
-
-          const candidateUrls: string[] = [];
-          const mainUrl = normalizePatreonUrl(pl.website || "");
-          if (mainUrl && mainUrl.includes("patreon.com")) candidateUrls.push(mainUrl);
-          const patreonChannel = normalizePatreonUrl(pl.ownedChannels?.patreon || "");
-          if (patreonChannel && patreonChannel.includes("patreon.com") && patreonChannel !== mainUrl) candidateUrls.push(patreonChannel);
-
-          for (const url of candidateUrls) {
-            if (emailMap.has(url)) {
-              pl.email = emailMap.get(url)!;
-              emailsMerged++;
-              break;
-            }
-          }
-        }
-        await appendAndSave(`Email scraper: merged ${emailsMerged} emails into platform leads (map has ${emailMap.size} entries)`);
-      } catch (err: any) {
-        await appendAndSave(`[WARN] Email scraper merge failed: ${err.message}`);
-      }
-    }
-
-    const leadsNeedingEmail = allPlatformLeads.filter(l => !l.email && l.ownedChannels?.website);
+    const leadsNeedingEmail = allPlatformLeads.filter(l => !l.email && l.ownedChannels?.website && !isPatreonCdnUrl(l.ownedChannels.website));
     if (leadsNeedingEmail.length > 0) {
       await appendAndSave(`Crawling ${leadsNeedingEmail.length} creator websites for contact emails...`, 38, "Step 2: Website contact crawl");
       const websiteEmailMap = await crawlCreatorWebsitesForEmails(leadsNeedingEmail, appendAndSave);
@@ -1883,40 +1794,7 @@ export async function reEnrichRun(runId: number): Promise<void> {
       raw: (lead.raw as Record<string, any>) || {},
     }));
 
-    if (params.enableEmailScraper !== false) {
-      await appendAndSave(`Step 1: Email scraper for Patreon...`, 5, "Re-enrichment: Email scraper");
-      const patreonKeywords = (params.seedKeywords || []);
-      if (patreonKeywords.length > 0) {
-        try {
-          const emailMap = await scrapePatreonEmails(patreonKeywords, appendAndSave);
-          let emailsMerged = 0;
-          for (const pl of platformLeads) {
-            if (pl.email) continue;
-
-            const candidateUrls: string[] = [];
-            const mainUrl = normalizePatreonUrl(pl.website || "");
-            if (mainUrl && mainUrl.includes("patreon.com")) candidateUrls.push(mainUrl);
-            const patreonChannel = normalizePatreonUrl(pl.ownedChannels?.patreon || "");
-            if (patreonChannel && patreonChannel.includes("patreon.com") && patreonChannel !== mainUrl) candidateUrls.push(patreonChannel);
-
-            for (const url of candidateUrls) {
-              if (emailMap.has(url)) {
-                pl.email = emailMap.get(url)!;
-                emailsMerged++;
-                break;
-              }
-            }
-          }
-          await appendAndSave(`Email scraper: merged ${emailsMerged} emails into leads (map has ${emailMap.size} entries)`);
-        } catch (err: any) {
-          await appendAndSave(`[WARN] Email scraper failed: ${err.message}`);
-        }
-      }
-    } else {
-      await appendAndSave("Email scraper skipped (disabled by user)", 5);
-    }
-
-    await appendAndSave(`Step 2: Updating leads in database...`, 25, "Re-enrichment: Saving results");
+    await appendAndSave(`Step 1: Updating leads in database...`, 25, "Re-enrichment: Saving results");
     let crawlUpdated = 0;
     for (const pl of platformLeads) {
       const original = leads.find((l) => l.id === pl.dbId);
@@ -1950,7 +1828,7 @@ export async function reEnrichRun(runId: number): Promise<void> {
         .sort((a, b) => (b.score || 0) - (a.score || 0));
       const totalWithoutEmail = refreshedLeads.filter((l) => !l.email || l.email === "").length;
 
-      await appendAndSave(`Step 3: Apollo enrichment for top ${Math.min(leadsToEnrich.length, RE_APOLLO_MAX_CALLS)} of ${totalWithoutEmail} leads without email (max ${RE_APOLLO_MAX_CALLS} calls)...`, 50, "Re-enrichment: Apollo enrichment");
+      await appendAndSave(`Step 2: Apollo enrichment for top ${Math.min(leadsToEnrich.length, RE_APOLLO_MAX_CALLS)} of ${totalWithoutEmail} leads without email (max ${RE_APOLLO_MAX_CALLS} calls)...`, 50, "Re-enrichment: Apollo enrichment");
 
       let enrichedCount = 0;
       if (isApolloAvailable() && leadsToEnrich.length > 0) {

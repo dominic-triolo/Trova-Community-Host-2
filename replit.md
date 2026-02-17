@@ -77,8 +77,7 @@ Users can toggle which platforms to search per run via the "Data Sources" card o
 - `trudax~reddit-scraper-lite` - Reddit community search (structured data)
 - `aitorsm~eventbrite` - Eventbrite event/organizer search (structured data)
 - `apify/facebook-groups-scraper` - Facebook public group search (structured data)
-- `powerai~patreon-creators-search-scraper` - Patreon creator search (patron counts, tiers)
-- `scraper-mind~all-social-media-email-scraper` - Multi-platform email extraction (Patreon, YouTube, etc.)
+- `louisdeconinck~patreon-scraper` - Patreon creator search (social links, about text, tiers, earnings)
 
 ## API Endpoints
 - `POST /api/runs` - Start a new pipeline run
