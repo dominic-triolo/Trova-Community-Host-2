@@ -563,71 +563,75 @@ async function scrapePatreonCreators(
   }
 
   const dedupedKeywords = Array.from(new Set(keywords.map(k => k.trim()).filter(Boolean)));
-  await appendAndSave(`Patreon: ${dedupedKeywords.length} search queries`);
+  if (dedupedKeywords.length === 0) {
+    await appendAndSave(`Patreon: no keywords to search`);
+    return leads;
+  }
+  const keywordPreview = dedupedKeywords.length <= 5 ? dedupedKeywords.join(", ") : `${dedupedKeywords.slice(0, 5).join(", ")} (+${dedupedKeywords.length - 5} more)`;
+  await appendAndSave(`Patreon: searching ${dedupedKeywords.length} keywords: ${keywordPreview}`);
 
-  for (const kw of dedupedKeywords) {
-    if (leads.length >= maxItems) break;
-    try {
-      await appendAndSave(`Patreon: searching for "${kw}"...`);
-      const items = await runActorAndGetResults("louisdeconinck~patreon-scraper", {
-        searchQueries: [kw],
-        maxRequestsPerCrawl: Math.min(100, maxItems - leads.length + 20),
-      }, 300000);
+  try {
+    const items = await runActorAndGetResults("louisdeconinck~patreon-scraper", {
+      searchQueries: dedupedKeywords,
+      maxRequestsPerCrawl: 200,
+    }, 300000);
 
-      if (items.length > 0 && leads.length === 0) {
-        const sampleKeys = Object.keys(items[0]).sort().join(", ");
-        await appendAndSave(`Patreon raw fields: ${sampleKeys}`);
-        const socialSample = {
-          youtube: items[0].youtube,
-          instagram: items[0].instagram,
-          twitter: items[0].twitter,
-          facebook: items[0].facebook,
-          tiktok: items[0].tiktok,
-          twitch: items[0].twitch,
-        };
-        await appendAndSave(`Patreon social data sample: ${JSON.stringify(socialSample)}`);
+    await appendAndSave(`Patreon: scraper returned ${items.length} raw results`);
+
+    if (items.length > 0) {
+      const sampleKeys = Object.keys(items[0]).sort().join(", ");
+      await appendAndSave(`Patreon raw fields: ${sampleKeys}`);
+      const socialSample = {
+        youtube: items[0].youtube,
+        instagram: items[0].instagram,
+        twitter: items[0].twitter,
+        facebook: items[0].facebook,
+        tiktok: items[0].tiktok,
+        twitch: items[0].twitch,
+      };
+      await appendAndSave(`Patreon social data sample: ${JSON.stringify(socialSample)}`);
+    }
+
+    let skippedDupe = 0;
+    let skippedFilter = 0;
+
+    for (const item of items) {
+      if (leads.length >= maxItems) break;
+
+      const creatorName = item.creator_name || item.name || item.creatorName || "";
+      if (!creatorName) continue;
+
+      const creatorUrl = (item.url || item.profile_url || "").split("?")[0];
+      if (creatorUrl && seenUrls.has(creatorUrl.toLowerCase())) {
+        skippedDupe++;
+        continue;
       }
 
-      let skippedDupe = 0;
-      let skippedFilter = 0;
+      const description = item.about || item.description || item.creation_name || "";
+      const memberCount = parsePatreonCount(item.patron_count || item.total_members || item.paid_members || 0);
+      const postCount = parsePatreonCount(item.post_count || item.total_posts || 0);
 
-      for (const item of items) {
-        if (leads.length >= maxItems) break;
-
-        const creatorName = item.creator_name || item.name || item.creatorName || "";
-        if (!creatorName) continue;
-
-        const creatorUrl = (item.url || item.profile_url || "").split("?")[0];
-        if (creatorUrl && seenUrls.has(creatorUrl.toLowerCase())) {
-          skippedDupe++;
+      if (filters) {
+        if (filters.minMemberCount && filters.minMemberCount > 0 && memberCount < filters.minMemberCount) {
+          skippedFilter++;
           continue;
         }
-
-        const description = item.about || item.description || item.creation_name || "";
-        const memberCount = parsePatreonCount(item.patron_count || item.total_members || item.paid_members || 0);
-        const postCount = parsePatreonCount(item.post_count || item.total_posts || 0);
-
-        if (filters) {
-          if (filters.minMemberCount && filters.minMemberCount > 0 && memberCount < filters.minMemberCount) {
-            skippedFilter++;
-            continue;
-          }
-          if (filters.maxMemberCount && filters.maxMemberCount > 0 && memberCount > filters.maxMemberCount) {
-            skippedFilter++;
-            continue;
-          }
-          if (filters.minPostCount && filters.minPostCount > 0 && postCount < filters.minPostCount) {
-            skippedFilter++;
-            continue;
-          }
+        if (filters.maxMemberCount && filters.maxMemberCount > 0 && memberCount > filters.maxMemberCount) {
+          skippedFilter++;
+          continue;
         }
+        if (filters.minPostCount && filters.minPostCount > 0 && postCount < filters.minPostCount) {
+          skippedFilter++;
+          continue;
+        }
+      }
 
-        if (creatorUrl) seenUrls.add(creatorUrl.toLowerCase());
+      if (creatorUrl) seenUrls.add(creatorUrl.toLowerCase());
 
-        const fullText = `${creatorName} ${description}`;
+      const fullText = `${creatorName} ${description}`;
 
-        const patreonLink = creatorUrl || "active";
-        const channels: Record<string, string> = { patreon: patreonLink };
+      const patreonLink = creatorUrl || "active";
+      const channels: Record<string, string> = { patreon: patreonLink };
 
         if (item.youtube && typeof item.youtube === "string" && item.youtube.startsWith("http")) channels.youtube = item.youtube;
         if (item.instagram && typeof item.instagram === "string" && item.instagram.startsWith("http")) channels.instagram = item.instagram;
@@ -712,14 +716,13 @@ async function scrapePatreonCreators(
         });
       }
 
-      const withSocials = leads.filter((l) => {
-        const ch = l.ownedChannels || {};
-        return Object.entries(ch).some(([k, v]) => k !== "patreon" && k !== "website" && v && v !== "detected" && v.startsWith("http"));
-      }).length;
-      await appendAndSave(`Patreon: ${leads.length} creators (${withSocials} with real social URLs, skipped ${skippedDupe} dupes, ${skippedFilter} filtered)`);
-    } catch (err: any) {
-      await appendAndSave(`[WARN] Patreon search failed for "${kw}": ${err.message}`);
-    }
+    const withSocials = leads.filter((l) => {
+      const ch = l.ownedChannels || {};
+      return Object.entries(ch).some(([k, v]) => k !== "patreon" && k !== "website" && v && v !== "detected" && v.startsWith("http"));
+    }).length;
+    await appendAndSave(`Patreon: ${leads.length} creators (${withSocials} with real social URLs, skipped ${skippedDupe} dupes, ${skippedFilter} filtered)`);
+  } catch (err: any) {
+    await appendAndSave(`[WARN] Patreon search failed: ${err.message}`);
   }
 
   return leads;
