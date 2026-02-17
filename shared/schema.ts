@@ -98,7 +98,7 @@ export const AVAILABLE_SOURCES = [
 export type SourceId = "meetup" | "youtube" | "reddit" | "eventbrite" | "facebook" | "patreon" | "google";
 export const DEFAULT_ENABLED_SOURCES: SourceId[] = ["patreon"];
 
-export const TEMPORARILY_DISABLED_SOURCES: SourceId[] = ["meetup", "youtube", "reddit", "eventbrite", "facebook", "google"];
+export const TEMPORARILY_DISABLED_SOURCES: SourceId[] = ["meetup", "youtube", "reddit", "eventbrite", "google"];
 
 export const AVAILABLE_ENRICHMENTS = [
   { id: "apollo", label: "Apollo.io", description: "Contact lookup by name, domain & LinkedIn URL (uses API credits)" },
@@ -167,6 +167,24 @@ export const RECOMMENDED_KEYWORDS = [
   { label: "Climbing", keywords: ["climbing", "mountaineering", "bouldering"] },
   { label: "Camping & van life", keywords: ["camping", "van life", "road trip"] },
   { label: "Nature & wildlife", keywords: ["wildlife safari", "birdwatching", "nature"] },
+] as const;
+
+export const FB_RECOMMENDED_KEYWORDS = [
+  { label: "Hiking groups", keywords: ["hiking group", "hiking club", "trail hiking"] },
+  { label: "Run clubs", keywords: ["run club", "running group", "marathon training"] },
+  { label: "Church groups", keywords: ["church group", "young adults ministry", "faith community"] },
+  { label: "Adventure travel", keywords: ["adventure travel group", "group travel", "travel club"] },
+  { label: "Women's groups", keywords: ["women's group", "women's hiking", "women's travel"] },
+  { label: "Yoga & wellness", keywords: ["yoga group", "wellness community", "meditation group"] },
+  { label: "Cycling clubs", keywords: ["cycling club", "bike group", "cycling group"] },
+  { label: "Outdoor adventure", keywords: ["outdoor adventure club", "camping group", "backpacking group"] },
+  { label: "Social clubs", keywords: ["social club", "meetup group", "networking group"] },
+  { label: "Fitness groups", keywords: ["fitness group", "CrossFit community", "workout group"] },
+  { label: "Book clubs", keywords: ["book club", "reading group", "literary club"] },
+  { label: "Alumni groups", keywords: ["alumni group", "alumni network", "alumni association"] },
+  { label: "Surf & water sports", keywords: ["surf club", "diving group", "kayaking group"] },
+  { label: "Photography clubs", keywords: ["photography club", "photo walk group", "camera club"] },
+  { label: "Food & wine", keywords: ["food group", "wine club", "supper club"] },
 ] as const;
 
 export const DEFAULT_RUN_PARAMS: RunParams = {

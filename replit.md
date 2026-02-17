@@ -46,7 +46,8 @@ shared/
 - **leads** - Flattened, scored, export-ready lead records
 
 ## Pipeline Steps (Social Graph Enrichment Chain)
-1. **Platform Discovery** - Patreon creator search (social links, about text, tiers, earnings) + bare domain/email extraction from about text + obfuscated email extraction ("[at]", "(at)" patterns) + real name extraction from about text (regex patterns for "I'm X", "my name is X", etc.) + brand name parsing ("Jenne Sluder Yoga" → "Jenne Sluder") + link aggregator URL extraction (Linktree, Beacons, etc.)
+1. **Platform Discovery** - Patreon creator search (social links, about text, tiers, earnings) + Facebook Groups search (group name, description, member count, admin name, URLs from descriptions) + bare domain/email extraction from about text + obfuscated email extraction ("[at]", "(at)" patterns) + real name extraction from about text (regex patterns for "I'm X", "my name is X", etc.) + brand name parsing ("Jenne Sluder Yoga" → "Jenne Sluder") + link aggregator URL extraction (Linktree, Beacons, etc.)
+1a. **Google Bridge for Facebook Groups** - Smart Google search for each Facebook group to find leader/organizer websites, LinkedIn profiles, and org contact pages. Searches by group name + admin name (if available) or group name + "organizer/founder/leader". Extracts websites, LinkedIn, Instagram, Twitter from results.
 1b. **Link Aggregator Scrape (Pass 1)** - Cheerio scraper on Linktree/Beacons/bio.link pages from Patreon about text (uncapped)
 2a. **YouTube About Page Scrape** - Scrape ALL YouTube channels (no email/website filter) for business emails, websites, LinkedIn, and link aggregator URLs (uncapped)
 2b. **Instagram Bio Scrape** - Scrape Instagram profiles (`apify~instagram-profile-scraper`, $1.60/1K) for emails, websites, Linktree links, real names, and follower counts (uncapped)
@@ -78,7 +79,7 @@ The pipeline collects cross-platform profile links (YouTube, Instagram, Twitter,
 - Display linked platforms in results UI with platform-specific icons
 
 ## Platform Tabs
-The discovery form uses platform-specific tabs. Currently Patreon is active; Facebook Groups and LinkedIn tabs are visible but disabled (coming soon). Each platform tab has its own keyword/filter configuration.
+The discovery form uses platform-specific tabs. Patreon and Facebook Groups are active; LinkedIn tab is visible but disabled (coming soon). Each platform tab has its own keyword/filter configuration. Facebook Groups tab includes a Google Bridge enrichment step that searches Google for group leader/organizer websites, LinkedIn profiles, and org contact pages. Facebook tab defaults to min 100 members filter.
 
 ## Apify Actors Used
 - `apify~google-search-scraper` - Google Search discovery
