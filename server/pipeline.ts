@@ -84,6 +84,16 @@ function extractEmailsFromText(text: string): string[] {
   );
 }
 
+function extractBareDomainUrls(text: string): string[] {
+  const bareDomainRegex = /(?<![/@a-zA-Z0-9])(?:www\.)?([a-zA-Z0-9][-a-zA-Z0-9]*\.(?:com|org|net|co|io|me|info|biz|us|uk|ca|au|de|fr|es|it|nl|se|no|fi|dk|ch|at|be|nz|in|co\.uk|com\.au|co\.nz)(?:\/[^\s"'<>,)}\]]*)?)/gi;
+  const matches = text.match(bareDomainRegex) || [];
+  const imageExts = [".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico"];
+  return Array.from(new Set(matches.map(m => m.trim())))
+    .filter(m => !imageExts.some(ext => m.toLowerCase().endsWith(ext)))
+    .filter(m => !m.includes("@"))
+    .map(m => m.startsWith("http") ? m : `https://${m}`);
+}
+
 function extractPhonesFromText(text: string): string[] {
   const phoneRegex = /(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/g;
   return Array.from(new Set(text.match(phoneRegex) || []));
@@ -671,12 +681,17 @@ async function scrapePatreonCreators(
 
         const allLinks: string[] = [];
         const urlRegex = /https?:\/\/[^\s"'<>,)}\]]+/g;
-        const descUrls = description.match(urlRegex) || [];
+        const aboutText = item.about || "";
+        const combinedText = `${description} ${aboutText}`;
+        const descUrls = combinedText.match(urlRegex) || [];
         allLinks.push(...descUrls);
 
-        const aboutText = item.about || "";
-        const aboutUrls = aboutText.match(urlRegex) || [];
-        allLinks.push(...aboutUrls);
+        const bareDomains = extractBareDomainUrls(combinedText);
+        for (const bd of bareDomains) {
+          if (!allLinks.some(l => l.toLowerCase().includes(new URL(bd).hostname.replace(/^www\./, "")))) {
+            allLinks.push(bd);
+          }
+        }
 
         for (const link of allLinks) {
           try {
@@ -815,6 +830,132 @@ async function scrapeFacebookGroups(
   }
 
   return leads;
+}
+
+const GOOGLE_ENRICHMENT_MAX = 20;
+const GOOGLE_ENRICHMENT_SOCIAL_HOSTS = ["youtube.com", "youtu.be", "instagram.com", "twitter.com", "x.com", "discord.gg", "discord.com", "facebook.com", "tiktok.com", "twitch.tv", "linkedin.com", "patreon.com", "google.com", "apple.com", "spotify.com", "amazon.com", "reddit.com", "tumblr.com", "pinterest.com", "github.com", "medium.com", "wordpress.com", "linktr.ee", "beacons.ai", "ko-fi.com", "buymeacoffee.com", "gumroad.com", "substack.com", "bit.ly", "apify.com", "meetup.com", "eventbrite.com", "yelp.com", "tripadvisor.com", "bbb.org"];
+
+async function googleSearchEnrichCreators(
+  leads: PlatformLead[],
+  appendAndSave: (msg: string) => Promise<void>,
+): Promise<void> {
+  const leadsToSearch = leads
+    .filter(l => !l.email && !l.ownedChannels?.website && !l.ownedChannels?.linkedin)
+    .slice(0, GOOGLE_ENRICHMENT_MAX);
+
+  if (leadsToSearch.length === 0) {
+    await appendAndSave("Google enrichment: all leads already have website/LinkedIn or email");
+    return;
+  }
+
+  await appendAndSave(`Google enrichment: searching for ${leadsToSearch.length} creators without website/LinkedIn...`);
+
+  const queries = leadsToSearch.map(l => {
+    const name = l.communityName || l.leaderName || "";
+    return { term: `"${name}" contact website email`, leadIdx: leads.indexOf(l) };
+  });
+
+  const batchSize = 5;
+  let enriched = 0;
+
+  for (let i = 0; i < queries.length; i += batchSize) {
+    const batch = queries.slice(i, i + batchSize);
+    const batchNum = Math.floor(i / batchSize) + 1;
+    const totalBatches = Math.ceil(queries.length / batchSize);
+
+    await appendAndSave(`Google enrichment: batch ${batchNum}/${totalBatches} (${batch.length} searches)...`);
+
+    try {
+      const searchQueries = batch.map(q => ({ term: q.term, countryCode: "us", languageCode: "en", maxPagesPerQuery: 1, resultsPerPage: 5 }));
+
+      const results = await runActorAndGetResults("apify~google-search-scraper", {
+        queries: searchQueries.map(q => q.term).join("\n"),
+        maxPagesPerQuery: 1,
+        resultsPerPage: 5,
+        countryCode: "us",
+        languageCode: "en",
+        mobileResults: false,
+      }, 120000);
+
+      const resultsByQuery = new Map<number, any[]>();
+      for (const r of results) {
+        const searchQuery = r.searchQuery?.term || r.searchQuery || "";
+        const matchIdx = batch.findIndex(q => q.term === searchQuery);
+        if (matchIdx >= 0) {
+          const existing = resultsByQuery.get(matchIdx) || [];
+          existing.push(r);
+          resultsByQuery.set(matchIdx, existing);
+        }
+      }
+
+      for (let j = 0; j < batch.length; j++) {
+        const lead = leads[batch[j].leadIdx];
+        const searchResults = resultsByQuery.get(j) || results.filter(r => {
+          const q = r.searchQuery?.term || r.searchQuery || "";
+          return q.includes(lead.communityName || lead.leaderName || "NOMATCH");
+        });
+
+        let foundAnything = false;
+
+        for (const result of searchResults) {
+          const url = result.url || result.link || "";
+          const title = result.title || "";
+          const description = result.description || result.snippet || "";
+          const fullResult = `${url} ${title} ${description}`;
+
+          if (!url) continue;
+
+          try {
+            const host = new URL(url).hostname.replace(/^www\./, "");
+
+            if (host.includes("linkedin.com") && url.includes("/in/") && !lead.ownedChannels?.linkedin) {
+              if (!lead.ownedChannels) lead.ownedChannels = {};
+              lead.ownedChannels.linkedin = url.split("?")[0];
+              foundAnything = true;
+            }
+
+            if (!GOOGLE_ENRICHMENT_SOCIAL_HOSTS.some(s => host.includes(s)) && !lead.ownedChannels?.website) {
+              if (!lead.ownedChannels) lead.ownedChannels = {};
+              lead.ownedChannels.website = url.split("?")[0];
+              foundAnything = true;
+            }
+
+            if (host.includes("instagram.com") && !lead.ownedChannels?.instagram) {
+              if (!lead.ownedChannels) lead.ownedChannels = {};
+              lead.ownedChannels.instagram = url.split("?")[0];
+              foundAnything = true;
+            }
+
+            if ((host.includes("twitter.com") || host === "x.com") && !lead.ownedChannels?.twitter) {
+              if (!lead.ownedChannels) lead.ownedChannels = {};
+              lead.ownedChannels.twitter = url.split("?")[0];
+              foundAnything = true;
+            }
+
+            if (host.includes("facebook.com") && !lead.ownedChannels?.facebook) {
+              if (!lead.ownedChannels) lead.ownedChannels = {};
+              lead.ownedChannels.facebook = url.split("?")[0];
+              foundAnything = true;
+            }
+          } catch {}
+
+          const emails = extractEmailsFromText(fullResult);
+          if (emails.length > 0 && !lead.email) {
+            lead.email = emails[0];
+            foundAnything = true;
+          }
+        }
+
+        if (foundAnything) enriched++;
+      }
+    } catch (err: any) {
+      await appendAndSave(`[WARN] Google enrichment batch ${batchNum} failed: ${err.message}`);
+    }
+
+    await new Promise(r => setTimeout(r, 1000));
+  }
+
+  await appendAndSave(`Google enrichment: found new data for ${enriched}/${leadsToSearch.length} creators`);
 }
 
 async function crawlCreatorWebsitesForEmails(
@@ -978,9 +1119,17 @@ export async function runPipeline(runId: number): Promise<void> {
       }
     }
 
+    const leadsWithoutContactInfo = allPlatformLeads.filter(l => !l.email && !l.ownedChannels?.website && !l.ownedChannels?.linkedin);
+    if (leadsWithoutContactInfo.length > 0) {
+      await appendAndSave(`Google enrichment: ${leadsWithoutContactInfo.length} leads need website/LinkedIn lookup`, 32, "Step 2: Google contact search");
+      await googleSearchEnrichCreators(allPlatformLeads, appendAndSave);
+    } else {
+      await appendAndSave("Google enrichment: skipped (all leads already have contact info)");
+    }
+
     const leadsNeedingEmail = allPlatformLeads.filter(l => !l.email && l.ownedChannels?.website && !isPatreonCdnUrl(l.ownedChannels.website));
     if (leadsNeedingEmail.length > 0) {
-      await appendAndSave(`Crawling ${leadsNeedingEmail.length} creator websites for contact emails...`, 38, "Step 2: Website contact crawl");
+      await appendAndSave(`Crawling ${leadsNeedingEmail.length} creator websites for contact emails...`, 38, "Step 3: Website contact crawl");
       const websiteEmailMap = await crawlCreatorWebsitesForEmails(leadsNeedingEmail, appendAndSave);
       let websiteEmailsMerged = 0;
       for (const pl of allPlatformLeads) {
@@ -997,10 +1146,10 @@ export async function runPipeline(runId: number): Promise<void> {
       await appendAndSave("Website crawl: no leads with personal websites needing email");
     }
 
-    await appendAndSave(`Platform discovery complete: ${allPlatformLeads.length} results`, 40, "Step 3: Creating & scoring leads");
+    await appendAndSave(`Platform discovery complete: ${allPlatformLeads.length} results`, 40, "Step 4: Discovery summary");
 
     const emailsAfterDiscovery = allPlatformLeads.filter((l) => l.email).length;
-    await appendAndSave(`After discovery: ${emailsAfterDiscovery}/${allPlatformLeads.length} leads have emails`, 45, "Step 4: Google Search discovery");
+    await appendAndSave(`After discovery: ${emailsAfterDiscovery}/${allPlatformLeads.length} leads have emails`, 45, "Step 5: Keyword discovery");
 
     let allDiscoveredUrls: { url: string; domain: string; source: string }[] = [];
 
@@ -1085,7 +1234,7 @@ export async function runPipeline(runId: number): Promise<void> {
     await appendAndSave(
       `Discovery complete: ${allPlatformLeads.length} platform + ${allDiscoveredUrls.length} website leads`,
       50,
-      "Step 5: Extract website data"
+      "Step 6: Extract website data"
     );
 
     const websiteUrls = allDiscoveredUrls
@@ -1248,7 +1397,7 @@ export async function runPipeline(runId: number): Promise<void> {
     await appendAndSave(
       `Extraction complete: ${extractedPages.length} pages + ${allPlatformLeads.length} platform results`,
       65,
-      "Step 6: Create & score leads"
+      "Step 7: Create & score leads"
     );
 
     let createdCount = 0;
@@ -1483,7 +1632,7 @@ export async function runPipeline(runId: number): Promise<void> {
 
     await storage.updateRun(runId, { leadsExtracted: createdCount });
 
-    await appendAndSave(`Created ${createdCount} total leads`, 80, "Step 7: Contact enrichment");
+    await appendAndSave(`Created ${createdCount} total leads`, 80, "Step 8: Contact enrichment");
 
     const runLeads = await storage.listLeadsByRun(runId);
     const APOLLO_MAX_CALLS_PER_RUN = 50;
@@ -1638,7 +1787,7 @@ export async function runPipeline(runId: number): Promise<void> {
       .sort((a, b) => (b.score || 0) - (a.score || 0));
 
     if (isHunterAvailable() && leadsForHunter.length > 0) {
-      await appendAndSave(`Hunter.io: enriching ${Math.min(leadsForHunter.length, HUNTER_MAX_CALLS_PER_RUN)} leads with website domains...`, 87, "Step 8: Hunter.io enrichment");
+      await appendAndSave(`Hunter.io: enriching ${Math.min(leadsForHunter.length, HUNTER_MAX_CALLS_PER_RUN)} leads with website domains...`, 87, "Step 9: Hunter.io enrichment");
       const enrichedDomains = new Set<string>();
       let hunterEnriched = 0;
       let hunterCalls = 0;
@@ -1704,7 +1853,7 @@ export async function runPipeline(runId: number): Promise<void> {
       await appendAndSave("Hunter.io: skipped (no API key configured)");
     }
 
-    await appendAndSave("Recalculating scores...", 92, "Step 9: Scoring & qualification");
+    await appendAndSave("Recalculating scores...", 92, "Step 10: Scoring & qualification");
 
     const qualifiedCount = await storage.countLeadsByRunAndStatus(runId, "qualified");
     const watchlistCount = await storage.countLeadsByRunAndStatus(runId, "watchlist");

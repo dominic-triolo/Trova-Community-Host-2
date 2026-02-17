@@ -46,13 +46,14 @@ shared/
 - **leads** - Flattened, scored, export-ready lead records
 
 ## Pipeline Steps (Social Graph Enrichment Chain)
-1. **Platform Discovery** - Patreon creator search (social links, about text, tiers, earnings)
-2. **Website Contact Crawl** - Crawl personal websites from social profiles for emails (Cheerio scraper on contact/about pages, max 30 sites/run)
-3. **Create & Score** - ICP scoring (0-100) with 6 pillars + audience size bonus + contact info bonus
-4. **Apollo.io Enrichment** - Contact lookup by name + domain + LinkedIn URL (toggleable, 50 calls/run, min score 15)
-5. **Hunter.io Enrichment** - Domain search fallback for leads still missing email after Apollo (30 calls/run)
-6. **Scoring & Qualification** - Final scoring pass and lead qualification
-7. **Export** - CSV download for qualified/watchlist leads (global or per-run)
+1. **Platform Discovery** - Patreon creator search (social links, about text, tiers, earnings) + bare domain/email extraction from about text
+2. **Google Contact Search** - Google search for creators missing website/LinkedIn to find personal sites, social profiles, and emails (max 20 creators/run, batched 5 at a time)
+3. **Website Contact Crawl** - Crawl personal websites from social profiles for emails (Cheerio scraper on contact/about pages, max 30 sites/run)
+4. **Create & Score** - ICP scoring (0-100) with 6 pillars + audience size bonus + contact info bonus
+5. **Apollo.io Enrichment** - Contact lookup by name + domain + LinkedIn URL (toggleable, 50 calls/run, min score 15, deduped across runs via apolloEnrichedAt)
+6. **Hunter.io Enrichment** - Domain search fallback for leads still missing email after Apollo (30 calls/run)
+7. **Scoring & Qualification** - Final scoring pass and lead qualification
+8. **Export** - CSV download for qualified/watchlist leads (global or per-run)
 
 ## Enrichment Methods (User-Toggleable)
 Users can enable/disable enrichment methods per run via the "Enrichment Methods" card:
