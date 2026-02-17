@@ -1670,7 +1670,7 @@ async function crawlCreatorWebsitesForEmails(
   const text = $('body').text();
   return { url: request.url, text: text.substring(0, 5000) };
 }`,
-      }, 60000);
+      }, 180000);
 
       for (const result of results) {
         const pageText = result.text || "";
@@ -1944,7 +1944,7 @@ export async function runPipeline(runId: number): Promise<void> {
 
     await appendAndSave(`Google discovery complete: ${allDiscoveredUrls.length} website URLs`);
     } else {
-      await appendAndSave("Google Search skipped (not selected)");
+      await appendAndSave("Google URL discovery skipped (using platform-specific discovery instead)");
     }
 
     const sourceUrlsData: InsertSourceUrl[] = allDiscoveredUrls.map((u) => ({
