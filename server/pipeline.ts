@@ -540,21 +540,53 @@ function computeApolloInputHash(lead: { leaderName?: string | null; communityNam
 
 function isValidApolloCandidate(leaderName: string): boolean {
   if (!leaderName) return false;
-  const nameParts = leaderName.trim().split(/\s+/);
+  const trimmed = leaderName.trim();
+  const nameParts = trimmed.split(/\s+/);
   if (nameParts.length < 2) return false;
+  if (nameParts.length > 5) return false;
   if (nameParts[0].length <= 1 || nameParts[1].length <= 1) return false;
-  const lower = leaderName.toLowerCase();
-  const brandIndicators = [
-    "podcast", "walking is", "the ", "adventures of",
-    " radio", " tv", " show",
+  if (trimmed.length > 40) return false;
+
+  const lower = trimmed.toLowerCase();
+
+  const junkSubstrings = [
+    "contact", "donate", "volunteer", "subscribe", "login", "sign up",
+    "resources", "directions", "opportunities", "prayer",
+    "request", "faq", "learn more", "read more",
+    "submit", "register", "download", "upload",
+    "enquiry", "wholesale", "packages", "book now",
   ];
-  if (brandIndicators.some((b) => lower.startsWith(b) || lower.startsWith("the "))) {
-    if (lower.startsWith("the ")) return false;
-  }
-  const exactBrandEndings = [" podcast", " radio", " show", " tv"];
-  if (exactBrandEndings.some((e) => lower.endsWith(e))) return false;
-  const allCaps = nameParts.length >= 3 && nameParts.every((p) => p === p.toUpperCase() && p.length > 2);
+  if (junkSubstrings.some((w) => lower.includes(w))) return false;
+
+  const junkWordBoundary = [
+    "menu", "home", "about", "search", "click", "view", "join",
+    "share", "follow", "apply", "reserve", "offers", "call",
+    "visit", "cannot", "bible", "needs", "support", "careers",
+    "give", "back", "close", "select", "send",
+  ];
+  if (junkWordBoundary.some((w) => new RegExp(`\\b${w}\\b`).test(lower))) return false;
+
+  const startsWith = [
+    "the ", "adventures of", "walking is", "podcast", "us ",
+    "at ", "to ", "local ", "deals ",
+  ];
+  if (startsWith.some((s) => lower.startsWith(s))) return false;
+
+  const endsWith = [
+    " podcast", " radio", " show", " tv", " team", " group",
+    " club", " church", " ministry", " community",
+  ];
+  if (endsWith.some((e) => lower.endsWith(e))) return false;
+
+  const allCaps = nameParts.length >= 2 && nameParts.every((p) => p === p.toUpperCase() && p.length > 2);
   if (allCaps) return false;
+
+  const hasUrl = /https?:\/\/|www\.|\.com|\.org|\.net/.test(lower);
+  if (hasUrl) return false;
+
+  const nonAlpha = trimmed.replace(/[a-zA-Z\s'-]/g, "");
+  if (nonAlpha.length > 2) return false;
+
   return true;
 }
 
@@ -1736,7 +1768,6 @@ export async function runPipeline(runId: number): Promise<void> {
     await appendAndSave(`Created ${createdCount} total leads`, 80, "Step 8: Contact enrichment");
 
     const runLeads = await storage.listLeadsByRun(runId);
-    const APOLLO_MAX_CALLS_PER_RUN = 50;
     const APOLLO_MIN_SCORE = 15;
     const leadsToEnrich = runLeads
       .filter((l) => !l.email && (l.score || 0) >= APOLLO_MIN_SCORE)
@@ -1747,16 +1778,12 @@ export async function runPipeline(runId: number): Promise<void> {
       if (isApolloAvailable() && leadsToEnrich.length > 0) {
         const totalWithoutEmail = runLeads.filter((l) => !l.email).length;
         const skippedLowScore = totalWithoutEmail - leadsToEnrich.length;
-        await appendAndSave(`Apollo.io: enriching top ${Math.min(leadsToEnrich.length, APOLLO_MAX_CALLS_PER_RUN)} of ${totalWithoutEmail} leads without email (${skippedLowScore} below score ${APOLLO_MIN_SCORE}, max ${APOLLO_MAX_CALLS_PER_RUN} API calls)...`);
+        await appendAndSave(`Apollo.io: enriching ${leadsToEnrich.length} of ${totalWithoutEmail} leads without email (${skippedLowScore} below score ${APOLLO_MIN_SCORE})...`);
 
         let apolloSkipped = 0;
         let apolloCalls = 0;
         let apolloDeduped = 0;
         for (const lead of leadsToEnrich) {
-          if (apolloCalls >= APOLLO_MAX_CALLS_PER_RUN) {
-            await appendAndSave(`Apollo.io: reached ${APOLLO_MAX_CALLS_PER_RUN} call limit, stopping`);
-            break;
-          }
           try {
             const currentHash = computeApolloInputHash(lead);
             if (lead.apolloEnrichedAt && lead.apolloInputHash === currentHash) {
@@ -1800,7 +1827,7 @@ export async function runPipeline(runId: number): Promise<void> {
               linkedinUrl,
             });
 
-            if (!result && hasRealName && !linkedinUrl && apolloCalls < APOLLO_MAX_CALLS_PER_RUN) {
+            if (!result && hasRealName && !linkedinUrl) {
               apolloCalls++;
               result = await apolloPersonMatch({
                 firstName,
@@ -2107,14 +2134,13 @@ export async function reEnrichRun(runId: number): Promise<void> {
 
     if (params.enableApollo !== false) {
       const refreshedLeads = await storage.listLeadsByRun(runId);
-      const RE_APOLLO_MAX_CALLS = 50;
       const RE_APOLLO_MIN_SCORE = 15;
       const leadsToEnrich = refreshedLeads
         .filter((l) => (!l.email || l.email === "") && (l.score || 0) >= RE_APOLLO_MIN_SCORE)
         .sort((a, b) => (b.score || 0) - (a.score || 0));
       const totalWithoutEmail = refreshedLeads.filter((l) => !l.email || l.email === "").length;
 
-      await appendAndSave(`Step 2: Apollo enrichment for top ${Math.min(leadsToEnrich.length, RE_APOLLO_MAX_CALLS)} of ${totalWithoutEmail} leads without email (max ${RE_APOLLO_MAX_CALLS} calls)...`, 50, "Re-enrichment: Apollo enrichment");
+      await appendAndSave(`Step 2: Apollo enrichment for ${leadsToEnrich.length} of ${totalWithoutEmail} leads without email...`, 50, "Re-enrichment: Apollo enrichment");
 
       let enrichedCount = 0;
       if (isApolloAvailable() && leadsToEnrich.length > 0) {
@@ -2122,10 +2148,6 @@ export async function reEnrichRun(runId: number): Promise<void> {
         let apolloCalls = 0;
         let apolloDeduped = 0;
         for (const lead of leadsToEnrich) {
-          if (apolloCalls >= RE_APOLLO_MAX_CALLS) {
-            await appendAndSave(`Apollo.io: reached ${RE_APOLLO_MAX_CALLS} call limit, stopping`);
-            break;
-          }
           try {
             const currentHash = computeApolloInputHash(lead);
             if (lead.apolloEnrichedAt && lead.apolloInputHash === currentHash) {
@@ -2169,7 +2191,7 @@ export async function reEnrichRun(runId: number): Promise<void> {
               linkedinUrl,
             });
 
-            if (!result && hasRealName && !linkedinUrl && apolloCalls < RE_APOLLO_MAX_CALLS) {
+            if (!result && hasRealName && !linkedinUrl) {
               apolloCalls++;
               result = await apolloPersonMatch({
                 firstName,
