@@ -37,6 +37,7 @@ export interface IStorage {
   listLeadsByRunAndStatus(runId: number, status: string): Promise<Lead[]>;
   listLeadsByStatus(status: string): Promise<Lead[]>;
   countLeadsByRunAndStatus(runId: number, status: string): Promise<number>;
+  countLeadsByRunWithEmail(runId: number): Promise<number>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -153,6 +154,13 @@ export class DatabaseStorage implements IStorage {
   async countLeadsByRunAndStatus(runId: number, status: string): Promise<number> {
     const [result] = await db.select({ count: sql<number>`count(*)::int` }).from(leads).where(
       and(eq(leads.runId, runId), eq(leads.status, status))
+    );
+    return result?.count || 0;
+  }
+
+  async countLeadsByRunWithEmail(runId: number): Promise<number> {
+    const [result] = await db.select({ count: sql<number>`count(*)::int` }).from(leads).where(
+      and(eq(leads.runId, runId), sql`${leads.email} IS NOT NULL AND ${leads.email} != ''`)
     );
     return result?.count || 0;
   }

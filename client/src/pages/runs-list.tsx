@@ -93,8 +93,8 @@ export default function RunsList() {
                     </div>
                     <div className="flex items-center gap-4">
                       <div className="text-right text-xs text-muted-foreground space-y-0.5">
-                        <p>{run.urlsDiscovered || 0} URLs</p>
-                        <p>{run.qualified || 0} qualified</p>
+                        <p>{run.leadsExtracted || 0} leads</p>
+                        <p>{(run as any).leadsWithEmail || 0} with email</p>
                       </div>
                       <ArrowRight className="w-4 h-4 text-muted-foreground" />
                     </div>

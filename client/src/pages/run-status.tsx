@@ -17,8 +17,7 @@ import {
   Clock,
   Globe,
   Users,
-  Award,
-  Eye,
+  Mail,
   BarChart3,
   Download,
   RefreshCw,
@@ -193,7 +192,7 @@ export default function RunStatus() {
           <Progress value={run.progress} className="h-2" data-testid="progress-bar" />
         </Card>
 
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="grid grid-cols-3 gap-3">
           <Card className="p-3 space-y-1">
             <div className="flex items-center gap-1.5 text-muted-foreground">
               <Globe className="w-3.5 h-3.5" />
@@ -214,20 +213,11 @@ export default function RunStatus() {
           </Card>
           <Card className="p-3 space-y-1">
             <div className="flex items-center gap-1.5 text-muted-foreground">
-              <Award className="w-3.5 h-3.5" />
-              <span className="text-xs">Qualified</span>
+              <Mail className="w-3.5 h-3.5" />
+              <span className="text-xs">With Email</span>
             </div>
-            <p className="text-lg font-semibold text-chart-3" data-testid="text-qualified">
-              {run.qualified || 0}
-            </p>
-          </Card>
-          <Card className="p-3 space-y-1">
-            <div className="flex items-center gap-1.5 text-muted-foreground">
-              <Eye className="w-3.5 h-3.5" />
-              <span className="text-xs">Watchlist</span>
-            </div>
-            <p className="text-lg font-semibold text-chart-4" data-testid="text-watchlist">
-              {run.watchlist || 0}
+            <p className="text-lg font-semibold text-chart-3" data-testid="text-with-email">
+              {(run as any).leadsWithEmail || 0}
             </p>
           </Card>
         </div>

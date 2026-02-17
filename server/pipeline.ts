@@ -1,6 +1,6 @@
 import { storage } from "./storage";
 import { runActorAndGetResults } from "./apify";
-import { scoreLead, determineStatus } from "./scoring";
+import { scoreLead } from "./scoring";
 import { apolloPersonMatch, isApolloAvailable, extractDomainFromUrl as apolloExtractDomain, isEnrichableDomain as apolloIsEnrichable } from "./apollo";
 import { hunterDomainSearch, extractDomainFromUrl, isEnrichableDomain, isHunterAvailable } from "./hunter";
 import { log } from "./index";
@@ -1460,8 +1460,6 @@ export async function runPipeline(runId: number): Promise<void> {
         };
 
         const breakdown = scoreLead(scoringInput);
-        const hasContact = !!(pl.email || pl.website || pl.phone);
-        const status = determineStatus(breakdown.total, params.threshold, hasContact);
 
         const leadData: InsertLead = {
           leadType: pl.leaderName ? "leader" : "community",
@@ -1478,7 +1476,7 @@ export async function runPipeline(runId: number): Promise<void> {
           tripFitSignals: pl.tripFitSignals,
           score: breakdown.total,
           scoreBreakdown: breakdown,
-          status,
+          status: "new",
           raw: pl.raw,
           runId,
           communityId: community.id,
@@ -1597,8 +1595,6 @@ export async function runPipeline(runId: number): Promise<void> {
         };
 
         const breakdown = scoreLead(scoringInput);
-        const hasContact = !!(email || url || phones[0] || linkedinUrl);
-        const status = determineStatus(breakdown.total, params.threshold, hasContact);
 
         const leadData: InsertLead = {
           leadType: leaderName ? "leader" : "community",
@@ -1616,7 +1612,7 @@ export async function runPipeline(runId: number): Promise<void> {
           tripFitSignals: tripFit,
           score: breakdown.total,
           scoreBreakdown: breakdown,
-          status,
+          status: "new",
           raw: item,
           runId,
           communityId,
@@ -1752,10 +1748,8 @@ export async function runPipeline(runId: number): Promise<void> {
               raw: (lead.raw as Record<string, any>) || {},
             });
 
-            const hasContact = !!(updateData.email || lead.website || updateData.phone || updateData.linkedin);
             updateData.score = breakdown.total;
             updateData.scoreBreakdown = breakdown;
-            updateData.status = determineStatus(breakdown.total, params.threshold, hasContact);
 
             await storage.updateLead(lead.id, updateData);
             enrichedCount++;
@@ -1837,10 +1831,8 @@ export async function runPipeline(runId: number): Promise<void> {
           raw: (lead.raw as Record<string, any>) || {},
         });
 
-        const hasContact = !!(updateData.email || lead.website || updateData.phone || updateData.linkedin);
         updateData.score = breakdown.total;
         updateData.scoreBreakdown = breakdown;
-        updateData.status = determineStatus(breakdown.total, params.threshold, hasContact);
 
         await storage.updateLead(lead.id, updateData);
         hunterEnriched++;
@@ -1853,18 +1845,21 @@ export async function runPipeline(runId: number): Promise<void> {
       await appendAndSave("Hunter.io: skipped (no API key configured)");
     }
 
-    await appendAndSave("Recalculating scores...", 92, "Step 10: Scoring & qualification");
+    await appendAndSave("Finalizing...", 92, "Step 10: Finalizing");
 
-    const qualifiedCount = await storage.countLeadsByRunAndStatus(runId, "qualified");
-    const watchlistCount = await storage.countLeadsByRunAndStatus(runId, "watchlist");
+    const emailCount = await storage.countLeadsByRunWithEmail(runId);
 
     await storage.updateRun(runId, {
-      qualified: qualifiedCount,
-      watchlist: watchlistCount,
+      leadsWithEmail: emailCount,
+    });
+
+    const sourcesUsed = (params.enabledSources || []).map((s: string) => {
+      const labels: Record<string, string> = { patreon: "Patreon", meetup: "Meetup", youtube: "YouTube", reddit: "Reddit", eventbrite: "Eventbrite", facebook: "Facebook", google: "Google Search" };
+      return labels[s] || s;
     });
 
     await appendAndSave(
-      `Scoring complete: ${qualifiedCount} qualified, ${watchlistCount} watchlist`,
+      `Scoring complete: ${createdCount} leads, ${emailCount} with email`,
       96,
       "Step 10: Finalizing"
     );
@@ -1876,7 +1871,7 @@ export async function runPipeline(runId: number): Promise<void> {
       finishedAt: new Date(),
       logs: appendLog(
         currentLogs,
-        `Pipeline complete! ${createdCount} leads (${qualifiedCount} qualified, ${watchlistCount} watchlist). Sources: Meetup, YouTube, Reddit, Eventbrite + Google Search.`
+        `Pipeline complete! ${createdCount} leads discovered, ${emailCount} with email. Sources: ${sourcesUsed.join(", ")}.`
       ),
     });
 
@@ -2163,29 +2158,22 @@ export async function reEnrichRun(runId: number): Promise<void> {
         raw: (lead.raw as Record<string, any>) || {},
       });
 
-      const hasContact = !!(lead.email || lead.website || lead.phone || lead.linkedin);
-      const status = determineStatus(breakdown.total, params.threshold, hasContact);
-
       await storage.updateLead(lead.id, {
         score: breakdown.total,
         scoreBreakdown: breakdown,
-        status,
         lastSeenAt: new Date(),
       });
       reScored++;
     }
 
-    const qualifiedCount = await storage.countLeadsByRunAndStatus(runId, "qualified");
-    const watchlistCount = await storage.countLeadsByRunAndStatus(runId, "watchlist");
-    const emailCount = finalLeads.filter((l) => l.email && l.email !== "").length;
+    const emailCount = await storage.countLeadsByRunWithEmail(runId);
 
     await storage.updateRun(runId, {
-      qualified: qualifiedCount,
-      watchlist: watchlistCount,
+      leadsWithEmail: emailCount,
     });
 
     await appendAndSave(
-      `Re-enrichment complete! ${reScored} leads re-scored, ${emailCount} have emails, ${qualifiedCount} qualified, ${watchlistCount} watchlist`,
+      `Re-enrichment complete! ${reScored} leads re-scored, ${emailCount} have emails`,
       100,
       "Re-enrichment complete"
     );

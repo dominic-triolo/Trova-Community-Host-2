@@ -177,7 +177,7 @@ export async function registerRoutes(
         "Patreon URL", "Personal Website",
         "Member/Patron Count", "Post Count",
         "YouTube", "Instagram", "Twitter", "Facebook", "TikTok",
-        "Score", "Qualified", "Status",
+        "Score",
         "Niche Score", "Trust Score", "Engagement Score", "Monetization Score", "Channels Score", "Trip Fit Score",
         "Discovered At",
       ];
@@ -214,8 +214,6 @@ export async function registerRoutes(
           esc(channels.facebook || ""),
           esc(channels.tiktok || ""),
           lead.score ?? 0,
-          lead.status === "qualified" ? "Yes" : "No",
-          esc(lead.status),
           breakdown.nicheIdentity ?? "",
           breakdown.trustLeadership ?? "",
           breakdown.engagement ?? "",

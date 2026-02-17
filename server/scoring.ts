@@ -135,8 +135,3 @@ export function scoreLead(input: ScoringInput): ScoreBreakdown {
   };
 }
 
-export function determineStatus(score: number, threshold: number, hasContact: boolean): string {
-  if (score >= threshold && hasContact) return "qualified";
-  if (score >= threshold - 10) return "watchlist";
-  return "rejected";
-}

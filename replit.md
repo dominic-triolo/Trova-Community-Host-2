@@ -52,8 +52,8 @@ shared/
 4. **Create & Score** - ICP scoring (0-100) with 6 pillars + audience size bonus + contact info bonus
 5. **Apollo.io Enrichment** - Contact lookup by name + domain + LinkedIn URL (toggleable, 50 calls/run, min score 15, deduped across runs via apolloEnrichedAt)
 6. **Hunter.io Enrichment** - Domain search fallback for leads still missing email after Apollo (30 calls/run)
-7. **Scoring & Qualification** - Final scoring pass and lead qualification
-8. **Export** - CSV download for qualified/watchlist leads (global or per-run)
+7. **Scoring** - Final scoring pass (no qualification threshold; scores only)
+8. **Export** - CSV download for all leads with scores (global or per-run)
 
 ## Enrichment Methods (User-Toggleable)
 Users can enable/disable enrichment methods per run via the "Enrichment Methods" card:
@@ -66,8 +66,8 @@ The pipeline collects cross-platform profile links (YouTube, Instagram, Twitter,
 - Use website domains for Hunter.io domain search
 - Display linked platforms in results UI with platform-specific icons
 
-## Source Selection
-Users can toggle which platforms to search per run via the "Data Sources" card on the discovery form. Currently only Patreon is active; other sources are grayed out until ready.
+## Platform Tabs
+The discovery form uses platform-specific tabs. Currently Patreon is active; Facebook Groups and LinkedIn tabs are visible but disabled (coming soon). Each platform tab has its own keyword/filter configuration.
 
 ## Apify Actors Used
 - `apify~google-search-scraper` - Google Search discovery
@@ -84,7 +84,7 @@ Users can toggle which platforms to search per run via the "Data Sources" card o
 - `GET /api/runs` - List all runs
 - `GET /api/runs/:id` - Get run status
 - `GET /api/leads` - List all leads (optional `?runId=` filter)
-- `GET /api/exports/csv` - Download single CSV with all leads, scores, qualified column, and discovery datetime (optional `?runId=` filter)
+- `GET /api/exports/csv` - Download CSV with all leads, scores, and discovery datetime (optional `?runId=` filter)
 
 ## Contact Enrichment (Multi-Pass)
 - **Step 1 - Website Crawl**: Cheerio scraper crawls personal websites from social graph for emails (contact/about pages)

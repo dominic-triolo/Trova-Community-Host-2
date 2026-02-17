@@ -19,7 +19,6 @@ const TYPE_LABELS: Record<string, string> = {
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -50,9 +49,6 @@ import {
   Globe,
   Youtube,
   BookOpen,
-  Award,
-  Eye,
-  XCircle,
   Users,
   BarChart3,
   ChevronRight,
@@ -108,9 +104,6 @@ function LeadDetail({ lead }: { lead: Lead }) {
             {TYPE_LABELS[lead.communityType || ""] || lead.communityType || "Other"}
           </p>
         </div>
-        <Badge variant={lead.status === "qualified" ? "default" : lead.status === "watchlist" ? "secondary" : "outline"}>
-          {lead.status}
-        </Badge>
       </div>
 
       <div className="flex items-center gap-2">
@@ -248,7 +241,6 @@ export default function Results() {
   const params = new URLSearchParams(location.split("?")[1] || "");
   const runId = params.get("runId");
 
-  const [tab, setTab] = useState("qualified");
   const [searchQ, setSearchQ] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
@@ -264,8 +256,6 @@ export default function Results() {
   });
 
   const filtered = (leads || []).filter((lead) => {
-    if (tab === "qualified" && lead.status !== "qualified") return false;
-    if (tab === "watchlist" && lead.status !== "watchlist") return false;
     if (typeFilter !== "all" && lead.communityType !== typeFilter) return false;
     if (searchQ) {
       const q = searchQ.toLowerCase();
@@ -303,6 +293,9 @@ export default function Results() {
             <div className="flex items-center gap-2 flex-wrap">
               <p className="text-sm text-muted-foreground">
                 {(leads || []).length} leads found
+                {leads && leads.filter((l) => l.email).length > 0 && (
+                  <span className="ml-1">({leads.filter((l) => l.email).length} with email)</span>
+                )}
               </p>
               {runId && (
                 <Link href="/results" data-testid="link-show-all-results" className="text-xs text-primary underline-offset-2 hover:underline">
@@ -340,119 +333,103 @@ export default function Results() {
           </Select>
         </div>
 
-        <Tabs value={tab} onValueChange={setTab}>
-          <TabsList data-testid="tabs-status">
-            <TabsTrigger value="qualified" className="gap-1">
-              <Award className="w-3.5 h-3.5" /> Qualified
-            </TabsTrigger>
-            <TabsTrigger value="watchlist" className="gap-1">
-              <Eye className="w-3.5 h-3.5" /> Watchlist
-            </TabsTrigger>
-            <TabsTrigger value="all" className="gap-1">
-              <BarChart3 className="w-3.5 h-3.5" /> All
-            </TabsTrigger>
-          </TabsList>
-
-          <TabsContent value={tab} className="mt-4">
-            {isLoading ? (
-              <div className="space-y-2">
-                {[1, 2, 3, 4, 5].map((i) => (
-                  <Skeleton key={i} className="h-12 w-full" />
-                ))}
-              </div>
-            ) : filtered.length === 0 ? (
-              <Card className="p-8 text-center space-y-3">
-                <Users className="w-10 h-10 text-muted-foreground mx-auto" />
-                <p className="text-sm font-medium">No leads found</p>
-                <p className="text-xs text-muted-foreground">
-                  {tab === "all" ? "Run the finder to discover leads." : `No ${tab} leads match your filters.`}
-                </p>
-              </Card>
-            ) : (
-              <Card className="overflow-hidden">
-                <ScrollArea className="max-h-[600px]">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead className="w-[200px]">Community / Leader</TableHead>
-                        <TableHead>Type</TableHead>
-                        <TableHead>Location</TableHead>
-                        <TableHead className="text-center">Score</TableHead>
-                        <TableHead>Contact</TableHead>
-                        <TableHead>Platforms</TableHead>
-                        <TableHead className="w-8"></TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {filtered.map((lead) => {
-                        const channels = lead.ownedChannels as Record<string, string> | null;
-                        const channelKeys = channels ? Object.keys(channels) : [];
-                        return (
-                          <Sheet key={lead.id} open={selectedLead?.id === lead.id} onOpenChange={(open) => setSelectedLead(open ? lead : null)}>
-                            <SheetTrigger asChild>
-                              <TableRow className="cursor-pointer hover-elevate" data-testid={`row-lead-${lead.id}`}>
-                                <TableCell>
-                                  <div className="min-w-0">
-                                    <p className="text-sm font-medium truncate">{lead.communityName || lead.leaderName || "—"}</p>
-                                    {lead.leaderName && lead.communityName && (
-                                      <p className="text-[11px] text-muted-foreground truncate">{lead.leaderName}</p>
-                                    )}
-                                  </div>
-                                </TableCell>
-                                <TableCell>
-                                  <Badge variant="secondary" className="text-[10px]">
-                                    {TYPE_LABELS[lead.communityType || ""] || lead.communityType || "—"}
-                                  </Badge>
-                                </TableCell>
-                                <TableCell className="text-sm text-muted-foreground truncate max-w-[150px]">
-                                  {lead.location || "—"}
-                                </TableCell>
-                                <TableCell className="text-center">
-                                  <span className={`text-sm font-semibold ${(lead.score || 0) >= 65 ? "text-chart-3" : (lead.score || 0) >= 50 ? "text-chart-4" : "text-muted-foreground"}`}>
-                                    {lead.score}
-                                  </span>
-                                </TableCell>
-                                <TableCell>
-                                  <div className="flex items-center gap-1.5">
-                                    {lead.email && <Mail className="w-3.5 h-3.5 text-muted-foreground" />}
-                                    {lead.phone && <Phone className="w-3.5 h-3.5 text-muted-foreground" />}
-                                    {lead.website && <Globe className="w-3.5 h-3.5 text-muted-foreground" />}
-                                    {!lead.email && !lead.phone && !lead.website && <span className="text-xs text-muted-foreground">—</span>}
-                                  </div>
-                                </TableCell>
-                                <TableCell>
-                                  <div className="flex items-center gap-1">
-                                    {channelKeys.slice(0, 5).map((ch) => {
-                                      const p = PLATFORM_ICONS[ch];
-                                      const Icon = p?.icon || Globe;
-                                      return <Icon key={ch} className={`w-3.5 h-3.5 ${p?.color || "text-muted-foreground"}`} title={p?.label || ch} />;
-                                    })}
-                                    {channelKeys.length > 5 && <span className="text-[10px] text-muted-foreground">+{channelKeys.length - 5}</span>}
-                                  </div>
-                                </TableCell>
-                                <TableCell>
-                                  <ChevronRight className="w-4 h-4 text-muted-foreground" />
-                                </TableCell>
-                              </TableRow>
-                            </SheetTrigger>
-                            <SheetContent className="overflow-y-auto">
-                              <SheetHeader>
-                                <SheetTitle>Lead Details</SheetTitle>
-                              </SheetHeader>
-                              <div className="mt-4">
-                                <LeadDetail lead={lead} />
+        {isLoading ? (
+          <div className="space-y-2">
+            {[1, 2, 3, 4, 5].map((i) => (
+              <Skeleton key={i} className="h-12 w-full" />
+            ))}
+          </div>
+        ) : filtered.length === 0 ? (
+          <Card className="p-8 text-center space-y-3">
+            <Users className="w-10 h-10 text-muted-foreground mx-auto" />
+            <p className="text-sm font-medium">No leads found</p>
+            <p className="text-xs text-muted-foreground">
+              Run the finder to discover leads.
+            </p>
+          </Card>
+        ) : (
+          <Card className="overflow-hidden">
+            <ScrollArea className="max-h-[600px]">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-[200px]">Community / Leader</TableHead>
+                    <TableHead>Type</TableHead>
+                    <TableHead>Location</TableHead>
+                    <TableHead className="text-center">Score</TableHead>
+                    <TableHead>Contact</TableHead>
+                    <TableHead>Platforms</TableHead>
+                    <TableHead className="w-8"></TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filtered.map((lead) => {
+                    const channels = lead.ownedChannels as Record<string, string> | null;
+                    const channelKeys = channels ? Object.keys(channels) : [];
+                    return (
+                      <Sheet key={lead.id} open={selectedLead?.id === lead.id} onOpenChange={(open) => setSelectedLead(open ? lead : null)}>
+                        <SheetTrigger asChild>
+                          <TableRow className="cursor-pointer hover-elevate" data-testid={`row-lead-${lead.id}`}>
+                            <TableCell>
+                              <div className="min-w-0">
+                                <p className="text-sm font-medium truncate">{lead.communityName || lead.leaderName || "—"}</p>
+                                {lead.leaderName && lead.communityName && (
+                                  <p className="text-[11px] text-muted-foreground truncate">{lead.leaderName}</p>
+                                )}
                               </div>
-                            </SheetContent>
-                          </Sheet>
-                        );
-                      })}
-                    </TableBody>
-                  </Table>
-                </ScrollArea>
-              </Card>
-            )}
-          </TabsContent>
-        </Tabs>
+                            </TableCell>
+                            <TableCell>
+                              <Badge variant="secondary" className="text-[10px]">
+                                {TYPE_LABELS[lead.communityType || ""] || lead.communityType || "—"}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="text-sm text-muted-foreground truncate max-w-[150px]">
+                              {lead.location || "—"}
+                            </TableCell>
+                            <TableCell className="text-center">
+                              <span className={`text-sm font-semibold ${(lead.score || 0) >= 65 ? "text-chart-3" : (lead.score || 0) >= 50 ? "text-chart-4" : "text-muted-foreground"}`}>
+                                {lead.score}
+                              </span>
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex items-center gap-1.5">
+                                {lead.email && <Mail className="w-3.5 h-3.5 text-muted-foreground" />}
+                                {lead.phone && <Phone className="w-3.5 h-3.5 text-muted-foreground" />}
+                                {lead.website && <Globe className="w-3.5 h-3.5 text-muted-foreground" />}
+                                {!lead.email && !lead.phone && !lead.website && <span className="text-xs text-muted-foreground">—</span>}
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex items-center gap-1">
+                                {channelKeys.slice(0, 5).map((ch) => {
+                                  const p = PLATFORM_ICONS[ch];
+                                  const Icon = p?.icon || Globe;
+                                  return <Icon key={ch} className={`w-3.5 h-3.5 ${p?.color || "text-muted-foreground"}`} title={p?.label || ch} />;
+                                })}
+                                {channelKeys.length > 5 && <span className="text-[10px] text-muted-foreground">+{channelKeys.length - 5}</span>}
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <ChevronRight className="w-4 h-4 text-muted-foreground" />
+                            </TableCell>
+                          </TableRow>
+                        </SheetTrigger>
+                        <SheetContent className="overflow-y-auto">
+                          <SheetHeader>
+                            <SheetTitle>Lead Details</SheetTitle>
+                          </SheetHeader>
+                          <div className="mt-4">
+                            <LeadDetail lead={lead} />
+                          </div>
+                        </SheetContent>
+                      </Sheet>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </ScrollArea>
+          </Card>
+        )}
       </div>
     </div>
   );
