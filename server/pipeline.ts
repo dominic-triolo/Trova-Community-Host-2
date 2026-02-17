@@ -175,6 +175,29 @@ function extractEmailsFromText(text: string): string[] {
   );
 }
 
+function extractObfuscatedEmails(text: string): string[] {
+  const results: string[] = [];
+  const patterns = [
+    /([a-zA-Z0-9._%+-]+)\s*\[\s*at\s*\]\s*([a-zA-Z0-9.-]+)\s*\[\s*dot\s*\]\s*([a-zA-Z]{2,})/gi,
+    /([a-zA-Z0-9._%+-]+)\s*\(\s*at\s*\)\s*([a-zA-Z0-9.-]+)\s*\(\s*dot\s*\)\s*([a-zA-Z]{2,})/gi,
+    /([a-zA-Z0-9._%+-]+)\s*\{\s*at\s*\}\s*([a-zA-Z0-9.-]+)\s*\{\s*dot\s*\}\s*([a-zA-Z]{2,})/gi,
+    /([a-zA-Z0-9._%+-]+)\s+at\s+([a-zA-Z0-9.-]+)\s+dot\s+([a-zA-Z]{2,})\b/gi,
+    /([a-zA-Z0-9._%+-]+)\s*\[at\]\s*([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/gi,
+    /([a-zA-Z0-9._%+-]+)\s*\(at\)\s*([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/gi,
+  ];
+  for (const pattern of patterns) {
+    let match;
+    while ((match = pattern.exec(text)) !== null) {
+      if (match[3]) {
+        results.push(`${match[1]}@${match[2]}.${match[3]}`);
+      } else if (match[2]) {
+        results.push(`${match[1]}@${match[2]}`);
+      }
+    }
+  }
+  return Array.from(new Set(results));
+}
+
 function isPlausibleDomain(domain: string): boolean {
   const clean = domain.toLowerCase().replace(/^www\./, "").split("/")[0];
   const parts = clean.split(".");
@@ -695,6 +718,14 @@ function isValidApolloCandidate(leaderName: string): boolean {
   const nonAlpha = trimmed.replace(/[a-zA-Z\s'-]/g, "");
   if (nonAlpha.length > 2) return false;
 
+  const hasMixedCase = nameParts.some(p => /[a-z]/.test(p) && /[A-Z]/.test(p.slice(1)));
+  const allPartsCapitalized = nameParts.every(p => /^[A-Z][a-z]/.test(p) || /^[A-Z]$/.test(p) || /^(de|van|von|del|di|el|la|le|des|den|der)$/i.test(p));
+  if (!allPartsCapitalized && hasMixedCase && nameParts.length <= 2) return false;
+
+  if (/[³²¹°™®©]/.test(trimmed)) return false;
+
+  if (nameParts.some(p => p.length > 15)) return false;
+
   return true;
 }
 
@@ -850,7 +881,8 @@ async function scrapePatreonCreators(
           } catch {}
         }
 
-        const creatorEmail = extractEmailsFromText(`${description} ${aboutText}`)[0] || "";
+        const allTextForEmail = `${description} ${aboutText}`;
+        const creatorEmail = extractEmailsFromText(allTextForEmail)[0] || extractObfuscatedEmails(allTextForEmail)[0] || "";
 
         const realName = extractRealNameFromAbout(aboutText, creatorName);
 
@@ -1002,14 +1034,23 @@ async function googleSearchEnrichCreators(
     const brandName = l.communityName || "";
     const realName = l.leaderName || "";
     const idx = leads.indexOf(l);
+    const hasRealName = realName && realName !== brandName && isValidApolloCandidate(realName);
 
-    if (realName && realName !== brandName) {
+    if (hasRealName) {
       queries.push({ term: `"${realName}" email website`, leadIdx: idx });
       queries.push({ term: `site:linkedin.com "${realName}"`, leadIdx: idx });
-    } else {
+    } else if (isValidApolloCandidate(brandName)) {
       queries.push({ term: `"${brandName}" contact website email`, leadIdx: idx });
-      if (brandName.length > 3) {
-        queries.push({ term: `site:linkedin.com "${brandName}"`, leadIdx: idx });
+      queries.push({ term: `site:linkedin.com "${brandName}"`, leadIdx: idx });
+    } else {
+      const patreonUrl = l.website || l.ownedChannels?.patreon || "";
+      if (patreonUrl.includes("patreon.com/")) {
+        const slug = patreonUrl.split("patreon.com/")[1]?.split(/[?#/]/)[0];
+        if (slug && slug.length >= 3) {
+          queries.push({ term: `"${slug}" email contact website`, leadIdx: idx });
+        }
+      } else if (brandName.length >= 3) {
+        queries.push({ term: `"${brandName}" contact email`, leadIdx: idx });
       }
     }
   }
@@ -1212,7 +1253,7 @@ async function enrichFromYouTubeAboutPages(
   appendAndSave: (msg: string) => Promise<void>,
 ): Promise<void> {
   const leadsWithYouTube = leads.filter(l =>
-    !l.email && l.ownedChannels?.youtube && l.ownedChannels.youtube.startsWith("http") && !l.ownedChannels?.website
+    l.ownedChannels?.youtube && l.ownedChannels.youtube.startsWith("http")
   ).slice(0, YOUTUBE_ABOUT_MAX);
 
   if (leadsWithYouTube.length === 0) {
@@ -1263,7 +1304,9 @@ async function enrichFromYouTubeAboutPages(
       let foundAnything = false;
 
       const emails = extractEmailsFromText(pageText);
-      const validEmail = emails.find(e => !isBlockedEmail(e));
+      const obfuscatedEmails = extractObfuscatedEmails(pageText);
+      const allEmails = [...emails, ...obfuscatedEmails];
+      const validEmail = allEmails.find(e => !isBlockedEmail(e));
       if (validEmail && !matchLead.email) {
         matchLead.email = validEmail;
         foundAnything = true;
@@ -1274,11 +1317,12 @@ async function enrichFromYouTubeAboutPages(
       const textUrls = pageText.match(urlRegex) || [];
       allUrls.push(...textUrls);
 
+      const socialHosts = ["youtube.com", "youtu.be", "instagram.com", "twitter.com", "x.com", "discord.gg", "discord.com", "facebook.com", "tiktok.com", "twitch.tv", "linkedin.com", "patreon.com", "google.com", "apple.com", "spotify.com", "amazon.com", "reddit.com", "tumblr.com", "pinterest.com", "github.com", "medium.com", "wordpress.com", "linktr.ee", "beacons.ai", "ko-fi.com", "buymeacoffee.com", "gumroad.com", "substack.com", "bit.ly", "apify.com", "meetup.com", "eventbrite.com", "yelp.com", "tripadvisor.com"];
+
       for (const link of allUrls) {
         if (!link || typeof link !== "string" || !link.startsWith("http")) continue;
         try {
           const host = new URL(link).hostname.replace(/^www\./, "");
-          const socialHosts = ["youtube.com", "youtu.be", "instagram.com", "twitter.com", "x.com", "discord.gg", "discord.com", "facebook.com", "tiktok.com", "twitch.tv", "linkedin.com", "patreon.com", "google.com", "apple.com", "spotify.com", "amazon.com", "reddit.com", "tumblr.com", "pinterest.com", "github.com", "medium.com", "wordpress.com", "linktr.ee", "beacons.ai", "ko-fi.com", "buymeacoffee.com", "gumroad.com", "substack.com", "bit.ly", "apify.com", "meetup.com", "eventbrite.com", "yelp.com", "tripadvisor.com"];
 
           if (host.includes("linkedin.com") && link.includes("/in/") && !matchLead.ownedChannels?.linkedin) {
             if (!matchLead.ownedChannels) matchLead.ownedChannels = {};
@@ -1289,6 +1333,12 @@ async function enrichFromYouTubeAboutPages(
           if (!socialHosts.some(s => host.includes(s)) && !matchLead.ownedChannels?.website) {
             if (!matchLead.ownedChannels) matchLead.ownedChannels = {};
             matchLead.ownedChannels.website = link.split("?")[0];
+            foundAnything = true;
+          }
+
+          if ((host.includes("linktr.ee") || host.includes("beacons.ai") || host.includes("bio.link") || host.includes("solo.to") || host.includes("carrd.co") || host.includes("campsite.bio")) && !matchLead.ownedChannels?.linktree) {
+            if (!matchLead.ownedChannels) matchLead.ownedChannels = {};
+            matchLead.ownedChannels.linktree = link.split("?")[0];
             foundAnything = true;
           }
         } catch {}
@@ -1475,14 +1525,6 @@ export async function runPipeline(runId: number): Promise<void> {
       }
     }
 
-    const leadsWithLinktree = allPlatformLeads.filter(l =>
-      !l.email && l.ownedChannels?.linktree && l.ownedChannels.linktree.startsWith("http")
-    );
-    if (leadsWithLinktree.length > 0) {
-      await appendAndSave(`Link aggregator scrape: ${leadsWithLinktree.length} leads have Linktree/Beacons pages`, 28, "Step 1b: Link aggregator scrape");
-      await enrichFromLinkAggregators(allPlatformLeads, appendAndSave);
-    }
-
     const realNameCount = allPlatformLeads.filter(l => {
       const aboutText = l.raw?.about || "";
       return extractRealNameFromAbout(aboutText, l.communityName || "") !== null;
@@ -1491,20 +1533,56 @@ export async function runPipeline(runId: number): Promise<void> {
       await appendAndSave(`Real name extraction: found real names for ${realNameCount}/${allPlatformLeads.length} leads from about text`);
     }
 
+    const leadsWithLinktreeInitial = allPlatformLeads.filter(l =>
+      !l.email && l.ownedChannels?.linktree && l.ownedChannels.linktree.startsWith("http")
+    );
+    if (leadsWithLinktreeInitial.length > 0) {
+      await appendAndSave(`Link aggregator scrape: ${leadsWithLinktreeInitial.length} leads have Linktree/Beacons pages`, 28, "Step 1b: Link aggregator scrape");
+      await enrichFromLinkAggregators(allPlatformLeads, appendAndSave);
+    }
+
+    const leadsWithYouTube = allPlatformLeads.filter(l =>
+      l.ownedChannels?.youtube && l.ownedChannels.youtube.startsWith("http")
+    );
+    if (leadsWithYouTube.length > 0) {
+      await appendAndSave(`YouTube about pages: ${leadsWithYouTube.length} leads have YouTube channels`, 30, "Step 2a: YouTube about page scrape");
+      await enrichFromYouTubeAboutPages(allPlatformLeads, appendAndSave);
+    }
+
+    const newLinktreeLeads = allPlatformLeads.filter(l =>
+      !l.email && l.ownedChannels?.linktree && l.ownedChannels.linktree.startsWith("http") &&
+      !leadsWithLinktreeInitial.includes(l)
+    );
+    if (newLinktreeLeads.length > 0) {
+      await appendAndSave(`Link aggregator scrape (pass 2): ${newLinktreeLeads.length} new aggregator URLs from YouTube/social`, 33, "Step 2b: Link aggregator scrape (new)");
+      await enrichFromLinkAggregators(allPlatformLeads, appendAndSave);
+    }
+
     const leadsWithoutContactInfo = allPlatformLeads.filter(l => !l.email && !l.ownedChannels?.website && !l.ownedChannels?.linkedin);
     if (leadsWithoutContactInfo.length > 0) {
-      await appendAndSave(`Google enrichment: ${leadsWithoutContactInfo.length} leads need website/LinkedIn lookup`, 32, "Step 2: Google contact search");
+      await appendAndSave(`Google enrichment: ${leadsWithoutContactInfo.length} leads need website/LinkedIn lookup`, 35, "Step 2c: Google contact search");
       await googleSearchEnrichCreators(allPlatformLeads, appendAndSave);
     } else {
       await appendAndSave("Google enrichment: skipped (all leads already have contact info)");
     }
 
-    const leadsWithYouTubeNoSite = allPlatformLeads.filter(l =>
-      !l.email && l.ownedChannels?.youtube && l.ownedChannels.youtube.startsWith("http") && !l.ownedChannels?.website
-    );
-    if (leadsWithYouTubeNoSite.length > 0) {
-      await appendAndSave(`YouTube about pages: ${leadsWithYouTubeNoSite.length} leads have YouTube but no website/email`, 35, "Step 2b: YouTube about page scrape");
-      await enrichFromYouTubeAboutPages(allPlatformLeads, appendAndSave);
+    let slugDomainsProbed = 0;
+    for (const pl of allPlatformLeads) {
+      if (pl.ownedChannels?.website || pl.email) continue;
+      const patreonUrl = pl.website || pl.ownedChannels?.patreon || "";
+      if (!patreonUrl.includes("patreon.com/")) continue;
+      const slug = patreonUrl.split("patreon.com/")[1]?.split(/[?#/]/)[0]?.toLowerCase();
+      if (!slug || slug.length < 3 || slug.startsWith("u") && /^\d+$/.test(slug.slice(1))) continue;
+      if (/[^a-z0-9_-]/.test(slug)) continue;
+      const cleanSlug = slug.replace(/[_-]/g, "");
+      if (cleanSlug.length < 4) continue;
+      const candidateDomain = `${cleanSlug}.com`;
+      if (!pl.ownedChannels) pl.ownedChannels = {};
+      pl.ownedChannels.website = `https://${candidateDomain}`;
+      slugDomainsProbed++;
+    }
+    if (slugDomainsProbed > 0) {
+      await appendAndSave(`Slug domain probe: trying ${slugDomainsProbed} Patreon slugs as .com domains`);
     }
 
     const leadsNeedingEmail = allPlatformLeads.filter(l => !l.email && l.ownedChannels?.website && !isPatreonCdnUrl(l.ownedChannels.website));

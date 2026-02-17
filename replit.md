@@ -46,12 +46,15 @@ shared/
 - **leads** - Flattened, scored, export-ready lead records
 
 ## Pipeline Steps (Social Graph Enrichment Chain)
-1. **Platform Discovery** - Patreon creator search (social links, about text, tiers, earnings) + bare domain/email extraction from about text + real name extraction from about text (regex patterns for "I'm X", "my name is X", etc.) + link aggregator URL extraction (Linktree, Beacons, etc.)
-1b. **Link Aggregator Scrape** - Cheerio scraper on Linktree/Beacons/bio.link pages to extract emails, LinkedIn, and personal websites (max 15 pages/run)
-2. **Google Contact Search** - Google search for creators missing website/LinkedIn using real names when available + dedicated LinkedIn searches (site:linkedin.com queries), batched 5 at a time
-3. **Website Contact Crawl** - Crawl personal websites from social profiles for emails (Cheerio scraper on contact/about pages, max 30 sites/run)
+1. **Platform Discovery** - Patreon creator search (social links, about text, tiers, earnings) + bare domain/email extraction from about text + obfuscated email extraction ("[at]", "(at)" patterns) + real name extraction from about text (regex patterns for "I'm X", "my name is X", etc.) + brand name parsing ("Jenne Sluder Yoga" → "Jenne Sluder") + link aggregator URL extraction (Linktree, Beacons, etc.)
+1b. **Link Aggregator Scrape (Pass 1)** - Cheerio scraper on Linktree/Beacons/bio.link pages from Patreon about text (max 15 pages/run)
+2a. **YouTube About Page Scrape** - Scrape ALL YouTube channels (no email/website filter) for business emails, websites, LinkedIn, and link aggregator URLs
+2b. **Link Aggregator Scrape (Pass 2)** - Scrape any NEW aggregator URLs discovered via YouTube about pages
+2c. **Google Contact Search** - Smart Google search: uses real names for name-bearing creators, Patreon slug for pseudonymous creators, skips LinkedIn search for pseudonyms. Batched 5 at a time.
+2d. **Slug Domain Probe** - Try Patreon slug as .com domain (e.g., patreon.com/britchida → britchida.com) for creators without websites
+3. **Website Contact Crawl** - Crawl personal websites + slug-probed domains for emails (Cheerio scraper on contact/about pages, max 30 sites/run, email-domain validation)
 4. **Create & Score** - ICP scoring (0-100) with 6 pillars + audience size bonus + contact info bonus
-5. **Apollo.io Enrichment** - Contact lookup by name + domain + LinkedIn URL (toggleable, 50 calls/run, min score 15, deduped across runs via apolloEnrichedAt)
+5. **Apollo.io Enrichment** - Contact lookup by name + domain + LinkedIn URL (toggleable, 50 calls/run, min score 15, deduped across runs via apolloEnrichedAt, skips pseudonyms via isValidApolloCandidate)
 6. **Leads Finder Enrichment** - Apify `code_crafter~leads-finder` actor as fallback for leads still missing email after Apollo (30 leads/run, batched by domain)
 7. **Scoring** - Final scoring pass (no qualification threshold; scores only)
 8. **Export** - CSV download for all leads with scores (global or per-run)
