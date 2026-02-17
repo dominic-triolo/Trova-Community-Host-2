@@ -1382,7 +1382,7 @@ async function enrichFromInstagramBios(
   if (usernames.length === 0) return;
 
   try {
-    const results = await runActorAndGetResults("apify/instagram-profile-scraper", {
+    const results = await runActorAndGetResults("apify~instagram-profile-scraper", {
       usernames,
     }, 120000);
 
@@ -1505,7 +1505,7 @@ async function enrichFromTwitterBios(
   }
 
   try {
-    const results = await runActorAndGetResults("apidojo/twitter-user-scraper", {
+    const results = await runActorAndGetResults("apidojo~twitter-user-scraper", {
       twitterHandles: paddedHandles,
       getFollowers: false,
       getFollowing: false,
