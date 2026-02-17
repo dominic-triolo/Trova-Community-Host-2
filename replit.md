@@ -39,7 +39,7 @@ shared/
 ```
 
 ## Data Model
-- **runs** - Pipeline execution tracking (status, progress, logs)
+- **runs** - Pipeline execution tracking (status, progress, logs, apifySpendUsd)
 - **source_urls** - Discovered URLs with classification
 - **communities** - Extracted community organizations
 - **leaders** - Community leader contacts
