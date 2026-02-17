@@ -77,6 +77,7 @@ export const leads = pgTable("leads", {
   status: text("status").notNull().default("watchlist"),
   firstSeenAt: timestamp("first_seen_at").defaultNow().notNull(),
   lastSeenAt: timestamp("last_seen_at").defaultNow().notNull(),
+  apolloEnrichedAt: timestamp("apollo_enriched_at"),
   raw: jsonb("raw").$type<Record<string, any>>().default({}),
   runId: integer("run_id").references(() => runs.id),
   communityId: integer("community_id").references(() => communities.id),

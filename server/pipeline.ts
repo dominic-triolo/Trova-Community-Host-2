@@ -1501,12 +1501,18 @@ export async function runPipeline(runId: number): Promise<void> {
 
         let apolloSkipped = 0;
         let apolloCalls = 0;
+        let apolloDeduped = 0;
         for (const lead of leadsToEnrich) {
           if (apolloCalls >= APOLLO_MAX_CALLS_PER_RUN) {
             await appendAndSave(`Apollo.io: reached ${APOLLO_MAX_CALLS_PER_RUN} call limit, stopping`);
             break;
           }
           try {
+            if (lead.apolloEnrichedAt) {
+              apolloDeduped++;
+              continue;
+            }
+
             const leaderName = lead.leaderName || lead.communityName || "";
             if (!leaderName) continue;
 
@@ -1551,9 +1557,12 @@ export async function runPipeline(runId: number): Promise<void> {
               await new Promise((r) => setTimeout(r, 300));
             }
 
-            if (!result) continue;
+            if (!result) {
+              await storage.updateLead(lead.id, { apolloEnrichedAt: new Date() });
+              continue;
+            }
 
-            const updateData: Record<string, any> = {};
+            const updateData: Record<string, any> = { apolloEnrichedAt: new Date() };
 
             if (result.email) updateData.email = result.email;
             if (result.phone && !lead.phone) updateData.phone = result.phone;
@@ -1570,7 +1579,10 @@ export async function runPipeline(runId: number): Promise<void> {
               updateData.ownedChannels = updatedChannels;
             }
 
-            if (Object.keys(updateData).length === 0) continue;
+            if (Object.keys(updateData).length <= 1) {
+              await storage.updateLead(lead.id, { apolloEnrichedAt: new Date() });
+              continue;
+            }
 
             const breakdown = scoreLead({
               name: lead.communityName || "",
@@ -1605,7 +1617,7 @@ export async function runPipeline(runId: number): Promise<void> {
           }
         }
 
-        await appendAndSave(`Apollo.io: enriched ${enrichedCount} of ${leadsToEnrich.length} leads (${apolloSkipped} skipped invalid names, ${apolloCalls} API calls used)`);
+        await appendAndSave(`Apollo.io: enriched ${enrichedCount} of ${leadsToEnrich.length} leads (${apolloSkipped} skipped invalid names, ${apolloDeduped} already enriched, ${apolloCalls} API calls used)`);
       } else {
         await appendAndSave("Apollo enrichment: skipped (no API key configured)");
       }
@@ -1834,12 +1846,18 @@ export async function reEnrichRun(runId: number): Promise<void> {
       if (isApolloAvailable() && leadsToEnrich.length > 0) {
         let apolloSkipped = 0;
         let apolloCalls = 0;
+        let apolloDeduped = 0;
         for (const lead of leadsToEnrich) {
           if (apolloCalls >= RE_APOLLO_MAX_CALLS) {
             await appendAndSave(`Apollo.io: reached ${RE_APOLLO_MAX_CALLS} call limit, stopping`);
             break;
           }
           try {
+            if (lead.apolloEnrichedAt) {
+              apolloDeduped++;
+              continue;
+            }
+
             const leaderName = lead.leaderName || lead.communityName || "";
             if (!leaderName) continue;
 
@@ -1884,9 +1902,12 @@ export async function reEnrichRun(runId: number): Promise<void> {
               await new Promise((r) => setTimeout(r, 300));
             }
 
-            if (!result) continue;
+            if (!result) {
+              await storage.updateLead(lead.id, { apolloEnrichedAt: new Date() });
+              continue;
+            }
 
-            const updateData: Record<string, any> = {};
+            const updateData: Record<string, any> = { apolloEnrichedAt: new Date() };
             if (result.email) updateData.email = result.email;
             if (result.phone && !lead.phone) updateData.phone = result.phone;
             if (result.linkedin && !lead.linkedin) updateData.linkedin = result.linkedin;
@@ -1902,9 +1923,11 @@ export async function reEnrichRun(runId: number): Promise<void> {
               updateData.ownedChannels = updatedChannels;
             }
 
-            if (Object.keys(updateData).length > 0) {
+            if (Object.keys(updateData).length > 1) {
               await storage.updateLead(lead.id, updateData);
               enrichedCount++;
+            } else {
+              await storage.updateLead(lead.id, { apolloEnrichedAt: new Date() });
             }
 
             await new Promise((r) => setTimeout(r, 300));
@@ -1912,7 +1935,7 @@ export async function reEnrichRun(runId: number): Promise<void> {
             await appendAndSave(`[WARN] Apollo enrichment failed for lead ${lead.id}: ${err.message}`);
           }
         }
-        await appendAndSave(`Apollo.io: enriched ${enrichedCount} of ${leadsToEnrich.length} leads (${apolloSkipped} skipped invalid names, ${apolloCalls} API calls used)`, 70);
+        await appendAndSave(`Apollo.io: enriched ${enrichedCount} of ${leadsToEnrich.length} leads (${apolloSkipped} skipped invalid names, ${apolloDeduped} already enriched, ${apolloCalls} API calls used)`, 70);
       } else {
         await appendAndSave("Apollo enrichment skipped (no API key configured)", 70);
       }
