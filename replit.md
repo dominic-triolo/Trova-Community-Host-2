@@ -46,7 +46,7 @@ shared/
 - **leads** - Flattened, scored, export-ready lead records
 
 ## Pipeline Steps (Social Graph Enrichment Chain)
-1. **Platform Discovery** - Patreon creator search + parallel email scraper (toggleable)
+1. **Platform Discovery** - Patreon creator search (social links, about text, tiers, earnings)
 2. **Website Contact Crawl** - Crawl personal websites from social profiles for emails (Cheerio scraper on contact/about pages, max 30 sites/run)
 3. **Create & Score** - ICP scoring (0-100) with 6 pillars + audience size bonus + contact info bonus
 4. **Apollo.io Enrichment** - Contact lookup by name + domain + LinkedIn URL (toggleable, 50 calls/run, min score 15)
@@ -56,7 +56,6 @@ shared/
 
 ## Enrichment Methods (User-Toggleable)
 Users can enable/disable enrichment methods per run via the "Enrichment Methods" card:
-- **Email Scraper** - Keyword-based email search on selected platforms via Apify (on by default)
 - **Apollo.io** - Contact lookup by name, domain & LinkedIn URL using API credits (on by default)
 
 ## Social Graph Approach
