@@ -170,7 +170,7 @@ export const RECOMMENDED_KEYWORDS = [
 
 export const DEFAULT_RUN_PARAMS: RunParams = {
   seedKeywords: [],
-  seedGeos: [],
+  seedGeos: ["United States"],
   maxDiscoveredUrls: 200,
   maxGoogleResultsPerQuery: 10,
   enabledSources: [...DEFAULT_ENABLED_SOURCES],
