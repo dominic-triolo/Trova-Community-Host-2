@@ -13,6 +13,7 @@ import {
   Loader2,
   Plus,
   Activity,
+  AlertTriangle,
 } from "lucide-react";
 
 function statusIcon(status: string) {
@@ -20,6 +21,7 @@ function statusIcon(status: string) {
     case "running": return <Loader2 className="w-3.5 h-3.5 animate-spin" />;
     case "succeeded": return <CheckCircle2 className="w-3.5 h-3.5" />;
     case "failed": return <XCircle className="w-3.5 h-3.5" />;
+    case "interrupted": return <AlertTriangle className="w-3.5 h-3.5" />;
     default: return <Clock className="w-3.5 h-3.5" />;
   }
 }
@@ -29,6 +31,7 @@ function statusVariant(status: string): "default" | "secondary" | "destructive" 
     case "running": return "default";
     case "succeeded": return "outline";
     case "failed": return "destructive";
+    case "interrupted": return "secondary";
     default: return "secondary";
   }
 }

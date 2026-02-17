@@ -23,6 +23,7 @@ import {
   RefreshCw,
   StopCircle,
   DollarSign,
+  AlertTriangle,
 } from "lucide-react";
 
 function StatusBadge({ status }: { status: string }) {
@@ -31,6 +32,7 @@ function StatusBadge({ status }: { status: string }) {
     running: { variant: "default", icon: Loader2 },
     succeeded: { variant: "outline", icon: CheckCircle2 },
     failed: { variant: "destructive", icon: XCircle },
+    interrupted: { variant: "secondary", icon: AlertTriangle },
   };
   const config = variants[status] || variants.queued;
   const Icon = config.icon;
@@ -64,7 +66,7 @@ export default function RunStatus() {
     queryKey: ["/api/runs", id],
     refetchInterval: (query) => {
       const d = query.state.data as Run | undefined;
-      if (d && (d.status === "succeeded" || d.status === "failed")) return false;
+      if (d && (d.status === "succeeded" || d.status === "failed" || d.status === "interrupted")) return false;
       return 2000;
     },
   });
@@ -158,7 +160,7 @@ export default function RunStatus() {
                 Stop Run
               </Button>
             )}
-            {(run.status === "succeeded" || run.status === "failed") && (
+            {(run.status === "succeeded" || run.status === "failed" || run.status === "interrupted") && (
               <Button
                 variant="outline"
                 size="sm"
@@ -170,7 +172,7 @@ export default function RunStatus() {
                 Re-enrich
               </Button>
             )}
-            {run.status === "succeeded" && (
+            {(run.status === "succeeded" || run.status === "interrupted") && (
               <>
                 <Link href={`/results?runId=${run.id}`}>
                   <Button size="sm" data-testid="button-view-results">

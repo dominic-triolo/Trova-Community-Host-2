@@ -13,14 +13,14 @@ async function recoverStuckRuns() {
     for (const run of stuckRuns) {
       log(`Recovering stuck run ${run.id} (was in status "running" with no active process)`, "startup");
       await storage.updateRun(run.id, {
-        status: "failed",
-        step: "Failed (server restarted)",
+        status: "interrupted",
+        step: "Interrupted (server restart)",
         finishedAt: new Date(),
-        logs: (run.logs || "") + `\n[${new Date().toLocaleTimeString("en-US", { hour12: false })}] [ERROR] Run interrupted by server restart. Use Re-enrich to retry.\n`,
+        logs: (run.logs || "") + `\n[${new Date().toLocaleTimeString("en-US", { hour12: false })}] Run interrupted by server restart. Use Re-enrich to continue enrichment.\n`,
       });
     }
     if (stuckRuns.length > 0) {
-      log(`Recovered ${stuckRuns.length} stuck run(s)`, "startup");
+      log(`Recovered ${stuckRuns.length} stuck run(s) as interrupted`, "startup");
     }
   } catch (err: any) {
     log(`Failed to recover stuck runs: ${err.message}`, "startup");

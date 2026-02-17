@@ -2,6 +2,8 @@ import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
+import { activeRunIds } from "./pipeline";
+import { storage } from "./storage";
 
 const app = express();
 const httpServer = createServer(app);
@@ -100,4 +102,29 @@ app.use((req, res, next) => {
       log(`serving on port ${port}`);
     },
   );
+
+  const gracefulShutdown = async (signal: string) => {
+    log(`Received ${signal}, marking active runs as interrupted...`, "shutdown");
+    const runIds = Array.from(activeRunIds);
+    for (const id of runIds) {
+      try {
+        const run = await storage.getRun(id);
+        if (run && run.status === "running") {
+          await storage.updateRun(id, {
+            status: "interrupted",
+            step: "Interrupted (server restart)",
+            finishedAt: new Date(),
+            logs: (run.logs || "") + `\n[${new Date().toLocaleTimeString("en-US", { hour12: false })}] Run interrupted by server shutdown (${signal}). Use Re-enrich to continue enrichment.\n`,
+          });
+          log(`Marked run ${id} as interrupted`, "shutdown");
+        }
+      } catch (err: any) {
+        log(`Failed to mark run ${id} as interrupted: ${err.message}`, "shutdown");
+      }
+    }
+    process.exit(0);
+  };
+
+  process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+  process.on("SIGINT", () => gracefulShutdown("SIGINT"));
 })();
