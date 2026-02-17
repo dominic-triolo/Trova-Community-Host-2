@@ -573,7 +573,7 @@ async function scrapePatreonCreators(
   try {
     const items = await runActorAndGetResults("louisdeconinck~patreon-scraper", {
       searchQueries: dedupedKeywords,
-      maxRequestsPerCrawl: 200,
+      maxRequestsPerCrawl: Math.min(800, Math.max(100, maxItems * 6)),
     }, 300000);
 
     await appendAndSave(`Patreon: scraper returned ${items.length} raw results`);
