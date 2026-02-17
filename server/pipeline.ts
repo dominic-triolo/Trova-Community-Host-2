@@ -560,20 +560,47 @@ async function scrapePatreonCreators(
     if (l.website && l.website.includes("patreon.com")) {
       seenUrls.add(l.website.split("?")[0].toLowerCase());
     }
+    const ch = (l.ownedChannels as Record<string, string>) || {};
+    if (ch.patreon && ch.patreon.startsWith("http") && ch.patreon.includes("patreon.com")) {
+      seenUrls.add(ch.patreon.split("?")[0].toLowerCase());
+    }
   }
+  await appendAndSave(`Patreon: ${seenUrls.size} known creator URLs from previous runs`);
 
   const dedupedKeywords = Array.from(new Set(keywords.map(k => k.trim()).filter(Boolean)));
   if (dedupedKeywords.length === 0) {
     await appendAndSave(`Patreon: no keywords to search`);
     return leads;
   }
+
+  let overlapMultiplier = 1;
+  try {
+    const allRuns = await storage.listRuns();
+    const pastKeywords = new Set<string>();
+    for (const run of allRuns) {
+      const p = run.params as any;
+      if (p?.keywords && Array.isArray(p.keywords)) {
+        for (const kw of p.keywords) pastKeywords.add(kw.toLowerCase().trim());
+      }
+    }
+    const overlapCount = dedupedKeywords.filter(k => pastKeywords.has(k.toLowerCase())).length;
+    const overlapRatio = overlapCount / dedupedKeywords.length;
+    if (overlapRatio >= 0.5) {
+      overlapMultiplier = overlapRatio >= 0.8 ? 2.5 : 1.8;
+      await appendAndSave(`Patreon: ${Math.round(overlapRatio * 100)}% keyword overlap with past runs, increasing crawl depth ${overlapMultiplier}x`);
+    }
+  } catch {}
+
+  const baseCrawl = Math.min(800, Math.max(100, maxItems * 6));
+  const adjustedCrawl = Math.min(1500, Math.round(baseCrawl * overlapMultiplier));
+
   const keywordPreview = dedupedKeywords.length <= 5 ? dedupedKeywords.join(", ") : `${dedupedKeywords.slice(0, 5).join(", ")} (+${dedupedKeywords.length - 5} more)`;
-  await appendAndSave(`Patreon: searching ${dedupedKeywords.length} keywords: ${keywordPreview}`);
+  await appendAndSave(`Patreon: searching ${dedupedKeywords.length} keywords (crawl depth: ${adjustedCrawl}): ${keywordPreview}`);
 
   try {
     const items = await runActorAndGetResults("louisdeconinck~patreon-scraper", {
       searchQueries: dedupedKeywords,
-      maxRequestsPerCrawl: Math.min(800, Math.max(100, maxItems * 6)),
+      maxRequestsPerCrawl: adjustedCrawl,
     }, 300000);
 
     await appendAndSave(`Patreon: scraper returned ${items.length} raw results`);
