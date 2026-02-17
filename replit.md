@@ -46,8 +46,9 @@ shared/
 - **leads** - Flattened, scored, export-ready lead records
 
 ## Pipeline Steps (Social Graph Enrichment Chain)
-1. **Platform Discovery** - Patreon creator search (social links, about text, tiers, earnings) + bare domain/email extraction from about text
-2. **Google Contact Search** - Google search for creators missing website/LinkedIn to find personal sites, social profiles, and emails (max 20 creators/run, batched 5 at a time)
+1. **Platform Discovery** - Patreon creator search (social links, about text, tiers, earnings) + bare domain/email extraction from about text + real name extraction from about text (regex patterns for "I'm X", "my name is X", etc.) + link aggregator URL extraction (Linktree, Beacons, etc.)
+1b. **Link Aggregator Scrape** - Cheerio scraper on Linktree/Beacons/bio.link pages to extract emails, LinkedIn, and personal websites (max 15 pages/run)
+2. **Google Contact Search** - Google search for creators missing website/LinkedIn using real names when available + dedicated LinkedIn searches (site:linkedin.com queries), batched 5 at a time
 3. **Website Contact Crawl** - Crawl personal websites from social profiles for emails (Cheerio scraper on contact/about pages, max 30 sites/run)
 4. **Create & Score** - ICP scoring (0-100) with 6 pillars + audience size bonus + contact info bonus
 5. **Apollo.io Enrichment** - Contact lookup by name + domain + LinkedIn URL (toggleable, 50 calls/run, min score 15, deduped across runs via apolloEnrichedAt)
@@ -61,8 +62,11 @@ Users can enable/disable enrichment methods per run via the "Enrichment Methods"
 
 ## Social Graph Approach
 The pipeline collects cross-platform profile links (YouTube, Instagram, Twitter, Facebook, LinkedIn, TikTok, Discord, Twitch, Substack, personal website) from Patreon results. These are used to:
+- Extract real names from Patreon "about" text using regex patterns ("I'm X", "my name is X", "we are X and Y", etc.)
+- Scrape Linktree/Beacons/bio.link aggregator pages for emails, LinkedIn, and personal websites
 - Crawl personal websites for contact emails
 - Pass LinkedIn URLs to Apollo for better match rates
+- Use real names (when available) instead of brand names for Google/Apollo searches
 - Use website domains for Leads Finder fallback enrichment
 - Display linked platforms in results UI with platform-specific icons
 

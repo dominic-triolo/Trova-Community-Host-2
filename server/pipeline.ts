@@ -40,6 +40,70 @@ function extractDomain(url: string): string {
 }
 
 
+function extractRealNameFromAbout(aboutText: string, fallbackName: string): string | null {
+  if (!aboutText || aboutText.length < 10) return null;
+
+  const text = aboutText.substring(0, 1500);
+
+  const singleNamePatterns: Array<{ re: RegExp; group1: number; group2?: number }> = [
+    { re: /(?:I'm|I am|my name is|my name's)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})/, group1: 1 },
+    { re: /(?:Hi[!,.]?\s+I'm|Hey[!,.]?\s+I'm|Hello[!,.]?\s+I'm)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})/, group1: 1 },
+    { re: /(?:me,\s*)([A-Z][a-z]+\s+[A-Z][a-z]+)/, group1: 1 },
+    { re: /(?:created by|hosted by|run by)\s+([A-Z][a-z]+\s+[A-Z][a-z]+)/i, group1: 1 },
+  ];
+
+  const pairPatterns: Array<{ re: RegExp; g1: number; g2: number }> = [
+    { re: /[Ww]e are\s+([A-Z][a-z]+),?\s+([A-Z][a-z]+)/, g1: 1, g2: 2 },
+    { re: /[Ww]e're\s+([A-Z][a-z]+)\s+(?:and|&)\s+([A-Z][a-z]+)/, g1: 1, g2: 2 },
+    { re: /(?:our family\s*[-–—:]\s*)([A-Z][a-z]+)\s+\([^)]*\),?\s*([A-Z][a-z]+)/i, g1: 1, g2: 2 },
+    { re: /(?:I am|I'm)\s+([A-Z][a-z]+)\s+(?:and|&)\s+(?:my\s+\w+\s+)?([A-Z][a-z]+)/i, g1: 1, g2: 2 },
+  ];
+
+  for (const { re, g1, g2 } of pairPatterns) {
+    const match = text.match(re);
+    if (match && match[g1] && match[g2]) {
+      const n1 = match[g1].trim();
+      const n2 = match[g2].trim();
+      if (/^[A-Z][a-z]+$/.test(n1) && /^[A-Z][a-z]+$/.test(n2)) {
+        return `${n1} and ${n2}`;
+      }
+    }
+  }
+
+  for (const { re, group1 } of singleNamePatterns) {
+    const match = text.match(re);
+    if (match) {
+      const name = match[group1]?.trim();
+      if (name && name.length <= 40) {
+        const words = name.split(/\s+/);
+        const looksLikeName = words.every(w => /^[A-Z][a-z]+$/.test(w));
+        if (looksLikeName && words.length >= 1 && words[0].length >= 2) return name;
+      }
+    }
+  }
+
+  return null;
+}
+
+function extractLinkAggregatorUrls(aboutText: string, channels: Record<string, string>): string[] {
+  const urls: string[] = [];
+  const aggregatorHosts = ["linktr.ee", "beacons.ai", "linkin.bio", "linkpop.com", "hoo.be", "campsite.bio", "lnk.bio", "tap.bio", "solo.to", "bio.link", "carrd.co"];
+
+  const urlRegex = /https?:\/\/[^\s"'<>,)}\]]+/g;
+  const allText = `${aboutText || ""} ${Object.values(channels).join(" ")}`;
+  const matches = allText.match(urlRegex) || [];
+  for (const url of matches) {
+    try {
+      const host = new URL(url).hostname.replace(/^www\./, "");
+      if (aggregatorHosts.some(h => host.includes(h))) {
+        urls.push(url.split("?")[0]);
+      }
+    } catch {}
+  }
+
+  return Array.from(new Set(urls));
+}
+
 function classifyUrl(url: string): string {
   const domain = extractDomain(url);
   if (domain.includes("meetup.com")) return "meetup";
@@ -738,10 +802,18 @@ async function scrapePatreonCreators(
             else if (host.includes("twitch.tv") && !channels.twitch) channels.twitch = link;
             else if (host.includes("linkedin.com") && !channels.linkedin) channels.linkedin = link;
             else if (host.includes("substack.com") && !channels.substack) channels.substack = link;
+            else if ((host.includes("linktr.ee") || host.includes("beacons.ai") || host.includes("linkin.bio") || host.includes("bio.link") || host.includes("solo.to") || host.includes("carrd.co") || host.includes("campsite.bio")) && !channels.linktree) channels.linktree = link;
           } catch {}
         }
 
         const creatorEmail = extractEmailsFromText(`${description} ${aboutText}`)[0] || "";
+
+        const realName = extractRealNameFromAbout(aboutText, creatorName);
+
+        const aggregatorUrls = extractLinkAggregatorUrls(aboutText, channels);
+        if (aggregatorUrls.length > 0 && !channels.linktree) {
+          channels.linktree = aggregatorUrls[0];
+        }
 
         if (!channels.website) {
           for (const link of allLinks) {
@@ -770,7 +842,7 @@ async function scrapePatreonCreators(
           website: creatorUrl || "",
           email: creatorEmail,
           phone: "",
-          leaderName: creatorName,
+          leaderName: realName || creatorName,
           memberCount,
           subscriberCount: 0,
           ownedChannels: channels,
@@ -881,13 +953,25 @@ async function googleSearchEnrichCreators(
 
   await appendAndSave(`Google enrichment: searching for ${leadsToSearch.length} creators without website/LinkedIn...`);
 
-  const queries = leadsToSearch.map(l => {
-    const name = l.communityName || l.leaderName || "";
-    return { term: `"${name}" contact website email`, leadIdx: leads.indexOf(l) };
-  });
+  const queries: { term: string; leadIdx: number }[] = [];
+  for (const l of leadsToSearch) {
+    const brandName = l.communityName || "";
+    const realName = l.leaderName || "";
+    const idx = leads.indexOf(l);
+
+    if (realName && realName !== brandName) {
+      queries.push({ term: `"${realName}" email website`, leadIdx: idx });
+      queries.push({ term: `site:linkedin.com "${realName}"`, leadIdx: idx });
+    } else {
+      queries.push({ term: `"${brandName}" contact website email`, leadIdx: idx });
+      if (brandName.length > 3) {
+        queries.push({ term: `site:linkedin.com "${brandName}"`, leadIdx: idx });
+      }
+    }
+  }
 
   const batchSize = 5;
-  let enriched = 0;
+  const enrichedLeadIndices = new Set<number>();
 
   for (let i = 0; i < queries.length; i += batchSize) {
     const batch = queries.slice(i, i + batchSize);
@@ -977,7 +1061,7 @@ async function googleSearchEnrichCreators(
           }
         }
 
-        if (foundAnything) enriched++;
+        if (foundAnything) enrichedLeadIndices.add(batch[j].leadIdx);
       }
     } catch (err: any) {
       await appendAndSave(`[WARN] Google enrichment batch ${batchNum} failed: ${err.message}`);
@@ -986,7 +1070,95 @@ async function googleSearchEnrichCreators(
     await new Promise(r => setTimeout(r, 1000));
   }
 
-  await appendAndSave(`Google enrichment: found new data for ${enriched}/${leadsToSearch.length} creators`);
+  await appendAndSave(`Google enrichment: found new data for ${enrichedLeadIndices.size}/${leadsToSearch.length} creators`);
+}
+
+const LINK_AGGREGATOR_MAX = 15;
+
+async function enrichFromLinkAggregators(
+  leads: PlatformLead[],
+  appendAndSave: (msg: string) => Promise<void>,
+): Promise<void> {
+  const leadsWithAggregator = leads.filter(l =>
+    !l.email && l.ownedChannels?.linktree && l.ownedChannels.linktree.startsWith("http")
+  ).slice(0, LINK_AGGREGATOR_MAX);
+
+  if (leadsWithAggregator.length === 0) return;
+
+  await appendAndSave(`Link aggregator: scraping ${leadsWithAggregator.length} pages for contact info...`);
+
+  const startUrls = leadsWithAggregator.map(l => ({ url: l.ownedChannels!.linktree! }));
+
+  try {
+    const results = await runActorAndGetResults("apify~cheerio-scraper", {
+      startUrls,
+      maxCrawlPages: leadsWithAggregator.length,
+      maxConcurrency: 3,
+      pageFunction: `async function pageFunction(context) {
+  const { $, request } = context;
+  const text = $('body').text();
+  const links = [];
+  $('a[href]').each(function() { links.push($(this).attr('href')); });
+  return { url: request.url, text: text.substring(0, 8000), links: links.slice(0, 200) };
+}`,
+    }, 90000);
+
+    let enrichedCount = 0;
+    for (const result of results) {
+      const pageUrl = result.url || "";
+      const pageText = result.text || "";
+      const links: string[] = result.links || [];
+
+      const matchLead = leadsWithAggregator.find(l =>
+        l.ownedChannels?.linktree && pageUrl.toLowerCase().includes(
+          new URL(l.ownedChannels.linktree).pathname.toLowerCase()
+        )
+      );
+
+      if (!matchLead) continue;
+
+      let foundAnything = false;
+
+      const emails = extractEmailsFromText(pageText);
+      const validEmail = emails.find(e => !isBlockedEmail(e));
+      if (validEmail && !matchLead.email) {
+        matchLead.email = validEmail;
+        foundAnything = true;
+      }
+
+      const allUrls = [...links];
+      const urlRegex = /https?:\/\/[^\s"'<>,)}\]]+/g;
+      const textUrls = pageText.match(urlRegex) || [];
+      allUrls.push(...textUrls);
+
+      const socialHosts = ["youtube.com", "youtu.be", "instagram.com", "twitter.com", "x.com", "discord.gg", "discord.com", "facebook.com", "tiktok.com", "twitch.tv", "linkedin.com", "patreon.com", "google.com", "apple.com", "spotify.com", "amazon.com", "reddit.com", "tumblr.com", "pinterest.com", "github.com", "medium.com", "wordpress.com", "linktr.ee", "beacons.ai", "ko-fi.com", "buymeacoffee.com", "gumroad.com", "substack.com", "bit.ly", "apify.com", "meetup.com", "eventbrite.com"];
+
+      for (const link of allUrls) {
+        if (!link || typeof link !== "string" || !link.startsWith("http")) continue;
+        try {
+          const host = new URL(link).hostname.replace(/^www\./, "");
+
+          if (host.includes("linkedin.com") && link.includes("/in/") && !matchLead.ownedChannels?.linkedin) {
+            if (!matchLead.ownedChannels) matchLead.ownedChannels = {};
+            matchLead.ownedChannels.linkedin = link.split("?")[0];
+            foundAnything = true;
+          }
+
+          if (!socialHosts.some(s => host.includes(s)) && !matchLead.ownedChannels?.website) {
+            if (!matchLead.ownedChannels) matchLead.ownedChannels = {};
+            matchLead.ownedChannels.website = link.split("?")[0];
+            foundAnything = true;
+          }
+        } catch {}
+      }
+
+      if (foundAnything) enrichedCount++;
+    }
+
+    await appendAndSave(`Link aggregator: enriched ${enrichedCount}/${leadsWithAggregator.length} leads with new data`);
+  } catch (err: any) {
+    await appendAndSave(`[WARN] Link aggregator scraping failed: ${err.message}`);
+  }
 }
 
 const YOUTUBE_ABOUT_MAX = 20;
@@ -1246,6 +1418,22 @@ export async function runPipeline(runId: number): Promise<void> {
       } else {
         await appendAndSave(`[WARN] ${platformTasks[i].name} failed: ${result.reason?.message || "Unknown error"}`);
       }
+    }
+
+    const leadsWithLinktree = allPlatformLeads.filter(l =>
+      !l.email && l.ownedChannels?.linktree && l.ownedChannels.linktree.startsWith("http")
+    );
+    if (leadsWithLinktree.length > 0) {
+      await appendAndSave(`Link aggregator scrape: ${leadsWithLinktree.length} leads have Linktree/Beacons pages`, 28, "Step 1b: Link aggregator scrape");
+      await enrichFromLinkAggregators(allPlatformLeads, appendAndSave);
+    }
+
+    const realNameCount = allPlatformLeads.filter(l => {
+      const aboutText = l.raw?.about || "";
+      return extractRealNameFromAbout(aboutText, l.communityName || "") !== null;
+    }).length;
+    if (realNameCount > 0) {
+      await appendAndSave(`Real name extraction: found real names for ${realNameCount}/${allPlatformLeads.length} leads from about text`);
     }
 
     const leadsWithoutContactInfo = allPlatformLeads.filter(l => !l.email && !l.ownedChannels?.website && !l.ownedChannels?.linkedin);
