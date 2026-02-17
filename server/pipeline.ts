@@ -82,6 +82,33 @@ function extractRealNameFromAbout(aboutText: string, fallbackName: string): stri
     }
   }
 
+  return extractNameFromBrandName(fallbackName);
+}
+
+function extractNameFromBrandName(brandName: string): string | null {
+  if (!brandName || brandName.length < 3) return null;
+
+  const nonNameWords = new Set(["the", "and", "for", "with", "of", "in", "on", "at", "to", "by", "from", "or", "a", "an", "yoga", "travel", "fitness", "wellness", "adventure", "adventures", "outdoor", "hiking", "running", "cycling", "cooking", "photography", "music", "art", "creative", "studio", "media", "production", "productions", "film", "films", "therapy", "coaching", "training", "education", "academy", "school", "club", "community", "ministries", "church", "podcast", "show", "channel", "blog", "vlog", "vlogs", "game", "games", "gaming", "network", "digital", "online", "exclusive", "content", "movement", "collective", "cooperative", "project", "foundation", "initiative", "experience", "guide", "tour", "cruise", "sailing", "mother", "goddess", "father", "five", "parks", "ride", "tiger", "golden", "silver", "love", "peace", "magic", "wild", "free", "little", "brother", "sister", "friend", "fire", "water", "moon", "star", "sun", "sky", "mountain", "river", "ocean", "desert", "forest", "garden", "world", "earth", "spirit", "soul", "heart", "mind", "body", "sacred", "holy", "divine", "royal", "ancient", "hidden", "secret", "lost", "true", "pure", "bold", "bright", "dark", "deep", "high", "long", "great", "grand", "super", "mega", "ultra", "mini", "tiny", "big", "red", "blue", "green", "black", "white", "total", "full", "real", "best", "top", "pro", "new", "old", "hot", "cool", "fun", "yin", "zen"]);
+
+  const businessSuffixes = /\s+(?:Yoga|Travel|Fitness|Wellness|Adventures?|Outdoor|Hiking|Running|Cycling|Cooking|Photography|Music|Art|Creative|Studio|Media|Productions?|Films?|Therapy|Coaching|Training|Education|Academy|School|Club|Community|Ministries|Church|Podcast|Show|Channel|Blog|Vlogs?|Games?|Gaming|Network|Digital|Online|Exclusive|Content|Movement|Collective|Cooperative|Project|Foundation|Initiative|Experience|Guides?|Tours?|Cruise|Sailing|Workout|Nidra|Courses?|Cooperative)(?:\s.*)?$/i;
+
+  const stripped = brandName.replace(businessSuffixes, "").trim();
+  if (stripped && stripped !== brandName) {
+    const words = stripped.split(/\s+/);
+    if (words.length >= 2 && words.length <= 4) {
+      const allCapitalized = words.every(w => /^[A-Z][a-z]+$/.test(w));
+      const noneAreNonNameWords = !words.some(w => nonNameWords.has(w.toLowerCase()));
+      if (allCapitalized && noneAreNonNameWords) return stripped;
+    }
+  }
+
+  const words = brandName.split(/\s+/);
+  if (words.length >= 2 && words.length <= 3) {
+    const allCapitalized = words.every(w => /^[A-Z][a-z]+$/.test(w));
+    const noneAreNonNameWords = !words.some(w => nonNameWords.has(w.toLowerCase()));
+    if (allCapitalized && noneAreNonNameWords) return brandName;
+  }
+
   return null;
 }
 
@@ -148,6 +175,22 @@ function extractEmailsFromText(text: string): string[] {
   );
 }
 
+function isPlausibleDomain(domain: string): boolean {
+  const clean = domain.toLowerCase().replace(/^www\./, "").split("/")[0];
+  const parts = clean.split(".");
+  if (parts.length < 2) return false;
+  const name = parts[0];
+  const tld = parts[parts.length - 1];
+  if (name.length < 2) return false;
+  if (/^\d+$/.test(name)) return false;
+  if (name.length <= 3 && !/\/(contact|about|team|email)/i.test(domain)) return false;
+  const ccTlds = ["de", "fr", "es", "it", "nl", "se", "no", "fi", "dk", "ch", "at", "be", "nz", "in", "uk", "ca", "au", "us"];
+  if (ccTlds.includes(tld) && name.length < 5 && !name.includes("-")) return false;
+  const commonWords = ["the", "and", "for", "with", "from", "that", "this", "your", "our", "their", "have", "been", "were", "are", "was", "will", "can", "has", "had", "not", "but", "all", "its", "his", "her", "she", "him", "who", "get", "got", "let", "may", "new", "now", "old", "see", "way", "day", "too", "use", "say", "ring", "being", "come", "each", "make", "like", "long", "look", "many", "some", "than", "them", "then", "very", "when", "just", "know", "take", "want", "did", "here", "much", "also", "back", "only", "even", "most", "other", "after", "year", "give", "over", "such", "where", "circle", "namaste", "welcome", "hello", "please", "thanks", "thank", "about", "great", "today", "world", "peace", "happy", "travel", "yoga", "life", "love", "best", "free", "home", "work", "more", "open", "last", "live", "full", "real", "part", "done", "ever"];
+  if (commonWords.includes(name)) return false;
+  return true;
+}
+
 function extractBareDomainUrls(text: string): string[] {
   const bareDomainRegex = /(?<![/@a-zA-Z0-9])(?:www\.)?([a-zA-Z0-9][-a-zA-Z0-9]*\.(?:com|org|net|co|io|me|info|biz|us|uk|ca|au|de|fr|es|it|nl|se|no|fi|dk|ch|at|be|nz|in|co\.uk|com\.au|co\.nz)(?:\/[^\s"'<>,)}\]]*)?)/gi;
   const matches = text.match(bareDomainRegex) || [];
@@ -155,6 +198,7 @@ function extractBareDomainUrls(text: string): string[] {
   return Array.from(new Set(matches.map(m => m.trim())))
     .filter(m => !imageExts.some(ext => m.toLowerCase().endsWith(ext)))
     .filter(m => !m.includes("@"))
+    .filter(m => isPlausibleDomain(m))
     .map(m => m.startsWith("http") ? m : `https://${m}`);
 }
 
@@ -1334,7 +1378,18 @@ async function crawlCreatorWebsitesForEmails(
         if (!pageDomain || emailMap.has(pageDomain)) continue;
 
         const emails = extractEmailsFromText(pageText);
-        const validEmail = emails.find((e) => !isBlockedEmail(e));
+        const validEmail = emails.find((e) => {
+          if (isBlockedEmail(e)) return false;
+          const emailDomain = e.split("@")[1]?.toLowerCase();
+          if (!emailDomain) return false;
+          const siteBase = pageDomain.toLowerCase().replace(/^www\./, "");
+          const emailBase = emailDomain.replace(/^www\./, "");
+          if (emailBase === siteBase || emailBase.endsWith("." + siteBase) || siteBase.endsWith("." + emailBase)) return true;
+          const siteWords = siteBase.split(".")[0];
+          const emailWords = emailBase.split(".")[0];
+          if (siteWords.length >= 4 && emailWords.length >= 4 && (siteWords.includes(emailWords) || emailWords.includes(siteWords))) return true;
+          return false;
+        });
         if (validEmail) {
           emailMap.set(pageDomain, validEmail);
         }
