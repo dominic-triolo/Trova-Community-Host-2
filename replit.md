@@ -51,7 +51,7 @@ shared/
 3. **Website Contact Crawl** - Crawl personal websites from social profiles for emails (Cheerio scraper on contact/about pages, max 30 sites/run)
 4. **Create & Score** - ICP scoring (0-100) with 6 pillars + audience size bonus + contact info bonus
 5. **Apollo.io Enrichment** - Contact lookup by name + domain + LinkedIn URL (toggleable, 50 calls/run, min score 15, deduped across runs via apolloEnrichedAt)
-6. **Hunter.io Enrichment** - Domain search fallback for leads still missing email after Apollo (30 calls/run)
+6. **Leads Finder Enrichment** - Apify `code_crafter~leads-finder` actor as fallback for leads still missing email after Apollo (30 leads/run, batched by domain)
 7. **Scoring** - Final scoring pass (no qualification threshold; scores only)
 8. **Export** - CSV download for all leads with scores (global or per-run)
 
@@ -63,7 +63,7 @@ Users can enable/disable enrichment methods per run via the "Enrichment Methods"
 The pipeline collects cross-platform profile links (YouTube, Instagram, Twitter, Facebook, LinkedIn, TikTok, Discord, Twitch, Substack, personal website) from Patreon results. These are used to:
 - Crawl personal websites for contact emails
 - Pass LinkedIn URLs to Apollo for better match rates
-- Use website domains for Hunter.io domain search
+- Use website domains for Leads Finder fallback enrichment
 - Display linked platforms in results UI with platform-specific icons
 
 ## Platform Tabs
@@ -78,6 +78,7 @@ The discovery form uses platform-specific tabs. Currently Patreon is active; Fac
 - `aitorsm~eventbrite` - Eventbrite event/organizer search (structured data)
 - `apify/facebook-groups-scraper` - Facebook public group search (structured data)
 - `louisdeconinck~patreon-scraper` - Patreon creator search (social links, about text, tiers, earnings)
+- `code_crafter~leads-finder` - Email enrichment fallback ($1.50/1k leads, verified emails by domain)
 
 ## API Endpoints
 - `POST /api/runs` - Start a new pipeline run
@@ -89,7 +90,7 @@ The discovery form uses platform-specific tabs. Currently Patreon is active; Fac
 ## Contact Enrichment (Multi-Pass)
 - **Step 1 - Website Crawl**: Cheerio scraper crawls personal websites from social graph for emails (contact/about pages)
 - **Step 2 - Apollo.io**: People Match API (free 10k credits/mo) - searches by name + domain + LinkedIn URL (50 calls/run, min score 15)
-- **Step 3 - Hunter.io**: Domain Search (paid) - fallback for leads still missing email after Apollo (30 calls/run)
+- **Step 3 - Leads Finder**: Apify actor `code_crafter~leads-finder` ($1.50/1k leads) - fallback for leads still missing email after Apollo (30 leads/run, batched by domain, verified emails)
 - All three passes run sequentially after lead creation, before final scoring
 - Apollo already accepts linkedinUrl from social graph data for better match rates
 
@@ -97,7 +98,6 @@ The discovery form uses platform-specific tabs. Currently Patreon is active; Fac
 - `DATABASE_URL` - PostgreSQL connection
 - `APIFY_TOKEN` - Apify API token (secret)
 - `APOLLO_API_KEY` - Apollo.io API key (secret, primary enrichment)
-- `HUNTER_API_KEY` - Hunter.io API key (secret, fallback enrichment, optional)
 
 ## Running
 - `npm run dev` - Start development server

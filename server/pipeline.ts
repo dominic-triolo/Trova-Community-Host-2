@@ -2,7 +2,7 @@ import { storage } from "./storage";
 import { runActorAndGetResults } from "./apify";
 import { scoreLead } from "./scoring";
 import { apolloPersonMatch, isApolloAvailable, extractDomainFromUrl as apolloExtractDomain, isEnrichableDomain as apolloIsEnrichable } from "./apollo";
-import { hunterDomainSearch, extractDomainFromUrl, isEnrichableDomain, isHunterAvailable } from "./hunter";
+import { extractDomainFromUrl, isEnrichableDomain } from "./hunter";
 import { log } from "./index";
 import type { RunParams, InsertSourceUrl, InsertLead, InsertLeader } from "@shared/schema";
 
@@ -1728,9 +1728,9 @@ export async function runPipeline(runId: number): Promise<void> {
       await appendAndSave("Apollo enrichment skipped (disabled by user)");
     }
 
-    const HUNTER_MAX_CALLS_PER_RUN = 30;
+    const LEADS_FINDER_MAX_PER_RUN = 30;
     const refreshedLeads = await storage.listLeadsByRun(runId);
-    const leadsForHunter = refreshedLeads
+    const leadsForFinder = refreshedLeads
       .filter((l) => !l.email)
       .filter((l) => {
         const channels = (l.ownedChannels as Record<string, string>) || {};
@@ -1738,71 +1738,90 @@ export async function runPipeline(runId: number): Promise<void> {
         const domain = extractDomainFromUrl(websiteUrl);
         return domain && isEnrichableDomain(domain);
       })
-      .sort((a, b) => (b.score || 0) - (a.score || 0));
+      .sort((a, b) => (b.score || 0) - (a.score || 0))
+      .slice(0, LEADS_FINDER_MAX_PER_RUN);
 
-    if (isHunterAvailable() && leadsForHunter.length > 0) {
-      await appendAndSave(`Hunter.io: enriching ${Math.min(leadsForHunter.length, HUNTER_MAX_CALLS_PER_RUN)} leads with website domains...`, 87, "Step 9: Hunter.io enrichment");
-      const enrichedDomains = new Set<string>();
-      let hunterEnriched = 0;
-      let hunterCalls = 0;
+    if (leadsForFinder.length > 0) {
+      await appendAndSave(`Leads Finder: enriching ${leadsForFinder.length} leads by domain...`, 87, "Step 9: Leads Finder enrichment");
+      let finderEnriched = 0;
 
-      for (const lead of leadsForHunter) {
-        if (hunterCalls >= HUNTER_MAX_CALLS_PER_RUN) {
-          await appendAndSave(`Hunter.io: reached ${HUNTER_MAX_CALLS_PER_RUN} call limit, stopping`);
-          break;
+      const domains = Array.from(new Set(
+        leadsForFinder.map((l) => {
+          const ch = (l.ownedChannels as Record<string, string>) || {};
+          const websiteUrl = ch.website || l.website || "";
+          return extractDomainFromUrl(websiteUrl);
+        }).filter((d) => d && isEnrichableDomain(d))
+      ));
+
+      if (domains.length > 0) {
+        try {
+          const finderResults = await runActorAndGetResults("code_crafter~leads-finder", {
+            company_domain: domains,
+            email_status: ["verified"],
+            fetch_count: Math.min(domains.length * 5, 200),
+          }, 120000);
+
+          const emailByDomain = new Map<string, any>();
+          for (const r of finderResults) {
+            const email = r.email || r.work_email || r.personal_email || "";
+            if (!email || isBlockedEmail(email)) continue;
+            const domain = r.company_domain || r.domain || "";
+            if (domain && !emailByDomain.has(domain.toLowerCase())) {
+              emailByDomain.set(domain.toLowerCase(), r);
+            }
+          }
+
+          for (const lead of leadsForFinder) {
+            const ch = (lead.ownedChannels as Record<string, string>) || {};
+            const websiteUrl = ch.website || lead.website || "";
+            const domain = extractDomainFromUrl(websiteUrl);
+            if (!domain) continue;
+
+            const match = emailByDomain.get(domain.toLowerCase());
+            if (!match) continue;
+
+            const email = match.email || match.work_email || match.personal_email || "";
+            if (!email || isBlockedEmail(email)) continue;
+
+            const updateData: Record<string, any> = { email };
+            if (match.phone && !lead.phone) updateData.phone = match.phone;
+            if (match.linkedin_url && !lead.linkedin) updateData.linkedin = match.linkedin_url;
+            if (!lead.leaderName && match.first_name && match.last_name) {
+              updateData.leaderName = `${match.first_name} ${match.last_name}`;
+            }
+
+            const breakdown = scoreLead({
+              name: lead.communityName || "",
+              description: "",
+              type: lead.communityType || "",
+              location: lead.location || "",
+              website: lead.website || "",
+              email: updateData.email || lead.email || "",
+              phone: updateData.phone || lead.phone || "",
+              linkedin: updateData.linkedin || lead.linkedin || "",
+              ownedChannels: ch,
+              monetizationSignals: (lead.monetizationSignals as Record<string, any>) || {},
+              engagementSignals: (lead.engagementSignals as Record<string, any>) || {},
+              tripFitSignals: (lead.tripFitSignals as Record<string, any>) || {},
+              leaderName: updateData.leaderName || lead.leaderName || "",
+              memberCount: (lead.engagementSignals as any)?.member_count || 0,
+              subscriberCount: (lead.engagementSignals as any)?.subscriber_count || 0,
+              raw: (lead.raw as Record<string, any>) || {},
+            });
+
+            updateData.score = breakdown.total;
+            updateData.scoreBreakdown = breakdown;
+
+            await storage.updateLead(lead.id, updateData);
+            finderEnriched++;
+          }
+
+          await appendAndSave(`Leads Finder: enriched ${finderEnriched} leads from ${domains.length} domains`);
+          enrichedCount += finderEnriched;
+        } catch (err: any) {
+          await appendAndSave(`[WARN] Leads Finder failed: ${err.message}`);
         }
-
-        const channels = (lead.ownedChannels as Record<string, string>) || {};
-        const websiteUrl = channels.website || lead.website || "";
-        const domain = extractDomainFromUrl(websiteUrl);
-        if (!domain || !isEnrichableDomain(domain) || enrichedDomains.has(domain)) continue;
-        enrichedDomains.add(domain);
-
-        hunterCalls++;
-        const result = await hunterDomainSearch(domain);
-        if (!result || result.emails.length === 0) continue;
-
-        const bestEmail = result.emails.sort((a, b) => b.confidence - a.confidence)[0];
-        if (isBlockedEmail(bestEmail.value)) continue;
-
-        const updateData: Record<string, any> = { email: bestEmail.value };
-        if (bestEmail.phone_number && !lead.phone) updateData.phone = bestEmail.phone_number;
-        if (bestEmail.linkedin && !lead.linkedin) updateData.linkedin = bestEmail.linkedin;
-        if (!lead.leaderName && bestEmail.first_name && bestEmail.last_name) {
-          updateData.leaderName = `${bestEmail.first_name} ${bestEmail.last_name}`;
-        }
-
-        const breakdown = scoreLead({
-          name: lead.communityName || "",
-          description: "",
-          type: lead.communityType || "",
-          location: lead.location || "",
-          website: lead.website || "",
-          email: updateData.email || lead.email || "",
-          phone: updateData.phone || lead.phone || "",
-          linkedin: updateData.linkedin || lead.linkedin || "",
-          ownedChannels: channels,
-          monetizationSignals: (lead.monetizationSignals as Record<string, any>) || {},
-          engagementSignals: (lead.engagementSignals as Record<string, any>) || {},
-          tripFitSignals: (lead.tripFitSignals as Record<string, any>) || {},
-          leaderName: updateData.leaderName || lead.leaderName || "",
-          memberCount: (lead.engagementSignals as any)?.member_count || 0,
-          subscriberCount: (lead.engagementSignals as any)?.subscriber_count || 0,
-          raw: (lead.raw as Record<string, any>) || {},
-        });
-
-        updateData.score = breakdown.total;
-        updateData.scoreBreakdown = breakdown;
-
-        await storage.updateLead(lead.id, updateData);
-        hunterEnriched++;
-        await new Promise((r) => setTimeout(r, 200));
       }
-
-      await appendAndSave(`Hunter.io: enriched ${hunterEnriched} leads from ${enrichedDomains.size} domains (${hunterCalls} API calls)`);
-      enrichedCount += hunterEnriched;
-    } else if (leadsForHunter.length > 0) {
-      await appendAndSave("Hunter.io: skipped (no API key configured)");
     }
 
     await appendAndSave("Finalizing...", 92, "Step 10: Finalizing");
@@ -2047,9 +2066,9 @@ export async function reEnrichRun(runId: number): Promise<void> {
       await appendAndSave("Apollo enrichment skipped (disabled by user)", 70);
     }
 
-    const RE_HUNTER_MAX_CALLS = 30;
-    const hunterLeads = await storage.listLeadsByRun(runId);
-    const leadsForHunterReEnrich = hunterLeads
+    const RE_FINDER_MAX = 30;
+    const finderLeads = await storage.listLeadsByRun(runId);
+    const leadsForFinderReEnrich = finderLeads
       .filter((l) => !l.email || l.email === "")
       .filter((l) => {
         const ch = (l.ownedChannels as Record<string, string>) || {};
@@ -2057,42 +2076,64 @@ export async function reEnrichRun(runId: number): Promise<void> {
         const domain = extractDomainFromUrl(websiteUrl);
         return domain && isEnrichableDomain(domain);
       })
-      .sort((a, b) => (b.score || 0) - (a.score || 0));
+      .sort((a, b) => (b.score || 0) - (a.score || 0))
+      .slice(0, RE_FINDER_MAX);
 
-    if (isHunterAvailable() && leadsForHunterReEnrich.length > 0) {
-      await appendAndSave(`Step 4: Hunter.io enrichment for ${Math.min(leadsForHunterReEnrich.length, RE_HUNTER_MAX_CALLS)} leads...`, 72, "Re-enrichment: Hunter.io");
-      const enrichedDomains = new Set<string>();
-      let hunterEnriched = 0;
-      let hunterCalls = 0;
+    if (leadsForFinderReEnrich.length > 0) {
+      await appendAndSave(`Step 4: Leads Finder enrichment for ${leadsForFinderReEnrich.length} leads...`, 72, "Re-enrichment: Leads Finder");
 
-      for (const lead of leadsForHunterReEnrich) {
-        if (hunterCalls >= RE_HUNTER_MAX_CALLS) break;
-        const ch = (lead.ownedChannels as Record<string, string>) || {};
-        const websiteUrl = ch.website || lead.website || "";
-        const domain = extractDomainFromUrl(websiteUrl);
-        if (!domain || !isEnrichableDomain(domain) || enrichedDomains.has(domain)) continue;
-        enrichedDomains.add(domain);
+      const domains = Array.from(new Set(
+        leadsForFinderReEnrich.map((l) => {
+          const ch = (l.ownedChannels as Record<string, string>) || {};
+          return extractDomainFromUrl(ch.website || l.website || "");
+        }).filter((d) => d && isEnrichableDomain(d))
+      ));
 
-        hunterCalls++;
-        const result = await hunterDomainSearch(domain);
-        if (!result || result.emails.length === 0) continue;
+      if (domains.length > 0) {
+        try {
+          const finderResults = await runActorAndGetResults("code_crafter~leads-finder", {
+            company_domain: domains,
+            email_status: ["verified"],
+            fetch_count: Math.min(domains.length * 5, 200),
+          }, 120000);
 
-        const bestEmail = result.emails.sort((a, b) => b.confidence - a.confidence)[0];
-        if (isBlockedEmail(bestEmail.value)) continue;
+          const emailByDomain = new Map<string, any>();
+          for (const r of finderResults) {
+            const email = r.email || r.work_email || r.personal_email || "";
+            if (!email || isBlockedEmail(email)) continue;
+            const domain = r.company_domain || r.domain || "";
+            if (domain && !emailByDomain.has(domain.toLowerCase())) {
+              emailByDomain.set(domain.toLowerCase(), r);
+            }
+          }
 
-        const updateData: Record<string, any> = { email: bestEmail.value };
-        if (bestEmail.phone_number && !lead.phone) updateData.phone = bestEmail.phone_number;
-        if (bestEmail.linkedin && !lead.linkedin) updateData.linkedin = bestEmail.linkedin;
+          let finderEnriched = 0;
+          for (const lead of leadsForFinderReEnrich) {
+            const ch = (lead.ownedChannels as Record<string, string>) || {};
+            const websiteUrl = ch.website || lead.website || "";
+            const domain = extractDomainFromUrl(websiteUrl);
+            if (!domain) continue;
 
-        if (Object.keys(updateData).length > 0) {
-          await storage.updateLead(lead.id, updateData);
-          hunterEnriched++;
+            const match = emailByDomain.get(domain.toLowerCase());
+            if (!match) continue;
+
+            const email = match.email || match.work_email || match.personal_email || "";
+            if (!email || isBlockedEmail(email)) continue;
+
+            const updateData: Record<string, any> = { email };
+            if (match.phone && !lead.phone) updateData.phone = match.phone;
+            if (match.linkedin_url && !lead.linkedin) updateData.linkedin = match.linkedin_url;
+
+            if (Object.keys(updateData).length > 0) {
+              await storage.updateLead(lead.id, updateData);
+              finderEnriched++;
+            }
+          }
+          await appendAndSave(`Leads Finder: enriched ${finderEnriched} leads from ${domains.length} domains`);
+        } catch (err: any) {
+          await appendAndSave(`[WARN] Leads Finder re-enrichment failed: ${err.message}`);
         }
-        await new Promise((r) => setTimeout(r, 200));
       }
-      await appendAndSave(`Hunter.io: enriched ${hunterEnriched} leads from ${enrichedDomains.size} domains`);
-    } else if (leadsForHunterReEnrich.length > 0) {
-      await appendAndSave("Hunter.io: skipped (no API key configured)");
     }
 
     await appendAndSave(`Step 5: Re-scoring all leads...`, 80, "Re-enrichment: Scoring");
