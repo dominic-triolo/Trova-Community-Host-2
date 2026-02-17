@@ -38,21 +38,20 @@ import { SiPatreon, SiFacebook, SiLinkedin } from "react-icons/si";
 function UsedKeywordsSuggestions({
   usedKeywords,
   currentKeywords,
-  onAdd,
+  onAddGroup,
 }: {
   usedKeywords: string[];
   currentKeywords: string[];
-  onAdd: (kw: string) => void;
+  onAddGroup: (keywords: readonly string[]) => void;
 }) {
   const suggestions = useMemo(() => {
     if (usedKeywords.length === 0) return [];
 
-    const allRecs = RECOMMENDED_KEYWORDS.map((r) => r.keyword);
-    const unused = allRecs.filter(
-      (kw) => !usedKeywords.includes(kw) && !currentKeywords.includes(kw)
-    );
+    const unused = RECOMMENDED_KEYWORDS.filter((rec) => {
+      const anyUsed = rec.keywords.some((kw) => usedKeywords.includes(kw) || currentKeywords.includes(kw));
+      return !anyUsed;
+    });
 
-    if (unused.length === 0) return [];
     return unused.slice(0, 5);
   }, [usedKeywords, currentKeywords]);
 
@@ -65,21 +64,18 @@ function UsedKeywordsSuggestions({
         <p className="text-xs font-medium text-muted-foreground">Try these next</p>
       </div>
       <div className="flex flex-wrap gap-1.5">
-        {suggestions.map((kw) => {
-          const rec = RECOMMENDED_KEYWORDS.find((r) => r.keyword === kw);
-          return (
-            <Badge
-              key={kw}
-              variant="outline"
-              className="cursor-pointer select-none"
-              onClick={() => onAdd(kw)}
-              data-testid={`badge-suggest-${kw.replace(/\s+/g, "-").slice(0, 30)}`}
-            >
-              <Plus className="w-3 h-3 mr-0.5" />
-              {rec?.label || kw}
-            </Badge>
-          );
-        })}
+        {suggestions.map((rec) => (
+          <Badge
+            key={rec.label}
+            variant="outline"
+            className="cursor-pointer select-none"
+            onClick={() => onAddGroup(rec.keywords)}
+            data-testid={`badge-suggest-${rec.label.replace(/\s+/g, "-").slice(0, 30)}`}
+          >
+            <Plus className="w-3 h-3 mr-0.5" />
+            {rec.label}
+          </Badge>
+        ))}
       </div>
     </div>
   );
@@ -151,6 +147,20 @@ export default function Home() {
     if (!trimmed) return;
     if (params.seedKeywords.includes(trimmed)) return;
     setParams((p) => ({ ...p, seedKeywords: [...p.seedKeywords, trimmed] }));
+  };
+
+  const addKeywordGroup = (keywords: readonly string[]) => {
+    setParams((p) => {
+      const existing = new Set(p.seedKeywords);
+      const newKws = keywords.filter((kw) => !existing.has(kw));
+      if (newKws.length === 0) return p;
+      return { ...p, seedKeywords: [...p.seedKeywords, ...newKws] };
+    });
+  };
+
+  const removeKeywordGroup = (keywords: readonly string[]) => {
+    const toRemove = new Set(keywords);
+    setParams((p) => ({ ...p, seedKeywords: p.seedKeywords.filter((k) => !toRemove.has(k)) }));
   };
 
   const removeKeyword = (keyword: string) => {
@@ -229,16 +239,18 @@ export default function Home() {
                 <p className="text-xs text-muted-foreground mb-2">Click to add recommended searches:</p>
                 <div className="flex flex-wrap gap-1.5">
                   {RECOMMENDED_KEYWORDS.map((rec) => {
-                    const isActive = params.seedKeywords.includes(rec.keyword);
+                    const isActive = rec.keywords.every((kw) => params.seedKeywords.includes(kw));
+                    const isPartial = !isActive && rec.keywords.some((kw) => params.seedKeywords.includes(kw));
                     return (
                       <Badge
-                        key={rec.keyword}
+                        key={rec.label}
                         variant={isActive ? "default" : "outline"}
-                        className={`cursor-pointer select-none toggle-elevate ${isActive ? "toggle-elevated" : ""}`}
-                        onClick={() => isActive ? removeKeyword(rec.keyword) : addKeyword(rec.keyword)}
-                        data-testid={`badge-rec-${rec.keyword.replace(/\s+/g, "-")}`}
+                        className={`cursor-pointer select-none toggle-elevate ${isActive ? "toggle-elevated" : ""} ${isPartial ? "border-primary/50" : ""}`}
+                        onClick={() => isActive ? removeKeywordGroup(rec.keywords) : addKeywordGroup(rec.keywords)}
+                        data-testid={`badge-rec-${rec.label.replace(/\s+/g, "-")}`}
                       >
                         {rec.label}
+                        <span className="text-[10px] opacity-60 ml-0.5">({rec.keywords.length})</span>
                       </Badge>
                     );
                   })}
@@ -272,7 +284,7 @@ export default function Home() {
                   <UsedKeywordsSuggestions
                     usedKeywords={usedKeywords}
                     currentKeywords={params.seedKeywords}
-                    onAdd={addKeyword}
+                    onAddGroup={addKeywordGroup}
                   />
                 </>
               )}
@@ -407,7 +419,7 @@ export default function Home() {
 
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <p className="text-sm text-muted-foreground">
-            {params.seedKeywords.length} keyword{params.seedKeywords.length !== 1 ? "s" : ""} selected
+            {params.seedKeywords.length} search term{params.seedKeywords.length !== 1 ? "s" : ""} selected
             {params.seedGeos.length > 0 && ` across ${params.seedGeos.length} location${params.seedGeos.length !== 1 ? "s" : ""}`}
           </p>
           <Button
