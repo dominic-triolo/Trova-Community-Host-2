@@ -1,0 +1,147 @@
+You are a senior full-stack engineer + data/ML engineer. Build a production-ready “Super Host Discovery” platform for Trova that finds and scores community leaders (“Hosts”) using Apify APIs, and continuously learns which scraping strategies work best.
+
+CONTEXT / ICP (use exactly this in scoring logic)
+A “Super Host” is a creator/community leader with:
+- Owned audience (email list/substack/podcast/FB group/paid community)
+- Identity + belonging niche (women outdoors, LGBTQ+, Latinas, body positive, etc.)
+- Monetized trust (courses/coaching/membership/affiliate/retreats)
+- Operational stamina (repeatable play; retreats/events for years)
+- Signals: “community”, “membership”, “join”, “newsletter”, “subscribers”, “patreon”, “retreat”, “workshop”, “chapters”, “ambassadors”
+Scoring rubric: each 0–3 (max 18), prioritize 13+
+1) Owned audience
+2) Niche clarity
+3) Community depth
+4) Monetization proof
+5) Event/retreat experience
+6) Partner-fit (wants logistics partner, not DIY end-to-end)
+
+PRIMARY GOAL
+Given a search intent (niche + geo + keywords), automatically:
+1) Select the best sourcing pipeline (strategy) based on historical performance
+2) Run a bounded set of Apify actors to collect leads (community operators + creator broadcasters)
+3) Normalize, dedupe, enrich, then score leads using the above rubric
+4) Capture outcomes and user feedback, and update strategy selection so it improves over time
+
+MUST BE BOUNDED + SECURE
+- Server can ONLY call Apify API + optional scoring model API (OpenAI). No arbitrary scraping from server.
+- Apify actor allowlist (hard-coded config). Only allow those actor IDs.
+- Per-run max cost USD, max runtime, max leads, max concurrency.
+- Secrets only in env vars. Never log secrets.
+- Treat scraped text as untrusted. Never put raw HTML into LLM prompt. Only pass extracted fields.
+- All LLM outputs must be strict JSON validated against schema. Retry once if invalid.
+
+TECH STACK (Replit-friendly)
+- Backend: Node.js + Express + TypeScript
+- Frontend: React + Vite + Tailwind
+- DB: Postgres via Prisma (use whatever Replit supports)
+- Queue: BullMQ + Redis if available; otherwise implement a DB-backed job queue
+
+DATA MODEL (Prisma)
+- runs(id, createdAt, contextJson, strategyId, status, costUsd, runtimeSec, totalLeads, duplicates, reward, notes)
+- strategies(id, name, enabled, definitionJson, createdAt)
+- leads(id, runId, name, typeEnum[community_operator|creator_broadcaster|unknown], description, website, emailsJson, socialsJson, locationJson, sizeSignalsJson, monetizationSignalsJson, communitySignalsJson, sourceJson, dedupeKey, scoreJson, createdAt)
+- labels(id, leadId, labelEnum[qualified|not_qualified|contacted|won], notes, createdAt)
+- strategy_stats(id, strategyId, contextBucket, alpha, beta, uses, avgReward, lastUsedAt)
+
+LEAD SCHEMA (normalize everything into this)
+Lead fields should include:
+- name
+- website
+- primary_email (if found)
+- socials: instagram/youtube/podcast/substack/facebook_group/linkedin
+- “owned audience signals”: newsletter, subscriber count if present, “link in bio” funnel detected
+- “community depth signals”: membership, chapters, discord, fb group size, meetup cadence
+- “monetization signals”: courses/coaching/patreon/affiliate/store/retreats
+- “event experience signals”: retreat, workshop, annual trip, recurring events
+- “identity niche keywords” extracted
+- source lineage: which actor, query, dataset item id
+
+SCORING
+Implement deterministic first-pass scoring (no LLM required) using keyword/regex rules:
+- For each rubric category score 0–3 based on extracted signals
+Then (optional) an LLM “refiner” that can adjust +/-1 but must justify using only extracted fields.
+Store:
+- rubric scores per category
+- total score
+- evidence strings (bullets) per category explaining why score was given
+- confidence 0–1
+
+STRATEGY SYSTEM (core of learning)
+A “strategy” is a JSON plan with steps and stop rules.
+
+Strategy JSON example:
+{
+ "id":"substack_then_domain_enrich_v1",
+ "name":"Substack writers w/ community signals",
+ "context_tags":["writers","newsletter","community_operator"],
+ "steps":[
+   {"type":"APIFY_RUN_ACTOR","actorId":"<ALLOWLISTED_ACTOR>","inputTemplate":{...}},
+   {"type":"TRANSFORM_EXTRACT_SIGNALS","config":{...}},
+   {"type":"DEDUPE","config":{...}},
+   {"type":"APIFY_RUN_ACTOR","actorId":"<ALLOWLISTED_ENRICHMENT_ACTOR>","inputTemplate":{...}},
+   {"type":"SCORE_RUBRIC","config":{"mode":"deterministic+optional_llm"}}
+ ],
+ "stop_rules":{"maxCostUsd":15,"maxLeads":400,"maxRuntimeSec":900}
+}
+
+Provide at least 8 default strategies aligned to the sourcing plays:
+1) Facebook Groups -> extract admins/mods -> website/email enrich -> score
+2) Meetup groups -> extract organizers -> enrich -> score
+3) Substack directory/search -> extract writers -> website -> enrich -> score
+4) Podcasts search -> extract hosts -> website -> enrich -> score
+5) Patreon/membership communities -> extract creators -> enrich -> score
+6) Eventbrite events “retreat/workshop” -> extract organizers -> enrich -> score
+7) Coaching/fitness/spirituality communities -> (source via Apify search actor) -> enrich -> score
+8) “Community Operators” generic pipeline (keyword-heavy: chapters, ambassadors, join, membership)
+
+If a default strategy requires an Apify actor that doesn’t exist, implement a placeholder and clearly comment it, but keep the architecture working.
+
+LEARNING / IMPROVEMENT
+Implement contextual multi-armed bandit (Thompson Sampling) to choose strategies.
+- Each run chooses a strategy based on context_bucket = hash(niche, geo, source_type_preference, budget_tier)
+- Exploration epsilon = 0.15
+Reward function:
+reward = (qualified_leads * 6) + (avg_score_over_13 * 2) + (total_leads * 0.1) - (costUsd * 1.5) - (runtime_minutes * 0.2) - (duplicates * 0.15)
+Where:
+- qualified_leads derived from user labels; if no labels yet, use proxy = count(leads with score >= 13)
+- avg_score_over_13 = average of (score-13) for those >=13
+Update alpha/beta per (strategy, context_bucket) using success = proxyQualified>0 or labeled qualified>0.
+
+UI REQUIREMENTS
+1) Search page:
+- inputs: niche, geo, keywords, source toggles (facebook/meetup/substack/podcast/eventbrite/patreon), max budget, batch size
+- “Run” button
+2) Run detail page:
+- chosen strategy + why (bandit stats + exploration)
+- progress timeline per step
+- live metrics: leads found, duplicates removed, cost, runtime
+- leads table with filters (score >=13, source type, niche keywords)
+- export CSV
+3) Lead detail drawer:
+- show evidence + rubric breakdown + extracted signals
+- button to label qualified/not qualified/contacted/won
+4) Strategies dashboard:
+- view/edit strategies JSON (validate schema)
+- enable/disable
+- see metrics per strategy/context
+5) Admin settings:
+- manage allowlist of Apify actors (config file)
+- budgets, concurrency
+
+APIFY INTEGRATION DETAILS
+- Build a single Apify client wrapper:
+  - runActor(actorId, input) => runId
+  - pollRun(runId) => status
+  - fetchDatasetItems(datasetId) => items
+- Store raw dataset items (compressed JSON) linked to run for auditability
+- Track cost if Apify metadata supports it; else approximate by items count and config constants
+
+QUALITY BAR
+- TypeScript everywhere
+- robust error handling
+- resumable jobs (if run crashes mid-way it can continue)
+- unit tests for: dedupeKey, scoring rules, bandit selection/update, strategy validation
+- README with setup and security model
+
+DELIVERABLE
+Produce the full working Replit app. It must run with one command, include seed data for strategies, and show results from at least one working default strategy using Apify.
