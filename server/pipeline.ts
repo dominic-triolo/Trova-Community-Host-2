@@ -526,6 +526,18 @@ function isPatreonCdnUrl(url: string): boolean {
   return lower.includes("patreonusercontent.com") || lower.includes("patreon-media") || lower.includes("token-hash=");
 }
 
+function computeApolloInputHash(lead: { leaderName?: string | null; communityName?: string | null; website?: string | null; ownedChannels?: Record<string, string> | null }): string {
+  const name = (lead.leaderName || lead.communityName || "").toLowerCase().trim();
+  const channels = (lead.ownedChannels as Record<string, string>) || {};
+  let domain = "";
+  try {
+    const ws = channels.website || lead.website || "";
+    if (ws) domain = new URL(ws).hostname.replace(/^www\./, "");
+  } catch {}
+  const linkedin = (channels.linkedin || "").split("?")[0].toLowerCase();
+  return `${name}|${domain}|${linkedin}`;
+}
+
 function isValidApolloCandidate(leaderName: string): boolean {
   if (!leaderName) return false;
   const nameParts = leaderName.trim().split(/\s+/);
@@ -945,6 +957,104 @@ async function googleSearchEnrichCreators(
   await appendAndSave(`Google enrichment: found new data for ${enriched}/${leadsToSearch.length} creators`);
 }
 
+const YOUTUBE_ABOUT_MAX = 20;
+
+async function enrichFromYouTubeAboutPages(
+  leads: PlatformLead[],
+  appendAndSave: (msg: string) => Promise<void>,
+): Promise<void> {
+  const leadsWithYouTube = leads.filter(l =>
+    !l.email && l.ownedChannels?.youtube && l.ownedChannels.youtube.startsWith("http") && !l.ownedChannels?.website
+  ).slice(0, YOUTUBE_ABOUT_MAX);
+
+  if (leadsWithYouTube.length === 0) {
+    return;
+  }
+
+  await appendAndSave(`YouTube about pages: checking ${leadsWithYouTube.length} channels for email/website...`);
+
+  const startUrls: { url: string }[] = [];
+  for (const lead of leadsWithYouTube) {
+    const ytUrl = lead.ownedChannels!.youtube!;
+    let aboutUrl = ytUrl.replace(/\/+$/, "");
+    if (!aboutUrl.includes("/about")) {
+      aboutUrl += "/about";
+    }
+    startUrls.push({ url: aboutUrl });
+  }
+
+  try {
+    const results = await runActorAndGetResults("apify~cheerio-scraper", {
+      startUrls,
+      maxCrawlPages: leadsWithYouTube.length,
+      maxConcurrency: 3,
+      pageFunction: `async function pageFunction(context) {
+  const { $, request } = context;
+  const text = $('body').text();
+  const links = [];
+  $('a[href]').each(function() { links.push($(this).attr('href')); });
+  return { url: request.url, text: text.substring(0, 8000), links: links.slice(0, 100) };
+}`,
+    }, 90000);
+
+    let enrichedCount = 0;
+    for (const result of results) {
+      const pageUrl = result.url || "";
+      const pageText = result.text || "";
+      const links: string[] = result.links || [];
+
+      const channelBase = pageUrl.replace(/\/about\/?$/, "").replace(/\/+$/, "").toLowerCase();
+
+      const matchLead = leadsWithYouTube.find(l => {
+        const ytUrl = (l.ownedChannels?.youtube || "").replace(/\/+$/, "").toLowerCase();
+        return ytUrl === channelBase || channelBase.startsWith(ytUrl);
+      });
+
+      if (!matchLead) continue;
+
+      let foundAnything = false;
+
+      const emails = extractEmailsFromText(pageText);
+      const validEmail = emails.find(e => !isBlockedEmail(e));
+      if (validEmail && !matchLead.email) {
+        matchLead.email = validEmail;
+        foundAnything = true;
+      }
+
+      const allUrls = [...links];
+      const urlRegex = /https?:\/\/[^\s"'<>,)}\]]+/g;
+      const textUrls = pageText.match(urlRegex) || [];
+      allUrls.push(...textUrls);
+
+      for (const link of allUrls) {
+        if (!link || typeof link !== "string" || !link.startsWith("http")) continue;
+        try {
+          const host = new URL(link).hostname.replace(/^www\./, "");
+          const socialHosts = ["youtube.com", "youtu.be", "instagram.com", "twitter.com", "x.com", "discord.gg", "discord.com", "facebook.com", "tiktok.com", "twitch.tv", "linkedin.com", "patreon.com", "google.com", "apple.com", "spotify.com", "amazon.com", "reddit.com", "tumblr.com", "pinterest.com", "github.com", "medium.com", "wordpress.com", "linktr.ee", "beacons.ai", "ko-fi.com", "buymeacoffee.com", "gumroad.com", "substack.com", "bit.ly", "apify.com", "meetup.com", "eventbrite.com", "yelp.com", "tripadvisor.com"];
+
+          if (host.includes("linkedin.com") && link.includes("/in/") && !matchLead.ownedChannels?.linkedin) {
+            if (!matchLead.ownedChannels) matchLead.ownedChannels = {};
+            matchLead.ownedChannels.linkedin = link.split("?")[0];
+            foundAnything = true;
+          }
+
+          if (!socialHosts.some(s => host.includes(s)) && !matchLead.ownedChannels?.website) {
+            if (!matchLead.ownedChannels) matchLead.ownedChannels = {};
+            matchLead.ownedChannels.website = link.split("?")[0];
+            foundAnything = true;
+          }
+        } catch {}
+      }
+
+      if (foundAnything) enrichedCount++;
+    }
+
+    await appendAndSave(`YouTube about pages: enriched ${enrichedCount}/${leadsWithYouTube.length} leads with new data`);
+  } catch (err: any) {
+    await appendAndSave(`[WARN] YouTube about page scraping failed: ${err.message}`);
+  }
+}
+
 async function crawlCreatorWebsitesForEmails(
   leads: PlatformLead[],
   appendAndSave: (msg: string) => Promise<void>,
@@ -1112,6 +1222,14 @@ export async function runPipeline(runId: number): Promise<void> {
       await googleSearchEnrichCreators(allPlatformLeads, appendAndSave);
     } else {
       await appendAndSave("Google enrichment: skipped (all leads already have contact info)");
+    }
+
+    const leadsWithYouTubeNoSite = allPlatformLeads.filter(l =>
+      !l.email && l.ownedChannels?.youtube && l.ownedChannels.youtube.startsWith("http") && !l.ownedChannels?.website
+    );
+    if (leadsWithYouTubeNoSite.length > 0) {
+      await appendAndSave(`YouTube about pages: ${leadsWithYouTubeNoSite.length} leads have YouTube but no website/email`, 35, "Step 2b: YouTube about page scrape");
+      await enrichFromYouTubeAboutPages(allPlatformLeads, appendAndSave);
     }
 
     const leadsNeedingEmail = allPlatformLeads.filter(l => !l.email && l.ownedChannels?.website && !isPatreonCdnUrl(l.ownedChannels.website));
@@ -1640,7 +1758,8 @@ export async function runPipeline(runId: number): Promise<void> {
             break;
           }
           try {
-            if (lead.apolloEnrichedAt) {
+            const currentHash = computeApolloInputHash(lead);
+            if (lead.apolloEnrichedAt && lead.apolloInputHash === currentHash) {
               apolloDeduped++;
               continue;
             }
@@ -1669,6 +1788,8 @@ export async function runPipeline(runId: number): Promise<void> {
 
             const linkedinUrl = channels.linkedin && channels.linkedin.startsWith("http") ? channels.linkedin : undefined;
 
+            log(`[APOLLO] Lead ${lead.id} "${leaderName}": domain=${enrichableDomain || "none"}, linkedin=${linkedinUrl ? "yes" : "no"}, hasRealName=${hasRealName}`, "apollo");
+
             apolloCalls++;
             let result = await apolloPersonMatch({
               name: leaderName,
@@ -1690,11 +1811,14 @@ export async function runPipeline(runId: number): Promise<void> {
             }
 
             if (!result) {
-              await storage.updateLead(lead.id, { apolloEnrichedAt: new Date() });
+              log(`[APOLLO] Lead ${lead.id} "${leaderName}": no match found`, "apollo");
+              await storage.updateLead(lead.id, { apolloEnrichedAt: new Date(), apolloInputHash: currentHash });
               continue;
             }
 
-            const updateData: Record<string, any> = { apolloEnrichedAt: new Date() };
+            log(`[APOLLO] Lead ${lead.id} "${leaderName}": MATCH email=${result.email ? "yes" : "no"} linkedin=${result.linkedin ? "yes" : "no"}`, "apollo");
+
+            const updateData: Record<string, any> = { apolloEnrichedAt: new Date(), apolloInputHash: currentHash };
 
             if (result.email) updateData.email = result.email;
             if (result.phone && !lead.phone) updateData.phone = result.phone;
@@ -1711,8 +1835,8 @@ export async function runPipeline(runId: number): Promise<void> {
               updateData.ownedChannels = updatedChannels;
             }
 
-            if (Object.keys(updateData).length <= 1) {
-              await storage.updateLead(lead.id, { apolloEnrichedAt: new Date() });
+            if (Object.keys(updateData).length <= 2) {
+              await storage.updateLead(lead.id, { apolloEnrichedAt: new Date(), apolloInputHash: currentHash });
               continue;
             }
 
@@ -1747,7 +1871,7 @@ export async function runPipeline(runId: number): Promise<void> {
           }
         }
 
-        await appendAndSave(`Apollo.io: enriched ${enrichedCount} of ${leadsToEnrich.length} leads (${apolloSkipped} skipped invalid names, ${apolloDeduped} already enriched, ${apolloCalls} API calls used)`);
+        await appendAndSave(`Apollo.io: enriched ${enrichedCount} of ${leadsToEnrich.length} leads (${apolloSkipped} skipped invalid names, ${apolloDeduped} already enriched/unchanged, ${apolloCalls} API calls used)`);
       } else {
         await appendAndSave("Apollo enrichment: skipped (no API key configured)");
       }
@@ -2003,7 +2127,8 @@ export async function reEnrichRun(runId: number): Promise<void> {
             break;
           }
           try {
-            if (lead.apolloEnrichedAt) {
+            const currentHash = computeApolloInputHash(lead);
+            if (lead.apolloEnrichedAt && lead.apolloInputHash === currentHash) {
               apolloDeduped++;
               continue;
             }
@@ -2032,6 +2157,8 @@ export async function reEnrichRun(runId: number): Promise<void> {
 
             const linkedinUrl = channels.linkedin && channels.linkedin.startsWith("http") ? channels.linkedin : undefined;
 
+            log(`[APOLLO RE] Lead ${lead.id} "${leaderName}": domain=${enrichableDomain || "none"}, linkedin=${linkedinUrl ? "yes" : "no"}, hasRealName=${hasRealName}`, "apollo");
+
             apolloCalls++;
             let result = await apolloPersonMatch({
               name: leaderName,
@@ -2053,11 +2180,14 @@ export async function reEnrichRun(runId: number): Promise<void> {
             }
 
             if (!result) {
-              await storage.updateLead(lead.id, { apolloEnrichedAt: new Date() });
+              log(`[APOLLO RE] Lead ${lead.id} "${leaderName}": no match found`, "apollo");
+              await storage.updateLead(lead.id, { apolloEnrichedAt: new Date(), apolloInputHash: currentHash });
               continue;
             }
 
-            const updateData: Record<string, any> = { apolloEnrichedAt: new Date() };
+            log(`[APOLLO RE] Lead ${lead.id} "${leaderName}": MATCH email=${result.email ? "yes" : "no"} linkedin=${result.linkedin ? "yes" : "no"}`, "apollo");
+
+            const updateData: Record<string, any> = { apolloEnrichedAt: new Date(), apolloInputHash: currentHash };
             if (result.email) updateData.email = result.email;
             if (result.phone && !lead.phone) updateData.phone = result.phone;
             if (result.linkedin && !lead.linkedin) updateData.linkedin = result.linkedin;
@@ -2073,11 +2203,11 @@ export async function reEnrichRun(runId: number): Promise<void> {
               updateData.ownedChannels = updatedChannels;
             }
 
-            if (Object.keys(updateData).length > 1) {
+            if (Object.keys(updateData).length > 2) {
               await storage.updateLead(lead.id, updateData);
               enrichedCount++;
             } else {
-              await storage.updateLead(lead.id, { apolloEnrichedAt: new Date() });
+              await storage.updateLead(lead.id, { apolloEnrichedAt: new Date(), apolloInputHash: currentHash });
             }
 
             await new Promise((r) => setTimeout(r, 300));
@@ -2085,7 +2215,7 @@ export async function reEnrichRun(runId: number): Promise<void> {
             await appendAndSave(`[WARN] Apollo enrichment failed for lead ${lead.id}: ${err.message}`);
           }
         }
-        await appendAndSave(`Apollo.io: enriched ${enrichedCount} of ${leadsToEnrich.length} leads (${apolloSkipped} skipped invalid names, ${apolloDeduped} already enriched, ${apolloCalls} API calls used)`, 70);
+        await appendAndSave(`Apollo.io: enriched ${enrichedCount} of ${leadsToEnrich.length} leads (${apolloSkipped} skipped invalid names, ${apolloDeduped} unchanged/skipped, ${apolloCalls} API calls used)`, 70);
       } else {
         await appendAndSave("Apollo enrichment skipped (no API key configured)", 70);
       }
