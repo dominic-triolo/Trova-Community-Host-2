@@ -1011,7 +1011,7 @@ async function scrapeFacebookGroups(
   return leads;
 }
 
-const GOOGLE_ENRICHMENT_MAX = 20;
+const GOOGLE_ENRICHMENT_MAX = Infinity;
 const GOOGLE_ENRICHMENT_SOCIAL_HOSTS = ["youtube.com", "youtu.be", "instagram.com", "twitter.com", "x.com", "discord.gg", "discord.com", "facebook.com", "tiktok.com", "twitch.tv", "linkedin.com", "patreon.com", "google.com", "apple.com", "spotify.com", "amazon.com", "reddit.com", "tumblr.com", "pinterest.com", "github.com", "medium.com", "wordpress.com", "linktr.ee", "beacons.ai", "ko-fi.com", "buymeacoffee.com", "gumroad.com", "substack.com", "bit.ly", "apify.com", "meetup.com", "eventbrite.com", "yelp.com", "tripadvisor.com", "bbb.org"];
 
 async function googleSearchEnrichCreators(
@@ -1158,7 +1158,7 @@ async function googleSearchEnrichCreators(
   await appendAndSave(`Google enrichment: found new data for ${enrichedLeadIndices.size}/${leadsToSearch.length} creators`);
 }
 
-const LINK_AGGREGATOR_MAX = 15;
+const LINK_AGGREGATOR_MAX = Infinity;
 
 async function enrichFromLinkAggregators(
   leads: PlatformLead[],
@@ -1246,7 +1246,7 @@ async function enrichFromLinkAggregators(
   }
 }
 
-const YOUTUBE_ABOUT_MAX = 20;
+const YOUTUBE_ABOUT_MAX = Infinity;
 
 async function enrichFromYouTubeAboutPages(
   leads: PlatformLead[],
@@ -1353,7 +1353,7 @@ async function enrichFromYouTubeAboutPages(
   }
 }
 
-const INSTAGRAM_BIO_MAX = 30;
+const INSTAGRAM_BIO_MAX = Infinity;
 
 async function enrichFromInstagramBios(
   leads: PlatformLead[],
@@ -1464,7 +1464,7 @@ async function enrichFromInstagramBios(
   }
 }
 
-const TWITTER_BIO_MAX = 30;
+const TWITTER_BIO_MAX = Infinity;
 
 async function enrichFromTwitterBios(
   leads: PlatformLead[],
@@ -1627,7 +1627,7 @@ async function crawlCreatorWebsitesForEmails(
     }
   }
 
-  const websiteEntries = Array.from(uniqueWebsites.entries()).slice(0, 30);
+  const websiteEntries = Array.from(uniqueWebsites.entries());
   if (websiteEntries.length === 0) {
     await appendAndSave("Website crawl: no eligible personal websites found");
     return emailMap;
@@ -2497,7 +2497,7 @@ export async function runPipeline(runId: number): Promise<void> {
       await appendAndSave("Apollo enrichment skipped (disabled by user)");
     }
 
-    const LEADS_FINDER_MAX_PER_RUN = 30;
+    const LEADS_FINDER_MAX_PER_RUN = Infinity;
     const refreshedLeads = await storage.listLeadsByRun(runId);
     const leadsForFinder = refreshedLeads
       .filter((l) => !l.email)
@@ -2836,7 +2836,6 @@ export async function reEnrichRun(runId: number): Promise<void> {
       await appendAndSave("Apollo enrichment skipped (disabled by user)", 70);
     }
 
-    const RE_FINDER_MAX = 30;
     const finderLeads = await storage.listLeadsByRun(runId);
     const leadsForFinderReEnrich = finderLeads
       .filter((l) => !l.email || l.email === "")
@@ -2846,8 +2845,7 @@ export async function reEnrichRun(runId: number): Promise<void> {
         const domain = extractDomainFromUrl(websiteUrl);
         return domain && isEnrichableDomain(domain);
       })
-      .sort((a, b) => (b.score || 0) - (a.score || 0))
-      .slice(0, RE_FINDER_MAX);
+      .sort((a, b) => (b.score || 0) - (a.score || 0));
 
     if (leadsForFinderReEnrich.length > 0) {
       await appendAndSave(`Step 4: Leads Finder enrichment for ${leadsForFinderReEnrich.length} leads...`, 72, "Re-enrichment: Leads Finder");

@@ -47,17 +47,17 @@ shared/
 
 ## Pipeline Steps (Social Graph Enrichment Chain)
 1. **Platform Discovery** - Patreon creator search (social links, about text, tiers, earnings) + bare domain/email extraction from about text + obfuscated email extraction ("[at]", "(at)" patterns) + real name extraction from about text (regex patterns for "I'm X", "my name is X", etc.) + brand name parsing ("Jenne Sluder Yoga" → "Jenne Sluder") + link aggregator URL extraction (Linktree, Beacons, etc.)
-1b. **Link Aggregator Scrape (Pass 1)** - Cheerio scraper on Linktree/Beacons/bio.link pages from Patreon about text (max 15 pages/run)
-2a. **YouTube About Page Scrape** - Scrape ALL YouTube channels (no email/website filter) for business emails, websites, LinkedIn, and link aggregator URLs
-2b. **Instagram Bio Scrape** - Scrape Instagram profiles (`apify/instagram-profile-scraper`, $1.60/1K) for emails, websites, Linktree links, real names, and follower counts (max 30/run)
-2c. **Twitter/X Bio Scrape** - Scrape Twitter profiles (`apidojo/twitter-user-scraper`, $0.40/1K) for emails, website links, Linktree links, real names, locations, and follower counts (max 30/run)
+1b. **Link Aggregator Scrape (Pass 1)** - Cheerio scraper on Linktree/Beacons/bio.link pages from Patreon about text (uncapped)
+2a. **YouTube About Page Scrape** - Scrape ALL YouTube channels (no email/website filter) for business emails, websites, LinkedIn, and link aggregator URLs (uncapped)
+2b. **Instagram Bio Scrape** - Scrape Instagram profiles (`apify~instagram-profile-scraper`, $1.60/1K) for emails, websites, Linktree links, real names, and follower counts (uncapped)
+2c. **Twitter/X Bio Scrape** - Scrape Twitter profiles (`apidojo~twitter-user-scraper`, $0.40/1K) for emails, website links, Linktree links, real names, locations, and follower counts (uncapped)
 2d. **Link Aggregator Scrape (Pass 2)** - Scrape any NEW aggregator URLs discovered via YouTube/Instagram/Twitter
-2e. **Google Contact Search** - Smart Google search: uses real names for name-bearing creators, Patreon slug for pseudonymous creators, skips LinkedIn search for pseudonyms. Batched 5 at a time.
+2e. **Google Contact Search** - Smart Google search: uses real names for name-bearing creators, Patreon slug for pseudonymous creators, skips LinkedIn search for pseudonyms. Batched 5 at a time (uncapped).
 2f. **Slug Domain Probe** - Try Patreon slug as .com domain (e.g., patreon.com/britchida → britchida.com) for creators without websites
-3. **Website Contact Crawl** - Crawl personal websites + slug-probed domains for emails (Cheerio scraper on contact/about pages, max 30 sites/run, email-domain validation)
+3. **Website Contact Crawl** - Crawl personal websites + slug-probed domains for emails (Cheerio scraper on contact/about pages, uncapped, email-domain validation)
 4. **Create & Score** - ICP scoring (0-100) with 6 pillars + audience size bonus + contact info bonus
-5. **Apollo.io Enrichment** - Contact lookup by name + domain + LinkedIn URL (toggleable, 50 calls/run, min score 15, deduped across runs via apolloEnrichedAt, skips pseudonyms via isValidApolloCandidate)
-6. **Leads Finder Enrichment** - Apify `code_crafter~leads-finder` actor as fallback for leads still missing email after Apollo (30 leads/run, batched by domain)
+5. **Apollo.io Enrichment** - Contact lookup by name + domain + LinkedIn URL (toggleable, uncapped, min score 15, deduped across runs via apolloEnrichedAt, skips pseudonyms via isValidApolloCandidate)
+6. **Leads Finder Enrichment** - Apify `code_crafter~leads-finder` actor as fallback for leads still missing email after Apollo (uncapped, batched by domain)
 7. **Scoring** - Final scoring pass (no qualification threshold; scores only)
 8. **Export** - CSV download for all leads with scores (global or per-run)
 
@@ -102,8 +102,8 @@ The discovery form uses platform-specific tabs. Currently Patreon is active; Fac
 
 ## Contact Enrichment (Multi-Pass)
 - **Step 1 - Website Crawl**: Cheerio scraper crawls personal websites from social graph for emails (contact/about pages)
-- **Step 2 - Apollo.io**: People Match API (free 10k credits/mo) - searches by name + domain + LinkedIn URL (50 calls/run, min score 15)
-- **Step 3 - Leads Finder**: Apify actor `code_crafter~leads-finder` ($1.50/1k leads) - fallback for leads still missing email after Apollo (30 leads/run, batched by domain, verified emails)
+- **Step 2 - Apollo.io**: People Match API (free 10k credits/mo) - searches by name + domain + LinkedIn URL (uncapped, min score 15)
+- **Step 3 - Leads Finder**: Apify actor `code_crafter~leads-finder` ($1.50/1k leads) - fallback for leads still missing email after Apollo (uncapped, batched by domain, verified emails)
 - All three passes run sequentially after lead creation, before final scoring
 - Apollo already accepts linkedinUrl from social graph data for better match rates
 
