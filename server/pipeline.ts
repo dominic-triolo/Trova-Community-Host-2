@@ -520,49 +520,6 @@ function parsePatreonCount(val: any): number {
   return 0;
 }
 
-function expandKeywordsForPatreon(keywords: string[]): string[] {
-  const suffixes = [
-    "",
-    "community",
-    "creator",
-    "podcast",
-    "club",
-    "group",
-    "travel",
-    "adventure",
-    "outdoor",
-    "fitness",
-    "wellness",
-  ];
-
-  const expanded: string[] = [];
-  const seen = new Set<string>();
-
-  for (const kw of keywords) {
-    const base = kw.toLowerCase().trim();
-    if (!seen.has(base)) {
-      seen.add(base);
-      expanded.push(kw);
-    }
-  }
-
-  for (const kw of keywords) {
-    for (const suffix of suffixes) {
-      if (!suffix) continue;
-      const words = kw.toLowerCase().trim().split(/\s+/);
-      if (words.includes(suffix)) continue;
-      const combo = `${kw} ${suffix}`.trim();
-      const key = combo.toLowerCase();
-      if (!seen.has(key)) {
-        seen.add(key);
-        expanded.push(combo);
-      }
-    }
-  }
-
-  return expanded;
-}
-
 function isPatreonCdnUrl(url: string): boolean {
   if (!url) return false;
   const lower = url.toLowerCase();
@@ -605,10 +562,10 @@ async function scrapePatreonCreators(
     }
   }
 
-  const expandedKeywords = expandKeywordsForPatreon(keywords);
-  await appendAndSave(`Patreon: expanded ${keywords.length} keywords to ${expandedKeywords.length} search queries`);
+  const dedupedKeywords = Array.from(new Set(keywords.map(k => k.trim()).filter(Boolean)));
+  await appendAndSave(`Patreon: ${dedupedKeywords.length} search queries`);
 
-  for (const kw of expandedKeywords) {
+  for (const kw of dedupedKeywords) {
     if (leads.length >= maxItems) break;
     try {
       await appendAndSave(`Patreon: searching for "${kw}"...`);
