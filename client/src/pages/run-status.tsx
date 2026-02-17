@@ -22,6 +22,7 @@ import {
   Download,
   RefreshCw,
   StopCircle,
+  DollarSign,
 } from "lucide-react";
 
 function StatusBadge({ status }: { status: string }) {
@@ -192,7 +193,7 @@ export default function RunStatus() {
           <Progress value={run.progress} className="h-2" data-testid="progress-bar" />
         </Card>
 
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-4 gap-3">
           <Card className="p-3 space-y-1">
             <div className="flex items-center gap-1.5 text-muted-foreground">
               <Globe className="w-3.5 h-3.5" />
@@ -218,6 +219,15 @@ export default function RunStatus() {
             </div>
             <p className="text-lg font-semibold text-chart-3" data-testid="text-with-email">
               {(run as any).leadsWithEmail || 0}
+            </p>
+          </Card>
+          <Card className="p-3 space-y-1">
+            <div className="flex items-center gap-1.5 text-muted-foreground">
+              <DollarSign className="w-3.5 h-3.5" />
+              <span className="text-xs">Apify Spend</span>
+            </div>
+            <p className="text-lg font-semibold" data-testid="text-apify-spend">
+              ${((run as any).apifySpendUsd || 0).toFixed(2)}
             </p>
           </Card>
         </div>

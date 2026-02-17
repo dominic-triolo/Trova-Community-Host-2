@@ -14,6 +14,7 @@ export interface IStorage {
   getRun(id: number): Promise<Run | undefined>;
   listRuns(): Promise<Run[]>;
   updateRun(id: number, data: Partial<Run>): Promise<Run | undefined>;
+  incrementApifySpend(runId: number, costUsd: number): Promise<void>;
 
   createSourceUrl(data: InsertSourceUrl): Promise<SourceUrl>;
   createSourceUrls(data: InsertSourceUrl[]): Promise<void>;
@@ -58,6 +59,13 @@ export class DatabaseStorage implements IStorage {
   async updateRun(id: number, data: Partial<Run>): Promise<Run | undefined> {
     const [run] = await db.update(runs).set(data).where(eq(runs.id, id)).returning();
     return run;
+  }
+
+  async incrementApifySpend(runId: number, costUsd: number): Promise<void> {
+    if (costUsd <= 0) return;
+    await db.update(runs)
+      .set({ apifySpendUsd: sql`COALESCE(${runs.apifySpendUsd}, 0) + ${costUsd}` })
+      .where(eq(runs.id, runId));
   }
 
   async createSourceUrl(data: InsertSourceUrl): Promise<SourceUrl> {

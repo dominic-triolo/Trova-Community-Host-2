@@ -319,6 +319,7 @@ interface PlatformLead {
 }
 
 async function scrapeMeetupGroups(
+  runId: number,
   keywords: string[],
   geos: string[],
   maxItems: number,
@@ -345,10 +346,11 @@ async function scrapeMeetupGroups(
   for (const batch of urlBatches) {
     try {
       await appendAndSave(`Meetup: searching ${batch.length} queries...`);
-      const items = await runActorAndGetResults("easyapi~meetup-groups-scraper", {
+      const { items, costUsd: actorCost } = await runActorAndGetResults("easyapi~meetup-groups-scraper", {
         searchUrls: batch,
         maxItems: Math.min(maxItems - leads.length, 200),
       }, 300000);
+      await storage.incrementApifySpend(runId, actorCost);
 
       for (const item of items) {
         if (leads.length >= maxItems) break;
@@ -396,6 +398,9 @@ async function scrapeMeetupGroups(
 
       await appendAndSave(`Meetup: found ${leads.length} groups so far`);
     } catch (err: any) {
+      if (err.costUsd) {
+        await storage.incrementApifySpend(runId, err.costUsd);
+      }
       await appendAndSave(`[WARN] Meetup batch failed: ${err.message}`);
     }
   }
@@ -404,6 +409,7 @@ async function scrapeMeetupGroups(
 }
 
 async function scrapeYouTubeChannels(
+  runId: number,
   keywords: string[],
   maxItems: number,
   appendAndSave: (msg: string) => Promise<void>,
@@ -414,13 +420,14 @@ async function scrapeYouTubeChannels(
     if (leads.length >= maxItems) break;
     try {
       await appendAndSave(`YouTube: searching for "${kw}"...`);
-      const items = await runActorAndGetResults("streamers~youtube-scraper", {
+      const { items, costUsd: actorCost } = await runActorAndGetResults("streamers~youtube-scraper", {
         searchQueries: [kw],
         maxResults: Math.min(50, maxItems - leads.length),
         maxResultsShorts: 0,
         maxResultStreams: 0,
         proxyConfiguration: { useApifyProxy: true },
       }, 180000);
+      await storage.incrementApifySpend(runId, actorCost);
 
       for (const item of items) {
         if (leads.length >= maxItems) break;
@@ -487,6 +494,9 @@ async function scrapeYouTubeChannels(
 
       await appendAndSave(`YouTube: found ${leads.length} channels so far`);
     } catch (err: any) {
+      if (err.costUsd) {
+        await storage.incrementApifySpend(runId, err.costUsd);
+      }
       await appendAndSave(`[WARN] YouTube search failed for "${kw}": ${err.message}`);
     }
   }
@@ -495,6 +505,7 @@ async function scrapeYouTubeChannels(
 }
 
 async function scrapeRedditCommunities(
+  runId: number,
   keywords: string[],
   maxItems: number,
   appendAndSave: (msg: string) => Promise<void>,
@@ -503,7 +514,7 @@ async function scrapeRedditCommunities(
 
   try {
     await appendAndSave(`Reddit: searching ${keywords.length} keywords...`);
-    const items = await runActorAndGetResults("trudax~reddit-scraper-lite", {
+    const { items, costUsd: actorCost } = await runActorAndGetResults("trudax~reddit-scraper-lite", {
       searches: keywords,
       searchCommunities: true,
       searchPosts: false,
@@ -514,6 +525,7 @@ async function scrapeRedditCommunities(
       scrollTimeout: 30,
       proxy: { useApifyProxy: true },
     }, 180000);
+    await storage.incrementApifySpend(runId, actorCost);
 
     for (const item of items) {
       if (leads.length >= maxItems) break;
@@ -550,6 +562,9 @@ async function scrapeRedditCommunities(
 
     await appendAndSave(`Reddit: found ${leads.length} communities`);
   } catch (err: any) {
+    if (err.costUsd) {
+      await storage.incrementApifySpend(runId, err.costUsd);
+    }
     await appendAndSave(`[WARN] Reddit search failed: ${err.message}`);
   }
 
@@ -557,6 +572,7 @@ async function scrapeRedditCommunities(
 }
 
 async function scrapeEventbriteEvents(
+  runId: number,
   keywords: string[],
   geos: string[],
   maxItems: number,
@@ -569,13 +585,14 @@ async function scrapeEventbriteEvents(
     try {
       const city = geos.length > 0 ? geos[0] : "";
       await appendAndSave(`Eventbrite: searching for "${kw}" ${city ? `in ${city}` : ""}...`);
-      const items = await runActorAndGetResults("aitorsm~eventbrite", {
+      const { items, costUsd: actorCost } = await runActorAndGetResults("aitorsm~eventbrite", {
         country: "united-states",
         city: city || "all",
         category: "custom",
         keyword: kw,
         maxItems: Math.min(50, maxItems - leads.length),
       }, 300000);
+      await storage.incrementApifySpend(runId, actorCost);
 
       for (const item of items) {
         if (leads.length >= maxItems) break;
@@ -635,6 +652,9 @@ async function scrapeEventbriteEvents(
 
       await appendAndSave(`Eventbrite: found ${leads.length} organizers so far`);
     } catch (err: any) {
+      if (err.costUsd) {
+        await storage.incrementApifySpend(runId, err.costUsd);
+      }
       await appendAndSave(`[WARN] Eventbrite search failed for "${kw}": ${err.message}`);
     }
   }
@@ -730,6 +750,7 @@ function isValidApolloCandidate(leaderName: string): boolean {
 }
 
 async function scrapePatreonCreators(
+  runId: number,
   keywords: string[],
   maxItems: number,
   appendAndSave: (msg: string) => Promise<void>,
@@ -781,10 +802,11 @@ async function scrapePatreonCreators(
   await appendAndSave(`Patreon: searching ${dedupedKeywords.length} keywords (crawl depth: ${adjustedCrawl}): ${keywordPreview}`);
 
   try {
-    const items = await runActorAndGetResults("louisdeconinck~patreon-scraper", {
+    const { items, costUsd: actorCost } = await runActorAndGetResults("louisdeconinck~patreon-scraper", {
       searchQueries: dedupedKeywords,
       maxRequestsPerCrawl: adjustedCrawl,
     }, 300000);
+    await storage.incrementApifySpend(runId, actorCost);
 
     await appendAndSave(`Patreon: scraper returned ${items.length} raw results`);
 
@@ -941,6 +963,9 @@ async function scrapePatreonCreators(
     }).length;
     await appendAndSave(`Patreon: ${leads.length} creators (${withSocials} with real social URLs, skipped ${skippedDupe} dupes, ${skippedFilter} filtered)`);
   } catch (err: any) {
+    if (err.costUsd) {
+      await storage.incrementApifySpend(runId, err.costUsd);
+    }
     await appendAndSave(`[WARN] Patreon search failed: ${err.message}`);
   }
 
@@ -948,6 +973,7 @@ async function scrapePatreonCreators(
 }
 
 async function scrapeFacebookGroups(
+  runId: number,
   keywords: string[],
   maxItems: number,
   appendAndSave: (msg: string) => Promise<void>,
@@ -958,12 +984,13 @@ async function scrapeFacebookGroups(
     if (leads.length >= maxItems) break;
     try {
       await appendAndSave(`Facebook: searching for "${kw}"...`);
-      const items = await runActorAndGetResults("apify/facebook-groups-scraper", {
+      const { items, costUsd: actorCost } = await runActorAndGetResults("apify/facebook-groups-scraper", {
         searchType: "groups",
         searchQuery: kw,
         maxGroups: Math.min(50, maxItems - leads.length),
         maxPostsPerGroup: 0,
       }, 180000);
+      await storage.incrementApifySpend(runId, actorCost);
 
       for (const item of items) {
         if (leads.length >= maxItems) break;
@@ -1004,6 +1031,9 @@ async function scrapeFacebookGroups(
 
       await appendAndSave(`Facebook: found ${leads.length} groups so far`);
     } catch (err: any) {
+      if (err.costUsd) {
+        await storage.incrementApifySpend(runId, err.costUsd);
+      }
       await appendAndSave(`[WARN] Facebook search failed for "${kw}": ${err.message}`);
     }
   }
@@ -1015,6 +1045,7 @@ const GOOGLE_ENRICHMENT_MAX = Infinity;
 const GOOGLE_ENRICHMENT_SOCIAL_HOSTS = ["youtube.com", "youtu.be", "instagram.com", "twitter.com", "x.com", "discord.gg", "discord.com", "facebook.com", "tiktok.com", "twitch.tv", "linkedin.com", "patreon.com", "google.com", "apple.com", "spotify.com", "amazon.com", "reddit.com", "tumblr.com", "pinterest.com", "github.com", "medium.com", "wordpress.com", "linktr.ee", "beacons.ai", "ko-fi.com", "buymeacoffee.com", "gumroad.com", "substack.com", "bit.ly", "apify.com", "meetup.com", "eventbrite.com", "yelp.com", "tripadvisor.com", "bbb.org"];
 
 async function googleSearchEnrichCreators(
+  runId: number,
   leads: PlatformLead[],
   appendAndSave: (msg: string) => Promise<void>,
 ): Promise<void> {
@@ -1068,7 +1099,7 @@ async function googleSearchEnrichCreators(
     try {
       const searchQueries = batch.map(q => ({ term: q.term, countryCode: "us", languageCode: "en", maxPagesPerQuery: 1, resultsPerPage: 5 }));
 
-      const results = await runActorAndGetResults("apify~google-search-scraper", {
+      const { items: results, costUsd: actorCost } = await runActorAndGetResults("apify~google-search-scraper", {
         queries: searchQueries.map(q => q.term).join("\n"),
         maxPagesPerQuery: 1,
         resultsPerPage: 5,
@@ -1076,6 +1107,7 @@ async function googleSearchEnrichCreators(
         languageCode: "en",
         mobileResults: false,
       }, 120000);
+      await storage.incrementApifySpend(runId, actorCost);
 
       const resultsByQuery = new Map<number, any[]>();
       for (const r of results) {
@@ -1149,6 +1181,9 @@ async function googleSearchEnrichCreators(
         if (foundAnything) enrichedLeadIndices.add(batch[j].leadIdx);
       }
     } catch (err: any) {
+      if (err.costUsd) {
+        await storage.incrementApifySpend(runId, err.costUsd);
+      }
       await appendAndSave(`[WARN] Google enrichment batch ${batchNum} failed: ${err.message}`);
     }
 
@@ -1161,6 +1196,7 @@ async function googleSearchEnrichCreators(
 const LINK_AGGREGATOR_MAX = Infinity;
 
 async function enrichFromLinkAggregators(
+  runId: number,
   leads: PlatformLead[],
   appendAndSave: (msg: string) => Promise<void>,
 ): Promise<void> {
@@ -1175,7 +1211,7 @@ async function enrichFromLinkAggregators(
   const startUrls = leadsWithAggregator.map(l => ({ url: l.ownedChannels!.linktree! }));
 
   try {
-    const results = await runActorAndGetResults("apify~cheerio-scraper", {
+    const { items: results, costUsd: actorCost } = await runActorAndGetResults("apify~cheerio-scraper", {
       startUrls,
       maxCrawlPages: leadsWithAggregator.length,
       maxConcurrency: 3,
@@ -1187,6 +1223,7 @@ async function enrichFromLinkAggregators(
   return { url: request.url, text: text.substring(0, 8000), links: links.slice(0, 200) };
 }`,
     }, 90000);
+    await storage.incrementApifySpend(runId, actorCost);
 
     let enrichedCount = 0;
     for (const result of results) {
@@ -1242,6 +1279,9 @@ async function enrichFromLinkAggregators(
 
     await appendAndSave(`Link aggregator: enriched ${enrichedCount}/${leadsWithAggregator.length} leads with new data`);
   } catch (err: any) {
+    if (err.costUsd) {
+      await storage.incrementApifySpend(runId, err.costUsd);
+    }
     await appendAndSave(`[WARN] Link aggregator scraping failed: ${err.message}`);
   }
 }
@@ -1249,6 +1289,7 @@ async function enrichFromLinkAggregators(
 const YOUTUBE_ABOUT_MAX = Infinity;
 
 async function enrichFromYouTubeAboutPages(
+  runId: number,
   leads: PlatformLead[],
   appendAndSave: (msg: string) => Promise<void>,
 ): Promise<void> {
@@ -1273,7 +1314,7 @@ async function enrichFromYouTubeAboutPages(
   }
 
   try {
-    const results = await runActorAndGetResults("apify~cheerio-scraper", {
+    const { items: results, costUsd: actorCost } = await runActorAndGetResults("apify~cheerio-scraper", {
       startUrls,
       maxCrawlPages: leadsWithYouTube.length,
       maxConcurrency: 3,
@@ -1285,6 +1326,7 @@ async function enrichFromYouTubeAboutPages(
   return { url: request.url, text: text.substring(0, 8000), links: links.slice(0, 100) };
 }`,
     }, 90000);
+    await storage.incrementApifySpend(runId, actorCost);
 
     let enrichedCount = 0;
     for (const result of results) {
@@ -1349,6 +1391,9 @@ async function enrichFromYouTubeAboutPages(
 
     await appendAndSave(`YouTube about pages: enriched ${enrichedCount}/${leadsWithYouTube.length} leads with new data`);
   } catch (err: any) {
+    if (err.costUsd) {
+      await storage.incrementApifySpend(runId, err.costUsd);
+    }
     await appendAndSave(`[WARN] YouTube about page scraping failed: ${err.message}`);
   }
 }
@@ -1356,6 +1401,7 @@ async function enrichFromYouTubeAboutPages(
 const INSTAGRAM_BIO_MAX = Infinity;
 
 async function enrichFromInstagramBios(
+  runId: number,
   leads: PlatformLead[],
   appendAndSave: (msg: string) => Promise<void>,
 ): Promise<void> {
@@ -1382,9 +1428,10 @@ async function enrichFromInstagramBios(
   if (usernames.length === 0) return;
 
   try {
-    const results = await runActorAndGetResults("apify~instagram-profile-scraper", {
+    const { items: results, costUsd: actorCost } = await runActorAndGetResults("apify~instagram-profile-scraper", {
       usernames,
     }, 120000);
+    await storage.incrementApifySpend(runId, actorCost);
 
     let enrichedCount = 0;
     for (const result of results) {
@@ -1460,6 +1507,9 @@ async function enrichFromInstagramBios(
 
     await appendAndSave(`Instagram bios: enriched ${enrichedCount}/${leadsWithInstagram.length} leads with new data`);
   } catch (err: any) {
+    if (err.costUsd) {
+      await storage.incrementApifySpend(runId, err.costUsd);
+    }
     await appendAndSave(`[WARN] Instagram bio scraping failed: ${err.message}`);
   }
 }
@@ -1467,6 +1517,7 @@ async function enrichFromInstagramBios(
 const TWITTER_BIO_MAX = Infinity;
 
 async function enrichFromTwitterBios(
+  runId: number,
   leads: PlatformLead[],
   appendAndSave: (msg: string) => Promise<void>,
 ): Promise<void> {
@@ -1505,7 +1556,7 @@ async function enrichFromTwitterBios(
   }
 
   try {
-    const results = await runActorAndGetResults("apidojo~twitter-user-scraper", {
+    const { items: results, costUsd: actorCost } = await runActorAndGetResults("apidojo~twitter-user-scraper", {
       twitterHandles: paddedHandles,
       getFollowers: false,
       getFollowing: false,
@@ -1513,6 +1564,7 @@ async function enrichFromTwitterBios(
       includeUnavailableUsers: false,
       maxItems: Math.max(handles.length + 5, 10),
     }, 120000);
+    await storage.incrementApifySpend(runId, actorCost);
 
     let enrichedCount = 0;
     const seenHandles = new Set<string>();
@@ -1602,11 +1654,15 @@ async function enrichFromTwitterBios(
 
     await appendAndSave(`Twitter bios: enriched ${enrichedCount}/${leadsWithTwitter.length} leads with new data`);
   } catch (err: any) {
+    if (err.costUsd) {
+      await storage.incrementApifySpend(runId, err.costUsd);
+    }
     await appendAndSave(`[WARN] Twitter bio scraping failed: ${err.message}`);
   }
 }
 
 async function crawlCreatorWebsitesForEmails(
+  runId: number,
   leads: PlatformLead[],
   appendAndSave: (msg: string) => Promise<void>,
 ): Promise<Map<string, string>> {
@@ -1660,7 +1716,7 @@ async function crawlCreatorWebsitesForEmails(
     }
 
     try {
-      const results = await runActorAndGetResults("apify~cheerio-scraper", {
+      const { items: results, costUsd: actorCost } = await runActorAndGetResults("apify~cheerio-scraper", {
         startUrls,
         globs,
         maxCrawlPages: 5 * batch.length,
@@ -1671,6 +1727,7 @@ async function crawlCreatorWebsitesForEmails(
   return { url: request.url, text: text.substring(0, 5000) };
 }`,
       }, 180000);
+      await storage.incrementApifySpend(runId, actorCost);
 
       for (const result of results) {
         const pageText = result.text || "";
@@ -1700,6 +1757,9 @@ async function crawlCreatorWebsitesForEmails(
 
       await appendAndSave(`Website crawl batch ${batchNum}: found ${emailMap.size} total emails so far`);
     } catch (err: any) {
+      if (err.costUsd) {
+        await storage.incrementApifySpend(runId, err.costUsd);
+      }
       await appendAndSave(`[WARN] Website crawl batch ${batchNum} failed: ${err.message}`);
     }
   }
@@ -1739,22 +1799,22 @@ export async function runPipeline(runId: number): Promise<void> {
 
     const platformTasks: { name: string; promise: Promise<PlatformLead[]> }[] = [];
     if (enabledSources.includes("meetup")) {
-      platformTasks.push({ name: "Meetup", promise: scrapeMeetupGroups(keywords, geos, maxPerPlatform, (msg) => appendAndSave(msg)) });
+      platformTasks.push({ name: "Meetup", promise: scrapeMeetupGroups(runId, keywords, geos, maxPerPlatform, (msg) => appendAndSave(msg)) });
     }
     if (enabledSources.includes("youtube")) {
-      platformTasks.push({ name: "YouTube", promise: scrapeYouTubeChannels(keywords, maxPerPlatform, (msg) => appendAndSave(msg)) });
+      platformTasks.push({ name: "YouTube", promise: scrapeYouTubeChannels(runId, keywords, maxPerPlatform, (msg) => appendAndSave(msg)) });
     }
     if (enabledSources.includes("reddit")) {
-      platformTasks.push({ name: "Reddit", promise: scrapeRedditCommunities(keywords, maxPerPlatform, (msg) => appendAndSave(msg)) });
+      platformTasks.push({ name: "Reddit", promise: scrapeRedditCommunities(runId, keywords, maxPerPlatform, (msg) => appendAndSave(msg)) });
     }
     if (enabledSources.includes("eventbrite")) {
-      platformTasks.push({ name: "Eventbrite", promise: scrapeEventbriteEvents(keywords, geos, maxPerPlatform, (msg) => appendAndSave(msg)) });
+      platformTasks.push({ name: "Eventbrite", promise: scrapeEventbriteEvents(runId, keywords, geos, maxPerPlatform, (msg) => appendAndSave(msg)) });
     }
     if (enabledSources.includes("facebook")) {
-      platformTasks.push({ name: "Facebook", promise: scrapeFacebookGroups(keywords, maxPerPlatform, (msg) => appendAndSave(msg)) });
+      platformTasks.push({ name: "Facebook", promise: scrapeFacebookGroups(runId, keywords, maxPerPlatform, (msg) => appendAndSave(msg)) });
     }
     if (enabledSources.includes("patreon")) {
-      platformTasks.push({ name: "Patreon", promise: scrapePatreonCreators(keywords, maxPerPlatform, (msg) => appendAndSave(msg), {
+      platformTasks.push({ name: "Patreon", promise: scrapePatreonCreators(runId, keywords, maxPerPlatform, (msg) => appendAndSave(msg), {
         minMemberCount: params.minMemberCount || 0,
         maxMemberCount: params.maxMemberCount || 0,
         minPostCount: params.minPostCount || 0,
@@ -1791,7 +1851,7 @@ export async function runPipeline(runId: number): Promise<void> {
     );
     if (leadsWithLinktreeInitial.length > 0) {
       await appendAndSave(`Link aggregator scrape: ${leadsWithLinktreeInitial.length} leads have Linktree/Beacons pages`, 28, "Step 1b: Link aggregator scrape");
-      await enrichFromLinkAggregators(allPlatformLeads, appendAndSave);
+      await enrichFromLinkAggregators(runId, allPlatformLeads, appendAndSave);
     }
 
     const leadsWithYouTube = allPlatformLeads.filter(l =>
@@ -1799,7 +1859,7 @@ export async function runPipeline(runId: number): Promise<void> {
     );
     if (leadsWithYouTube.length > 0) {
       await appendAndSave(`YouTube about pages: ${leadsWithYouTube.length} leads have YouTube channels`, 30, "Step 2a: YouTube about page scrape");
-      await enrichFromYouTubeAboutPages(allPlatformLeads, appendAndSave);
+      await enrichFromYouTubeAboutPages(runId, allPlatformLeads, appendAndSave);
     }
 
     const leadsWithInstagram = allPlatformLeads.filter(l =>
@@ -1807,7 +1867,7 @@ export async function runPipeline(runId: number): Promise<void> {
     );
     if (leadsWithInstagram.length > 0) {
       await appendAndSave(`Instagram bios: ${leadsWithInstagram.length} leads have Instagram profiles`, 31, "Step 2b: Instagram bio scrape");
-      await enrichFromInstagramBios(allPlatformLeads, appendAndSave);
+      await enrichFromInstagramBios(runId, allPlatformLeads, appendAndSave);
     }
 
     const leadsWithTwitter = allPlatformLeads.filter(l => {
@@ -1816,7 +1876,7 @@ export async function runPipeline(runId: number): Promise<void> {
     });
     if (leadsWithTwitter.length > 0) {
       await appendAndSave(`Twitter bios: ${leadsWithTwitter.length} leads have Twitter/X profiles`, 32, "Step 2c: Twitter/X bio scrape");
-      await enrichFromTwitterBios(allPlatformLeads, appendAndSave);
+      await enrichFromTwitterBios(runId, allPlatformLeads, appendAndSave);
     }
 
     const newLinktreeLeads = allPlatformLeads.filter(l =>
@@ -1825,13 +1885,13 @@ export async function runPipeline(runId: number): Promise<void> {
     );
     if (newLinktreeLeads.length > 0) {
       await appendAndSave(`Link aggregator scrape (pass 2): ${newLinktreeLeads.length} new aggregator URLs from YouTube/IG/Twitter`, 33, "Step 2d: Link aggregator scrape (new)");
-      await enrichFromLinkAggregators(allPlatformLeads, appendAndSave);
+      await enrichFromLinkAggregators(runId, allPlatformLeads, appendAndSave);
     }
 
     const leadsWithoutContactInfo = allPlatformLeads.filter(l => !l.email && !l.ownedChannels?.website && !l.ownedChannels?.linkedin);
     if (leadsWithoutContactInfo.length > 0) {
       await appendAndSave(`Google enrichment: ${leadsWithoutContactInfo.length} leads need website/LinkedIn lookup`, 35, "Step 2e: Google contact search");
-      await googleSearchEnrichCreators(allPlatformLeads, appendAndSave);
+      await googleSearchEnrichCreators(runId, allPlatformLeads, appendAndSave);
     } else {
       await appendAndSave("Google enrichment: skipped (all leads already have contact info)");
     }
@@ -1858,7 +1918,7 @@ export async function runPipeline(runId: number): Promise<void> {
     const leadsNeedingEmail = allPlatformLeads.filter(l => !l.email && l.ownedChannels?.website && !isPatreonCdnUrl(l.ownedChannels.website));
     if (leadsNeedingEmail.length > 0) {
       await appendAndSave(`Crawling ${leadsNeedingEmail.length} creator websites for contact emails...`, 38, "Step 3: Website contact crawl");
-      const websiteEmailMap = await crawlCreatorWebsitesForEmails(leadsNeedingEmail, appendAndSave);
+      const websiteEmailMap = await crawlCreatorWebsitesForEmails(runId, leadsNeedingEmail, appendAndSave);
       let websiteEmailsMerged = 0;
       for (const pl of allPlatformLeads) {
         if (!pl.email && pl.ownedChannels?.website) {
@@ -1906,13 +1966,14 @@ export async function runPipeline(runId: number): Promise<void> {
       try {
         await appendAndSave(`Google Search batch ${batchIdx + 1}/${queryBatches.length} (${batch.length} queries)`);
 
-        const items = await runActorAndGetResults("apify~google-search-scraper", {
+        const { items, costUsd: actorCost } = await runActorAndGetResults("apify~google-search-scraper", {
           queries: batch.join("\n"),
           maxPagesPerQuery: 1,
           resultsPerPage: params.maxGoogleResultsPerQuery,
           languageCode: "en",
           mobileResults: false,
         }, 120000);
+        await storage.incrementApifySpend(runId, actorCost);
 
         for (const item of items) {
           if (allDiscoveredUrls.length >= params.maxDiscoveredUrls) break;
@@ -1935,6 +1996,9 @@ export async function runPipeline(runId: number): Promise<void> {
 
         await appendAndSave(`Google batch ${batchIdx + 1} complete. Total website URLs: ${allDiscoveredUrls.length}`);
       } catch (err: any) {
+        if (err.costUsd) {
+          await storage.incrementApifySpend(runId, err.costUsd);
+        }
         await appendAndSave(`[ERROR] Google batch ${batchIdx + 1} failed: ${err.message}`);
       }
 
@@ -1982,7 +2046,7 @@ export async function runPipeline(runId: number): Promise<void> {
         try {
           await appendAndSave(`Extracting ${batch.length} websites (batch ${batchNum}/${totalBatches})`);
 
-          const items = await runActorAndGetResults("apify~cheerio-scraper", {
+          const { items, costUsd: actorCost } = await runActorAndGetResults("apify~cheerio-scraper", {
             startUrls: batch.map((u) => ({ url: u })),
             maxRequestsPerCrawl: batch.length * 4,
             maxConcurrency: 10,
@@ -2086,6 +2150,7 @@ export async function runPipeline(runId: number): Promise<void> {
               };
             }`,
           }, 180000);
+          await storage.incrementApifySpend(runId, actorCost);
 
           const mainPages = new Map<string, any>();
           const subPages: any[] = [];
@@ -2114,6 +2179,9 @@ export async function runPipeline(runId: number): Promise<void> {
 
           await appendAndSave(`Extracted ${mainPages.size} websites + ${subPages.length} subpages in batch ${batchNum}`);
         } catch (err: any) {
+          if (err.costUsd) {
+            await storage.incrementApifySpend(runId, err.costUsd);
+          }
           await appendAndSave(`[ERROR] Web extraction batch ${batchNum} failed: ${err.message}`);
         }
 
@@ -2524,11 +2592,12 @@ export async function runPipeline(runId: number): Promise<void> {
 
       if (domains.length > 0) {
         try {
-          const finderResults = await runActorAndGetResults("code_crafter~leads-finder", {
+          const { items: finderResults, costUsd: actorCost } = await runActorAndGetResults("code_crafter~leads-finder", {
             company_domain: domains,
             email_status: ["validated"],
             fetch_count: Math.min(domains.length * 5, 200),
           }, 120000);
+          await storage.incrementApifySpend(runId, actorCost);
 
           const emailByDomain = new Map<string, any>();
           for (const r of finderResults) {
@@ -2588,6 +2657,9 @@ export async function runPipeline(runId: number): Promise<void> {
           await appendAndSave(`Leads Finder: enriched ${finderEnriched} leads from ${domains.length} domains`);
           enrichedCount += finderEnriched;
         } catch (err: any) {
+          if (err.costUsd) {
+            await storage.incrementApifySpend(runId, err.costUsd);
+          }
           await appendAndSave(`[WARN] Leads Finder failed: ${err.message}`);
         }
       }
@@ -2859,11 +2931,12 @@ export async function reEnrichRun(runId: number): Promise<void> {
 
       if (domains.length > 0) {
         try {
-          const finderResults = await runActorAndGetResults("code_crafter~leads-finder", {
+          const { items: finderResults, costUsd: actorCost } = await runActorAndGetResults("code_crafter~leads-finder", {
             company_domain: domains,
             email_status: ["validated"],
             fetch_count: Math.min(domains.length * 5, 200),
           }, 120000);
+          await storage.incrementApifySpend(runId, actorCost);
 
           const emailByDomain = new Map<string, any>();
           for (const r of finderResults) {
@@ -2899,6 +2972,9 @@ export async function reEnrichRun(runId: number): Promise<void> {
           }
           await appendAndSave(`Leads Finder: enriched ${finderEnriched} leads from ${domains.length} domains`);
         } catch (err: any) {
+          if (err.costUsd) {
+            await storage.incrementApifySpend(runId, err.costUsd);
+          }
           await appendAndSave(`[WARN] Leads Finder re-enrichment failed: ${err.message}`);
         }
       }

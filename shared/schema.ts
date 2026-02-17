@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, timestamp, jsonb, serial } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, timestamp, jsonb, serial, real } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -16,6 +16,7 @@ export const runs = pgTable("runs", {
   urlsDiscovered: integer("urls_discovered").default(0),
   leadsExtracted: integer("leads_extracted").default(0),
   leadsWithEmail: integer("leads_with_email").default(0),
+  apifySpendUsd: real("apify_spend_usd").default(0),
 });
 
 export const sourceUrls = pgTable("source_urls", {

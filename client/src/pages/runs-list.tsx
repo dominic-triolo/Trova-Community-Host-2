@@ -95,6 +95,9 @@ export default function RunsList() {
                       <div className="text-right text-xs text-muted-foreground space-y-0.5">
                         <p>{run.leadsExtracted || 0} leads</p>
                         <p>{(run as any).leadsWithEmail || 0} with email</p>
+                        {((run as any).apifySpendUsd > 0) && (
+                          <p>${((run as any).apifySpendUsd || 0).toFixed(2)} Apify</p>
+                        )}
                       </div>
                       <ArrowRight className="w-4 h-4 text-muted-foreground" />
                     </div>

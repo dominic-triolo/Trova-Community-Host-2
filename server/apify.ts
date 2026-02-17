@@ -40,7 +40,12 @@ export async function startActorRun(actorId: string, input: Record<string, any>)
   }
 }
 
-export async function waitForRun(runId: string, timeoutMs = 300000): Promise<"SUCCEEDED" | "FAILED" | "TIMED_OUT"> {
+export interface ApifyRunResult {
+  status: "SUCCEEDED" | "FAILED" | "TIMED_OUT";
+  usageTotalUsd: number;
+}
+
+export async function waitForRun(runId: string, timeoutMs = 300000): Promise<ApifyRunResult> {
   const token = getToken();
   const start = Date.now();
   let consecutiveErrors = 0;
@@ -60,7 +65,7 @@ export async function waitForRun(runId: string, timeoutMs = 300000): Promise<"SU
         log(`[APIFY] Failed to check run status: ${res.status} (attempt ${consecutiveErrors})`, "apify");
         if (consecutiveErrors >= 10) {
           log(`[APIFY] Too many consecutive polling errors, giving up`, "apify");
-          return "FAILED";
+          return { status: "FAILED", usageTotalUsd: 0 };
         }
         await sleep(5000);
         continue;
@@ -69,10 +74,11 @@ export async function waitForRun(runId: string, timeoutMs = 300000): Promise<"SU
       consecutiveErrors = 0;
       const data = await res.json();
       const status = data.data.status;
+      const usageTotalUsd = data.data.usageTotalUsd ?? data.data.usageUsd ?? 0;
 
-      if (status === "SUCCEEDED") return "SUCCEEDED";
-      if (status === "FAILED" || status === "ABORTED") return "FAILED";
-      if (status === "TIMED-OUT") return "TIMED_OUT";
+      if (status === "SUCCEEDED") return { status: "SUCCEEDED", usageTotalUsd };
+      if (status === "FAILED" || status === "ABORTED") return { status: "FAILED", usageTotalUsd };
+      if (status === "TIMED-OUT") return { status: "TIMED_OUT", usageTotalUsd };
 
       await sleep(3000);
     } catch (err: any) {
@@ -80,14 +86,14 @@ export async function waitForRun(runId: string, timeoutMs = 300000): Promise<"SU
       log(`[APIFY] Polling error: ${err.message} (attempt ${consecutiveErrors})`, "apify");
       if (consecutiveErrors >= 10) {
         log(`[APIFY] Too many consecutive polling errors, giving up`, "apify");
-        return "FAILED";
+        return { status: "FAILED", usageTotalUsd: 0 };
       }
       await sleep(5000);
     }
   }
 
   log(`[APIFY] Run ${runId} timed out after ${timeoutMs}ms`, "apify");
-  return "TIMED_OUT";
+  return { status: "TIMED_OUT", usageTotalUsd: 0 };
 }
 
 export async function getDatasetItems(runId: string): Promise<any[]> {
@@ -102,21 +108,28 @@ export async function getDatasetItems(runId: string): Promise<any[]> {
   return res.json();
 }
 
-export async function runActorAndGetResults(actorId: string, input: Record<string, any>, timeoutMs = 300000): Promise<any[]> {
+export interface ActorRunOutput {
+  items: any[];
+  costUsd: number;
+}
+
+export async function runActorAndGetResults(actorId: string, input: Record<string, any>, timeoutMs = 300000): Promise<ActorRunOutput> {
   log(`[APIFY] Starting actor ${actorId}`, "apify");
   const runId = await startActorRun(actorId, input);
   log(`[APIFY] Run ${runId} started, waiting...`, "apify");
 
-  const status = await waitForRun(runId, timeoutMs);
-  log(`[APIFY] Run ${runId} finished: ${status}`, "apify");
+  const result = await waitForRun(runId, timeoutMs);
+  log(`[APIFY] Run ${runId} finished: ${result.status} (cost: $${result.usageTotalUsd.toFixed(4)})`, "apify");
 
-  if (status !== "SUCCEEDED") {
-    throw new Error(`Actor run ${runId} ended with status: ${status}`);
+  if (result.status !== "SUCCEEDED") {
+    const err: any = new Error(`Actor run ${runId} ended with status: ${result.status}`);
+    err.costUsd = result.usageTotalUsd;
+    throw err;
   }
 
   const items = await getDatasetItems(runId);
   log(`[APIFY] Got ${items.length} items from run ${runId}`, "apify");
-  return items;
+  return { items, costUsd: result.usageTotalUsd };
 }
 
 function sleep(ms: number): Promise<void> {
