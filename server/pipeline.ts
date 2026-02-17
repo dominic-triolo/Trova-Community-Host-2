@@ -1757,7 +1757,7 @@ export async function runPipeline(runId: number): Promise<void> {
         try {
           const finderResults = await runActorAndGetResults("code_crafter~leads-finder", {
             company_domain: domains,
-            email_status: ["verified"],
+            email_status: ["validated"],
             fetch_count: Math.min(domains.length * 5, 200),
           }, 120000);
 
@@ -2093,7 +2093,7 @@ export async function reEnrichRun(runId: number): Promise<void> {
         try {
           const finderResults = await runActorAndGetResults("code_crafter~leads-finder", {
             company_domain: domains,
-            email_status: ["verified"],
+            email_status: ["validated"],
             fetch_count: Math.min(domains.length * 5, 200),
           }, 120000);
 
