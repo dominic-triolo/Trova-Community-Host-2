@@ -56,7 +56,24 @@ import {
   Users,
   BarChart3,
   ChevronRight,
+  Link2,
 } from "lucide-react";
+import { SiPatreon, SiInstagram, SiX, SiFacebook, SiLinkedin, SiTiktok, SiDiscord, SiTwitch, SiSubstack } from "react-icons/si";
+
+const PLATFORM_ICONS: Record<string, { icon: any; label: string; color: string }> = {
+  patreon: { icon: SiPatreon, label: "Patreon", color: "text-[#FF424D]" },
+  youtube: { icon: Youtube, label: "YouTube", color: "text-[#FF0000]" },
+  instagram: { icon: SiInstagram, label: "Instagram", color: "text-[#E4405F]" },
+  twitter: { icon: SiX, label: "X / Twitter", color: "text-foreground" },
+  facebook: { icon: SiFacebook, label: "Facebook", color: "text-[#1877F2]" },
+  linkedin: { icon: SiLinkedin, label: "LinkedIn", color: "text-[#0A66C2]" },
+  tiktok: { icon: SiTiktok, label: "TikTok", color: "text-foreground" },
+  discord: { icon: SiDiscord, label: "Discord", color: "text-[#5865F2]" },
+  twitch: { icon: SiTwitch, label: "Twitch", color: "text-[#9146FF]" },
+  substack: { icon: SiSubstack, label: "Substack", color: "text-[#FF6719]" },
+  website: { icon: Globe, label: "Website", color: "text-muted-foreground" },
+  newsletter: { icon: BookOpen, label: "Newsletter", color: "text-muted-foreground" },
+};
 
 function ScoreBar({ label, value, max }: { label: string; value: number; max: number }) {
   const pct = max > 0 ? (value / max) * 100 : 0;
@@ -155,15 +172,31 @@ function LeadDetail({ lead }: { lead: Lead }) {
         <>
           <Separator />
           <div className="space-y-2">
-            <p className="text-xs font-medium text-muted-foreground">Owned Channels</p>
-            <div className="flex flex-wrap gap-1.5">
-              {Object.entries(channels).map(([k, v]) => (
-                <Badge key={k} variant="secondary" className="text-[10px]">
-                  {k === "youtube" && <Youtube className="w-3 h-3 mr-1" />}
-                  {k === "newsletter" && <BookOpen className="w-3 h-3 mr-1" />}
-                  {k}
-                </Badge>
-              ))}
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs font-medium text-muted-foreground">Social Graph</p>
+              <Badge variant="secondary" className="text-[10px]">
+                <Link2 className="w-3 h-3 mr-1" />
+                {Object.keys(channels).length} platforms
+              </Badge>
+            </div>
+            <div className="space-y-1.5">
+              {Object.entries(channels).map(([k, v]) => {
+                const platform = PLATFORM_ICONS[k];
+                const PlatformIcon = platform?.icon || Globe;
+                const isLink = typeof v === "string" && v.startsWith("http");
+                return (
+                  <div key={k} className="flex items-center gap-2 text-sm">
+                    <PlatformIcon className={`w-3.5 h-3.5 flex-shrink-0 ${platform?.color || "text-muted-foreground"}`} />
+                    {isLink ? (
+                      <a href={v} target="_blank" rel="noopener noreferrer" className="text-primary underline-offset-2 hover:underline truncate">
+                        {platform?.label || k}
+                      </a>
+                    ) : (
+                      <span className="text-muted-foreground">{platform?.label || k}{v && v !== "detected" && v !== "active" ? `: ${v}` : ""}</span>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
         </>
@@ -346,7 +379,7 @@ export default function Results() {
                         <TableHead>Location</TableHead>
                         <TableHead className="text-center">Score</TableHead>
                         <TableHead>Contact</TableHead>
-                        <TableHead>Channels</TableHead>
+                        <TableHead>Platforms</TableHead>
                         <TableHead className="w-8"></TableHead>
                       </TableRow>
                     </TableHeader>
@@ -389,10 +422,12 @@ export default function Results() {
                                 </TableCell>
                                 <TableCell>
                                   <div className="flex items-center gap-1">
-                                    {channelKeys.slice(0, 3).map((ch) => (
-                                      <Badge key={ch} variant="outline" className="text-[10px]">{ch}</Badge>
-                                    ))}
-                                    {channelKeys.length > 3 && <Badge variant="outline" className="text-[10px]">+{channelKeys.length - 3}</Badge>}
+                                    {channelKeys.slice(0, 5).map((ch) => {
+                                      const p = PLATFORM_ICONS[ch];
+                                      const Icon = p?.icon || Globe;
+                                      return <Icon key={ch} className={`w-3.5 h-3.5 ${p?.color || "text-muted-foreground"}`} title={p?.label || ch} />;
+                                    })}
+                                    {channelKeys.length > 5 && <span className="text-[10px] text-muted-foreground">+{channelKeys.length - 5}</span>}
                                   </div>
                                 </TableCell>
                                 <TableCell>

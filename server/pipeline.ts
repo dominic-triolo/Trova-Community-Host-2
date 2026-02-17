@@ -874,6 +874,96 @@ async function scrapeFacebookGroups(
   return leads;
 }
 
+async function crawlCreatorWebsitesForEmails(
+  leads: PlatformLead[],
+  appendAndSave: (msg: string) => Promise<void>,
+): Promise<Map<string, string>> {
+  const emailMap = new Map<string, string>();
+  const socialHosts = ["youtube.com", "youtu.be", "instagram.com", "twitter.com", "x.com", "discord.gg", "discord.com", "facebook.com", "tiktok.com", "twitch.tv", "linkedin.com", "patreon.com", "google.com", "apple.com", "spotify.com", "amazon.com", "reddit.com", "tumblr.com", "pinterest.com", "github.com", "medium.com", "wordpress.com", "linktr.ee", "beacons.ai", "ko-fi.com", "buymeacoffee.com", "gumroad.com", "substack.com", "bit.ly", "apify.com", "meetup.com", "eventbrite.com"];
+
+  const uniqueWebsites = new Map<string, string>();
+  for (const lead of leads) {
+    if (lead.email) continue;
+    const website = lead.ownedChannels?.website;
+    if (!website || typeof website !== "string" || !website.startsWith("http")) continue;
+    const domain = extractDomain(website);
+    if (!domain) continue;
+    if (socialHosts.some((s) => domain.includes(s))) continue;
+    if (!uniqueWebsites.has(domain)) {
+      uniqueWebsites.set(domain, website);
+    }
+  }
+
+  const websiteEntries = Array.from(uniqueWebsites.entries()).slice(0, 30);
+  if (websiteEntries.length === 0) {
+    await appendAndSave("Website crawl: no eligible personal websites found");
+    return emailMap;
+  }
+
+  await appendAndSave(`Website crawl: found ${websiteEntries.length} unique personal websites to crawl`);
+
+  const batchSize = 5;
+  for (let i = 0; i < websiteEntries.length; i += batchSize) {
+    const batch = websiteEntries.slice(i, i + batchSize);
+    const batchNum = Math.floor(i / batchSize) + 1;
+    const totalBatches = Math.ceil(websiteEntries.length / batchSize);
+
+    await appendAndSave(`Website crawl: processing batch ${batchNum}/${totalBatches} (${batch.length} sites)...`);
+
+    const startUrls: { url: string }[] = [];
+    const globs: { glob: string }[] = [];
+
+    for (const [domain, url] of batch) {
+      const baseUrl = url.replace(/\/+$/, "");
+      startUrls.push({ url: baseUrl });
+      const subpages = ["/contact", "/about", "/about-us", "/contact-us", "/team"];
+      for (const page of subpages) {
+        startUrls.push({ url: `${baseUrl}${page}` });
+      }
+      globs.push({ glob: `https://${domain}/contact*` });
+      globs.push({ glob: `https://${domain}/about*` });
+      globs.push({ glob: `https://www.${domain}/contact*` });
+      globs.push({ glob: `https://www.${domain}/about*` });
+    }
+
+    try {
+      const results = await runActorAndGetResults("apify~cheerio-scraper", {
+        startUrls,
+        globs,
+        maxCrawlPages: 5 * batch.length,
+        maxConcurrency: 3,
+        pageFunction: `async function pageFunction(context) {
+  const { $, request } = context;
+  const text = $('body').text();
+  return { url: request.url, text: text.substring(0, 5000) };
+}`,
+      }, 60000);
+
+      for (const result of results) {
+        const pageText = result.text || "";
+        const pageUrl = result.url || "";
+        if (!pageText || !pageUrl) continue;
+
+        const pageDomain = extractDomain(pageUrl);
+        if (!pageDomain || emailMap.has(pageDomain)) continue;
+
+        const emails = extractEmailsFromText(pageText);
+        const validEmail = emails.find((e) => !isBlockedEmail(e));
+        if (validEmail) {
+          emailMap.set(pageDomain, validEmail);
+        }
+      }
+
+      await appendAndSave(`Website crawl batch ${batchNum}: found ${emailMap.size} total emails so far`);
+    } catch (err: any) {
+      await appendAndSave(`[WARN] Website crawl batch ${batchNum} failed: ${err.message}`);
+    }
+  }
+
+  await appendAndSave(`Website crawl complete: found ${emailMap.size} emails from ${websiteEntries.length} websites`);
+  return emailMap;
+}
+
 export async function runPipeline(runId: number): Promise<void> {
   let currentLogs = "";
 
@@ -977,10 +1067,29 @@ export async function runPipeline(runId: number): Promise<void> {
       }
     }
 
-    await appendAndSave(`Platform discovery complete: ${allPlatformLeads.length} results`, 35, "Step 2: Creating & scoring leads");
+    const leadsNeedingEmail = allPlatformLeads.filter(l => !l.email && l.ownedChannels?.website);
+    if (leadsNeedingEmail.length > 0) {
+      await appendAndSave(`Crawling ${leadsNeedingEmail.length} creator websites for contact emails...`, 38, "Step 2: Website contact crawl");
+      const websiteEmailMap = await crawlCreatorWebsitesForEmails(leadsNeedingEmail, appendAndSave);
+      let websiteEmailsMerged = 0;
+      for (const pl of allPlatformLeads) {
+        if (!pl.email && pl.ownedChannels?.website) {
+          const domain = extractDomain(pl.ownedChannels.website);
+          if (domain && websiteEmailMap.has(domain)) {
+            pl.email = websiteEmailMap.get(domain)!;
+            websiteEmailsMerged++;
+          }
+        }
+      }
+      await appendAndSave(`Website crawl: found ${websiteEmailsMerged} emails from contact pages`);
+    } else {
+      await appendAndSave("Website crawl: no leads with personal websites needing email");
+    }
+
+    await appendAndSave(`Platform discovery complete: ${allPlatformLeads.length} results`, 40, "Step 3: Creating & scoring leads");
 
     const emailsAfterDiscovery = allPlatformLeads.filter((l) => l.email).length;
-    await appendAndSave(`After discovery: ${emailsAfterDiscovery}/${allPlatformLeads.length} leads have emails`, 45, "Step 3: Google Search discovery");
+    await appendAndSave(`After discovery: ${emailsAfterDiscovery}/${allPlatformLeads.length} leads have emails`, 45, "Step 4: Google Search discovery");
 
     let allDiscoveredUrls: { url: string; domain: string; source: string }[] = [];
 
@@ -1065,7 +1174,7 @@ export async function runPipeline(runId: number): Promise<void> {
     await appendAndSave(
       `Discovery complete: ${allPlatformLeads.length} platform + ${allDiscoveredUrls.length} website leads`,
       50,
-      "Step 4: Extract website data"
+      "Step 5: Extract website data"
     );
 
     const websiteUrls = allDiscoveredUrls
@@ -1228,7 +1337,7 @@ export async function runPipeline(runId: number): Promise<void> {
     await appendAndSave(
       `Extraction complete: ${extractedPages.length} pages + ${allPlatformLeads.length} platform results`,
       65,
-      "Step 5: Create & score leads"
+      "Step 6: Create & score leads"
     );
 
     let createdCount = 0;
@@ -1463,11 +1572,11 @@ export async function runPipeline(runId: number): Promise<void> {
 
     await storage.updateRun(runId, { leadsExtracted: createdCount });
 
-    await appendAndSave(`Created ${createdCount} total leads`, 80, "Step 6: Contact enrichment");
+    await appendAndSave(`Created ${createdCount} total leads`, 80, "Step 7: Contact enrichment");
 
     const runLeads = await storage.listLeadsByRun(runId);
-    const APOLLO_MAX_CALLS_PER_RUN = 25;
-    const APOLLO_MIN_SCORE = 25;
+    const APOLLO_MAX_CALLS_PER_RUN = 50;
+    const APOLLO_MIN_SCORE = 15;
     const leadsToEnrich = runLeads
       .filter((l) => !l.email && (l.score || 0) >= APOLLO_MIN_SCORE)
       .sort((a, b) => (b.score || 0) - (a.score || 0));
@@ -1586,64 +1695,93 @@ export async function runPipeline(runId: number): Promise<void> {
         }
 
         await appendAndSave(`Apollo.io: enriched ${enrichedCount} of ${leadsToEnrich.length} leads (${apolloSkipped} skipped invalid names, ${apolloCalls} API calls used)`);
-      } else if (isHunterAvailable() && leadsToEnrich.length > 0) {
-        await appendAndSave(`Hunter.io fallback: enriching ${leadsToEnrich.length} leads missing emails...`);
-        const enrichedDomains = new Set<string>();
-
-        for (const lead of leadsToEnrich) {
-          const domain = extractDomainFromUrl(lead.website || "");
-          if (!domain || !isEnrichableDomain(domain) || enrichedDomains.has(domain)) continue;
-          enrichedDomains.add(domain);
-
-          const result = await hunterDomainSearch(domain);
-          if (!result || result.emails.length === 0) continue;
-
-          const bestEmail = result.emails.sort((a, b) => b.confidence - a.confidence)[0];
-          const updateData: Record<string, any> = { email: bestEmail.value };
-          if (bestEmail.phone_number && !lead.phone) updateData.phone = bestEmail.phone_number;
-          if (bestEmail.linkedin && !lead.linkedin) updateData.linkedin = bestEmail.linkedin;
-          if (!lead.leaderName && bestEmail.first_name && bestEmail.last_name) {
-            updateData.leaderName = `${bestEmail.first_name} ${bestEmail.last_name}`;
-          }
-
-          const breakdown = scoreLead({
-            name: lead.communityName || "",
-            description: "",
-            type: lead.communityType || "",
-            location: lead.location || "",
-            website: lead.website || "",
-            email: updateData.email || lead.email || "",
-            phone: updateData.phone || lead.phone || "",
-            linkedin: updateData.linkedin || lead.linkedin || "",
-            ownedChannels: (lead.ownedChannels as Record<string, string>) || {},
-            monetizationSignals: (lead.monetizationSignals as Record<string, any>) || {},
-            engagementSignals: (lead.engagementSignals as Record<string, any>) || {},
-            tripFitSignals: (lead.tripFitSignals as Record<string, any>) || {},
-            leaderName: updateData.leaderName || lead.leaderName || "",
-            memberCount: (lead.engagementSignals as any)?.member_count || 0,
-            subscriberCount: (lead.engagementSignals as any)?.subscriber_count || 0,
-            raw: (lead.raw as Record<string, any>) || {},
-          });
-
-          const hasContact = !!(updateData.email || lead.website || updateData.phone || updateData.linkedin);
-          updateData.score = breakdown.total;
-          updateData.scoreBreakdown = breakdown;
-          updateData.status = determineStatus(breakdown.total, params.threshold, hasContact);
-
-          await storage.updateLead(lead.id, updateData);
-          enrichedCount++;
-          await new Promise((r) => setTimeout(r, 200));
-        }
-
-        await appendAndSave(`Hunter.io: enriched ${enrichedCount} leads from ${enrichedDomains.size} domains`);
       } else {
-        await appendAndSave("Email enrichment: skipped (no Apollo or Hunter API key configured)");
+        await appendAndSave("Apollo enrichment: skipped (no API key configured)");
       }
     } else {
       await appendAndSave("Apollo enrichment skipped (disabled by user)");
     }
 
-    await appendAndSave("Recalculating scores...", 90, "Step 7: Scoring & qualification");
+    const HUNTER_MAX_CALLS_PER_RUN = 30;
+    const refreshedLeads = await storage.listLeadsByRun(runId);
+    const leadsForHunter = refreshedLeads
+      .filter((l) => !l.email)
+      .filter((l) => {
+        const channels = (l.ownedChannels as Record<string, string>) || {};
+        const websiteUrl = channels.website || l.website || "";
+        const domain = extractDomainFromUrl(websiteUrl);
+        return domain && isEnrichableDomain(domain);
+      })
+      .sort((a, b) => (b.score || 0) - (a.score || 0));
+
+    if (isHunterAvailable() && leadsForHunter.length > 0) {
+      await appendAndSave(`Hunter.io: enriching ${Math.min(leadsForHunter.length, HUNTER_MAX_CALLS_PER_RUN)} leads with website domains...`, 87, "Step 8: Hunter.io enrichment");
+      const enrichedDomains = new Set<string>();
+      let hunterEnriched = 0;
+      let hunterCalls = 0;
+
+      for (const lead of leadsForHunter) {
+        if (hunterCalls >= HUNTER_MAX_CALLS_PER_RUN) {
+          await appendAndSave(`Hunter.io: reached ${HUNTER_MAX_CALLS_PER_RUN} call limit, stopping`);
+          break;
+        }
+
+        const channels = (lead.ownedChannels as Record<string, string>) || {};
+        const websiteUrl = channels.website || lead.website || "";
+        const domain = extractDomainFromUrl(websiteUrl);
+        if (!domain || !isEnrichableDomain(domain) || enrichedDomains.has(domain)) continue;
+        enrichedDomains.add(domain);
+
+        hunterCalls++;
+        const result = await hunterDomainSearch(domain);
+        if (!result || result.emails.length === 0) continue;
+
+        const bestEmail = result.emails.sort((a, b) => b.confidence - a.confidence)[0];
+        if (isBlockedEmail(bestEmail.value)) continue;
+
+        const updateData: Record<string, any> = { email: bestEmail.value };
+        if (bestEmail.phone_number && !lead.phone) updateData.phone = bestEmail.phone_number;
+        if (bestEmail.linkedin && !lead.linkedin) updateData.linkedin = bestEmail.linkedin;
+        if (!lead.leaderName && bestEmail.first_name && bestEmail.last_name) {
+          updateData.leaderName = `${bestEmail.first_name} ${bestEmail.last_name}`;
+        }
+
+        const breakdown = scoreLead({
+          name: lead.communityName || "",
+          description: "",
+          type: lead.communityType || "",
+          location: lead.location || "",
+          website: lead.website || "",
+          email: updateData.email || lead.email || "",
+          phone: updateData.phone || lead.phone || "",
+          linkedin: updateData.linkedin || lead.linkedin || "",
+          ownedChannels: channels,
+          monetizationSignals: (lead.monetizationSignals as Record<string, any>) || {},
+          engagementSignals: (lead.engagementSignals as Record<string, any>) || {},
+          tripFitSignals: (lead.tripFitSignals as Record<string, any>) || {},
+          leaderName: updateData.leaderName || lead.leaderName || "",
+          memberCount: (lead.engagementSignals as any)?.member_count || 0,
+          subscriberCount: (lead.engagementSignals as any)?.subscriber_count || 0,
+          raw: (lead.raw as Record<string, any>) || {},
+        });
+
+        const hasContact = !!(updateData.email || lead.website || updateData.phone || updateData.linkedin);
+        updateData.score = breakdown.total;
+        updateData.scoreBreakdown = breakdown;
+        updateData.status = determineStatus(breakdown.total, params.threshold, hasContact);
+
+        await storage.updateLead(lead.id, updateData);
+        hunterEnriched++;
+        await new Promise((r) => setTimeout(r, 200));
+      }
+
+      await appendAndSave(`Hunter.io: enriched ${hunterEnriched} leads from ${enrichedDomains.size} domains (${hunterCalls} API calls)`);
+      enrichedCount += hunterEnriched;
+    } else if (leadsForHunter.length > 0) {
+      await appendAndSave("Hunter.io: skipped (no API key configured)");
+    }
+
+    await appendAndSave("Recalculating scores...", 92, "Step 9: Scoring & qualification");
 
     const qualifiedCount = await storage.countLeadsByRunAndStatus(runId, "qualified");
     const watchlistCount = await storage.countLeadsByRunAndStatus(runId, "watchlist");
@@ -1655,8 +1793,8 @@ export async function runPipeline(runId: number): Promise<void> {
 
     await appendAndSave(
       `Scoring complete: ${qualifiedCount} qualified, ${watchlistCount} watchlist`,
-      95,
-      "Step 8: Finalizing"
+      96,
+      "Step 10: Finalizing"
     );
 
     await storage.updateRun(runId, {
@@ -1805,8 +1943,8 @@ export async function reEnrichRun(runId: number): Promise<void> {
 
     if (params.enableApollo !== false) {
       const refreshedLeads = await storage.listLeadsByRun(runId);
-      const RE_APOLLO_MAX_CALLS = 25;
-      const RE_APOLLO_MIN_SCORE = 25;
+      const RE_APOLLO_MAX_CALLS = 50;
+      const RE_APOLLO_MIN_SCORE = 15;
       const leadsToEnrich = refreshedLeads
         .filter((l) => (!l.email || l.email === "") && (l.score || 0) >= RE_APOLLO_MIN_SCORE)
         .sort((a, b) => (b.score || 0) - (a.score || 0));
@@ -1904,7 +2042,55 @@ export async function reEnrichRun(runId: number): Promise<void> {
       await appendAndSave("Apollo enrichment skipped (disabled by user)", 70);
     }
 
-    await appendAndSave(`Step 4: Re-scoring all leads...`, 75, "Re-enrichment: Scoring");
+    const RE_HUNTER_MAX_CALLS = 30;
+    const hunterLeads = await storage.listLeadsByRun(runId);
+    const leadsForHunterReEnrich = hunterLeads
+      .filter((l) => !l.email || l.email === "")
+      .filter((l) => {
+        const ch = (l.ownedChannels as Record<string, string>) || {};
+        const websiteUrl = ch.website || l.website || "";
+        const domain = extractDomainFromUrl(websiteUrl);
+        return domain && isEnrichableDomain(domain);
+      })
+      .sort((a, b) => (b.score || 0) - (a.score || 0));
+
+    if (isHunterAvailable() && leadsForHunterReEnrich.length > 0) {
+      await appendAndSave(`Step 4: Hunter.io enrichment for ${Math.min(leadsForHunterReEnrich.length, RE_HUNTER_MAX_CALLS)} leads...`, 72, "Re-enrichment: Hunter.io");
+      const enrichedDomains = new Set<string>();
+      let hunterEnriched = 0;
+      let hunterCalls = 0;
+
+      for (const lead of leadsForHunterReEnrich) {
+        if (hunterCalls >= RE_HUNTER_MAX_CALLS) break;
+        const ch = (lead.ownedChannels as Record<string, string>) || {};
+        const websiteUrl = ch.website || lead.website || "";
+        const domain = extractDomainFromUrl(websiteUrl);
+        if (!domain || !isEnrichableDomain(domain) || enrichedDomains.has(domain)) continue;
+        enrichedDomains.add(domain);
+
+        hunterCalls++;
+        const result = await hunterDomainSearch(domain);
+        if (!result || result.emails.length === 0) continue;
+
+        const bestEmail = result.emails.sort((a, b) => b.confidence - a.confidence)[0];
+        if (isBlockedEmail(bestEmail.value)) continue;
+
+        const updateData: Record<string, any> = { email: bestEmail.value };
+        if (bestEmail.phone_number && !lead.phone) updateData.phone = bestEmail.phone_number;
+        if (bestEmail.linkedin && !lead.linkedin) updateData.linkedin = bestEmail.linkedin;
+
+        if (Object.keys(updateData).length > 0) {
+          await storage.updateLead(lead.id, updateData);
+          hunterEnriched++;
+        }
+        await new Promise((r) => setTimeout(r, 200));
+      }
+      await appendAndSave(`Hunter.io: enriched ${hunterEnriched} leads from ${enrichedDomains.size} domains`);
+    } else if (leadsForHunterReEnrich.length > 0) {
+      await appendAndSave("Hunter.io: skipped (no API key configured)");
+    }
+
+    await appendAndSave(`Step 5: Re-scoring all leads...`, 80, "Re-enrichment: Scoring");
     const finalLeads = await storage.listLeadsByRun(runId);
     let reScored = 0;
     for (const lead of finalLeads) {
