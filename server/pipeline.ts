@@ -3295,16 +3295,29 @@ export async function reEnrichRun(runId: number): Promise<void> {
 
   try {
     activeRunIds.add(runId);
+
+    const leads = await storage.listLeadsByRun(runId);
+    if (leads.length === 0) {
+      const msg = `Re-enrichment aborted: no leads found for run ${runId}. The original pipeline may have been interrupted before leads were created.`;
+      log(msg, "pipeline");
+      await storage.updateRun(runId, {
+        status: "interrupted",
+        step: "Re-enrichment aborted (no leads)",
+        finishedAt: new Date(),
+        logs: appendLog(run.logs || "", msg),
+      });
+      return;
+    }
+
+    currentLogs = appendLog(run.logs || "", "--- Re-enrichment started ---");
     await storage.updateRun(runId, {
       status: "running",
       progress: 0,
       step: "Re-enrichment: Loading leads",
-      startedAt: new Date(),
       finishedAt: null,
-      logs: "",
+      logs: currentLogs,
     });
 
-    const leads = await storage.listLeadsByRun(runId);
     await appendAndSave(`Loaded ${leads.length} leads from run ${runId}`, 5, "Re-enrichment: Converting leads");
 
     const platformLeads: (PlatformLead & { dbId: number })[] = leads.map((lead) => ({
