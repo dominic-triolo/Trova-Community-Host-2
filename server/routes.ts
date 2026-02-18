@@ -175,8 +175,12 @@ export async function registerRoutes(
         "Community Name", "Community Type", "Leader Name", "Leader Role",
         "Location", "Website", "Email", "Phone", "LinkedIn",
         "Patreon URL", "Personal Website",
-        "Member/Patron Count", "Post Count",
+        "Member/Patron Count", "Subscriber Count", "Episode Count", "Post/Video Count",
+        "Instagram Followers", "Twitter Followers", "Genre",
         "YouTube", "Instagram", "Twitter", "Facebook", "TikTok",
+        "Discord", "Twitch", "Substack", "Linktree",
+        "Podcast URL", "RSS Feed URL",
+        "Has Sponsorships", "Has Merch", "Has Courses", "Has Membership", "Established Creator",
         "Score",
         "Niche Score", "Trust Score", "Engagement Score", "Monetization Score", "Channels Score", "Trip Fit Score",
         "Discovered At",
@@ -193,6 +197,8 @@ export async function registerRoutes(
         const engagement = (lead.engagementSignals as Record<string, any>) || {};
         const channels = (lead.ownedChannels as Record<string, string>) || {};
         const breakdown = (lead.scoreBreakdown as any) || {};
+        const monetization = (lead.monetizationSignals as Record<string, any>) || {};
+        const raw = (lead.raw as Record<string, any>) || {};
 
         const row = [
           esc(lead.communityName),
@@ -206,13 +212,29 @@ export async function registerRoutes(
           esc(lead.linkedin),
           esc(channels.patreon || ""),
           esc(channels.website || ""),
-          engagement.member_count ?? engagement.subscriber_count ?? "",
+          engagement.member_count ?? engagement.patron_count ?? "",
+          engagement.subscriber_count ?? "",
+          engagement.episode_count ?? "",
           engagement.post_count ?? engagement.total_videos ?? "",
+          engagement.instagram_followers ?? "",
+          engagement.twitter_followers ?? "",
+          esc(engagement.genre || ""),
           esc(channels.youtube || ""),
           esc(channels.instagram || ""),
           esc(channels.twitter || ""),
           esc(channels.facebook || ""),
           esc(channels.tiktok || ""),
+          esc(channels.discord || ""),
+          esc(channels.twitch || ""),
+          esc(channels.substack || ""),
+          esc(channels.linktree || ""),
+          esc(channels.podcast || raw.itunes_url || raw.url || ""),
+          esc(channels.rss || raw.feedUrl || ""),
+          monetization.sponsored ? "Yes" : "",
+          monetization.merch ? "Yes" : "",
+          monetization.courses ? "Yes" : "",
+          monetization.membership || monetization.patreon ? "Yes" : "",
+          monetization.established ? "Yes" : "",
           lead.score ?? 0,
           breakdown.nicheIdentity ?? "",
           breakdown.trustLeadership ?? "",
