@@ -1294,13 +1294,20 @@ async function scrapeApplePodcasts(
       if (batchLeadsWithRss.length > 0) {
         await appendAndSave(`RSS inline: scraping ${batchLeadsWithRss.length} feeds for emails... [${totalEmailsFound}/${emailTarget} emails]`);
 
-        try {
-          const startUrls = batchLeadsWithRss.map(l => ({ url: l.ownedChannels!.rss! }));
-          const { items: rssResults, costUsd: rssCost } = await runActorAndGetResults("apify~cheerio-scraper", {
-            startUrls,
-            maxCrawlPages: batchLeadsWithRss.length,
-            maxConcurrency: 5,
-            pageFunction: `async function pageFunction(context) {
+        const RSS_SUB_BATCH_SIZE = 30;
+        let rssEmailsFound = 0;
+
+        for (let subIdx = 0; subIdx < batchLeadsWithRss.length; subIdx += RSS_SUB_BATCH_SIZE) {
+          const subBatch = batchLeadsWithRss.slice(subIdx, subIdx + RSS_SUB_BATCH_SIZE);
+
+          try {
+            const startUrls = subBatch.map(l => ({ url: l.ownedChannels!.rss! }));
+            const { items: rssResults, costUsd: rssCost } = await runActorAndGetResults("apify~cheerio-scraper", {
+              startUrls,
+              maxCrawlPages: subBatch.length,
+              maxConcurrency: 10,
+              requestTimeoutSecs: 30,
+              pageFunction: `async function pageFunction(context) {
   const { body, request } = context;
   const text = typeof body === 'string' ? body : body.toString('utf8');
   var ownerEmail = '';
@@ -1325,85 +1332,85 @@ async function scrapeApplePodcasts(
   for (var j = 0; j < Math.min(urlFound.length, 50); j++) { urls.push(urlFound[j]); }
   return { url: request.url, ownerEmail: ownerEmail, ownerName: ownerName, link: link, author: author, emails: emails, urls: urls };
 }`,
-          }, 120000);
-          await storage.incrementApifySpend(runId, rssCost);
+            }, 180000);
+            await storage.incrementApifySpend(runId, rssCost);
 
-          let rssEmailsFound = 0;
-          for (const result of rssResults) {
-            const feedUrl = result.url || "";
-            const matchLead = batchLeadsWithRss.find(l => {
-              try {
-                return l.ownedChannels?.rss && feedUrl.toLowerCase().includes(
-                  new URL(l.ownedChannels.rss).hostname.replace(/^www\./, "").toLowerCase()
-                ) && feedUrl.toLowerCase().includes(
-                  new URL(l.ownedChannels.rss).pathname.split("/").filter(Boolean).slice(0, 2).join("/").toLowerCase()
-                );
-              } catch { return false; }
-            });
+            for (const result of rssResults) {
+              const feedUrl = result.url || "";
+              const matchLead = subBatch.find(l => {
+                try {
+                  return l.ownedChannels?.rss && feedUrl.toLowerCase().includes(
+                    new URL(l.ownedChannels.rss).hostname.replace(/^www\./, "").toLowerCase()
+                  ) && feedUrl.toLowerCase().includes(
+                    new URL(l.ownedChannels.rss).pathname.split("/").filter(Boolean).slice(0, 2).join("/").toLowerCase()
+                  );
+                } catch { return false; }
+              });
 
-            if (!matchLead) continue;
+              if (!matchLead) continue;
 
-            const ownerEmail = result.ownerEmail || "";
-            if (ownerEmail && !isBlockedEmail(ownerEmail) && !matchLead.email) {
-              matchLead.email = cleanEmail(ownerEmail);
-              if (matchLead.email) {
-                rssEmailsFound++;
-                totalEmailsFound++;
+              const ownerEmail = result.ownerEmail || "";
+              if (ownerEmail && !isBlockedEmail(ownerEmail) && !matchLead.email) {
+                matchLead.email = cleanEmail(ownerEmail);
+                if (matchLead.email) {
+                  rssEmailsFound++;
+                  totalEmailsFound++;
+                }
               }
-            }
 
-            if (!matchLead.email) {
-              const allEmails: string[] = result.emails || [];
-              for (const email of allEmails) {
-                if (!isBlockedEmail(email)) {
-                  matchLead.email = cleanEmail(email);
-                  if (matchLead.email) {
-                    rssEmailsFound++;
-                    totalEmailsFound++;
-                    break;
+              if (!matchLead.email) {
+                const allEmails: string[] = result.emails || [];
+                for (const email of allEmails) {
+                  if (!isBlockedEmail(email)) {
+                    matchLead.email = cleanEmail(email);
+                    if (matchLead.email) {
+                      rssEmailsFound++;
+                      totalEmailsFound++;
+                      break;
+                    }
                   }
                 }
               }
-            }
 
-            const ownerName = result.ownerName || result.author || "";
-            if (ownerName && (!matchLead.leaderName || matchLead.leaderName === matchLead.communityName)) {
-              matchLead.leaderName = ownerName;
-            }
+              const ownerName = result.ownerName || result.author || "";
+              if (ownerName && (!matchLead.leaderName || matchLead.leaderName === matchLead.communityName)) {
+                matchLead.leaderName = ownerName;
+              }
 
-            const rssLink = result.link || "";
-            if (rssLink && rssLink.startsWith("http") && !rssLink.includes("podcasts.apple.com") && !matchLead.ownedChannels?.website) {
-              matchLead.ownedChannels!.website = rssLink;
-            }
+              const rssLink = result.link || "";
+              if (rssLink && rssLink.startsWith("http") && !rssLink.includes("podcasts.apple.com") && !matchLead.ownedChannels?.website) {
+                matchLead.ownedChannels!.website = rssLink;
+              }
 
-            const rssUrls: string[] = result.urls || [];
-            for (const url of rssUrls) {
-              if (!url || !url.startsWith("http")) continue;
-              try {
-                const host = new URL(url).hostname.replace(/^www\./, "");
-                if (host.includes("linkedin.com") && url.includes("/in/") && !matchLead.ownedChannels?.linkedin) {
-                  matchLead.ownedChannels!.linkedin = url.split("?")[0];
-                }
-                if (host.includes("instagram.com") && !matchLead.ownedChannels?.instagram) {
-                  matchLead.ownedChannels!.instagram = url.split("?")[0];
-                }
-                if ((host.includes("twitter.com") || host === "x.com") && !matchLead.ownedChannels?.twitter) {
-                  matchLead.ownedChannels!.twitter = url.split("?")[0];
-                }
-                if ((host.includes("linktr.ee") || host.includes("beacons.ai") || host.includes("bio.link")) && !matchLead.ownedChannels?.linktree) {
-                  matchLead.ownedChannels!.linktree = url.split("?")[0];
-                }
-              } catch {}
+              const rssUrls: string[] = result.urls || [];
+              for (const url of rssUrls) {
+                if (!url || !url.startsWith("http")) continue;
+                try {
+                  const host = new URL(url).hostname.replace(/^www\./, "");
+                  if (host.includes("linkedin.com") && url.includes("/in/") && !matchLead.ownedChannels?.linkedin) {
+                    matchLead.ownedChannels!.linkedin = url.split("?")[0];
+                  }
+                  if (host.includes("instagram.com") && !matchLead.ownedChannels?.instagram) {
+                    matchLead.ownedChannels!.instagram = url.split("?")[0];
+                  }
+                  if ((host.includes("twitter.com") || host === "x.com") && !matchLead.ownedChannels?.twitter) {
+                    matchLead.ownedChannels!.twitter = url.split("?")[0];
+                  }
+                  if ((host.includes("linktr.ee") || host.includes("beacons.ai") || host.includes("bio.link")) && !matchLead.ownedChannels?.linktree) {
+                    matchLead.ownedChannels!.linktree = url.split("?")[0];
+                  }
+                } catch {}
+              }
             }
+          } catch (err: any) {
+            if (err.costUsd) {
+              await storage.incrementApifySpend(runId, err.costUsd);
+            }
+            await appendAndSave(`[WARN] RSS inline sub-batch ${Math.floor(subIdx / RSS_SUB_BATCH_SIZE) + 1} failed (${subBatch.length} feeds): ${err.message}`);
           }
-
-          await appendAndSave(`RSS inline: +${rssEmailsFound} emails from feeds. Progress: ${totalEmailsFound}/${emailTarget} emails, ${leads.length} total leads`);
-        } catch (err: any) {
-          if (err.costUsd) {
-            await storage.incrementApifySpend(runId, err.costUsd);
-          }
-          await appendAndSave(`[WARN] RSS inline scrape failed: ${err.message}`);
         }
+
+        await appendAndSave(`RSS inline: +${rssEmailsFound} emails from feeds. Progress: ${totalEmailsFound}/${emailTarget} emails, ${leads.length} total leads`);
       }
     } catch (err: any) {
       if (err.costUsd) {
