@@ -761,19 +761,19 @@ export default function Home() {
                 <Label className="text-sm font-medium">Settings</Label>
               </div>
               <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">Max Podcasts to Discover</Label>
+                <Label className="text-xs text-muted-foreground">Email Target (max podcasts with emails)</Label>
                 <Input
                   type="number"
                   value={params.maxDiscoveredUrls}
                   min={1}
-                  max={200}
+                  max={500}
                   onChange={(e) => {
                     const val = parseInt(e.target.value) || 200;
-                    setParams((p) => ({ ...p, maxDiscoveredUrls: Math.min(200, Math.max(1, val)) }));
+                    setParams((p) => ({ ...p, maxDiscoveredUrls: Math.min(500, Math.max(1, val)) }));
                   }}
                   data-testid="input-pod-max-podcasts"
                 />
-                <p className="text-[11px] text-muted-foreground">Maximum 200 podcasts per run</p>
+                <p className="text-[11px] text-muted-foreground">Searches until this many emails are found (max 500). Total leads may be higher.</p>
               </div>
             </Card>
           </TabsContent>
