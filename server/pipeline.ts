@@ -1183,7 +1183,7 @@ async function scrapeApplePodcasts(
   const keywordPreview = dedupedKeywords.length <= 5 ? dedupedKeywords.join(", ") : `${dedupedKeywords.slice(0, 5).join(", ")} (+${dedupedKeywords.length - 5} more)`;
   await appendAndSave(`Podcasts: email target ${emailTarget} — searching ${dedupedKeywords.length} keywords in ${country} store: ${keywordPreview}`);
 
-  const maxResultsPerQuery = Math.max(50, Math.min(200, Math.ceil(emailTarget * 3 / dedupedKeywords.length)));
+  const maxResultsPerQuery = Math.max(50, Math.min(500, Math.ceil(emailTarget * 3 / dedupedKeywords.length)));
 
   for (const kw of dedupedKeywords) {
     if (totalEmailsFound >= emailTarget) {
@@ -1416,7 +1416,8 @@ async function scrapeApplePodcasts(
   const withWebsite = leads.filter(l => l.ownedChannels?.website).length;
   const withRss = leads.filter(l => l.ownedChannels?.rss).length;
   const withEmail = leads.filter(l => l.email).length;
-  await appendAndSave(`Podcasts: DONE — ${leads.length} total leads, ${withEmail}/${emailTarget} emails found (${withWebsite} with website, ${withRss} with RSS feed)`);
+  const reason = withEmail >= emailTarget ? "email target reached" : "all keywords exhausted";
+  await appendAndSave(`Podcasts: DONE (${reason}) — ${leads.length} total leads, ${withEmail}/${emailTarget} emails found (${withWebsite} with website, ${withRss} with RSS feed)`);
 
   return leads;
 }
