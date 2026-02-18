@@ -998,6 +998,49 @@ function extractSocialChannelsFromUrls(urls: string[]): Record<string, string> {
   return channels;
 }
 
+function parseMemberCountFromSnippet(text: string): number {
+  const memberPatterns = [
+    /([\d,.]+)\s*[Kk]\s*(?:members|people|followers)/i,
+    /([\d,.]+)\s*[Mm](?:illion)?\s*(?:members|people|followers)/i,
+    /([\d,.]+)\s*(?:members|people|followers)/i,
+    /(?:members|people|followers)[:\s]*([\d,.]+)\s*[Kk]?/i,
+  ];
+  for (const pat of memberPatterns) {
+    const m = text.match(pat);
+    if (m) {
+      const raw = m[1].replace(/,/g, "");
+      let num = parseFloat(raw);
+      const afterNum = text.substring(text.indexOf(m[0]) + m[0].indexOf(m[1]) + m[1].length, text.indexOf(m[0]) + m[0].length);
+      if (/^\s*[Kk]/.test(afterNum)) num *= 1000;
+      else if (/^\s*[Mm]/.test(afterNum)) num *= 1000000;
+      return Math.round(num);
+    }
+  }
+  return 0;
+}
+
+function extractFbGroupUrl(rawUrl: string): string {
+  try {
+    const u = new URL(rawUrl);
+    const host = u.hostname.replace(/^(www\.|m\.|mobile\.)/, "");
+    if (host !== "facebook.com") return rawUrl.split("?")[0];
+
+    const groupId = u.searchParams.get("group_id");
+    if (groupId) return `https://www.facebook.com/groups/${groupId}`;
+
+    const path = u.pathname.replace(/\/+$/, "");
+    if (path.startsWith("/groups/")) {
+      const parts = path.split("/").filter(Boolean);
+      if (parts.length >= 2 && parts[1]) {
+        return `https://www.facebook.com/groups/${parts[1]}`;
+      }
+    }
+    return rawUrl.split("?")[0];
+  } catch {
+    return rawUrl;
+  }
+}
+
 async function scrapeFacebookGroups(
   runId: number,
   keywords: string[],
@@ -1010,78 +1053,90 @@ async function scrapeFacebookGroups(
   const minMembers = filters.minMemberCount || 0;
   const maxMembers = filters.maxMemberCount || 0;
 
-  for (const kw of keywords) {
+  const googleQueries = keywords.map(kw => `site:facebook.com/groups "${kw}"`);
+  const batchSize = 5;
+
+  for (let i = 0; i < googleQueries.length; i += batchSize) {
     if (leads.length >= maxItems) break;
+    const batch = googleQueries.slice(i, i + batchSize);
+
     try {
-      await appendAndSave(`Facebook: searching for "${kw}"...`);
-      const { items, costUsd: actorCost } = await runActorAndGetResults("easyapi~facebook-groups-search-scraper", {
-        searchQuery: kw,
-        maxItems: Math.min(50, maxItems - leads.length),
-      }, 180000);
+      await appendAndSave(`Facebook (via Google): searching ${batch.length} queries...`);
+      const { items, costUsd: actorCost } = await runActorAndGetResults("apify~google-search-scraper", {
+        queries: batch.join("\n"),
+        maxPagesPerQuery: 2,
+        resultsPerPage: 20,
+        countryCode: "us",
+        languageCode: "en",
+        mobileResults: false,
+      }, 120000);
       await storage.incrementApifySpend(runId, actorCost);
 
       let filteredOut = 0;
       for (const item of items) {
         if (leads.length >= maxItems) break;
 
-        const groupName = item.name || item.groupName || item.title || "";
-        const description = item.description || item.groupDescription || item.about || "";
-        const url = item.url || item.groupUrl || item.link || "";
+        const organicResults = item.organicResults || [];
+        for (const result of organicResults) {
+          if (leads.length >= maxItems) break;
 
-        let memberCount = item.membersCount || item.members || 0;
-        if (!memberCount && item.memberInfo) {
-          const memberStr = String(item.memberInfo).replace(/,/g, "");
-          const match = memberStr.match(/([\d.]+)\s*([KkMm]?)/);
-          if (match) {
-            let num = parseFloat(match[1]);
-            const suffix = match[2].toUpperCase();
-            if (suffix === "K") num *= 1000;
-            if (suffix === "M") num *= 1000000;
-            memberCount = Math.round(num);
-          }
+          const rawUrl = result.url || result.link || "";
+          if (!rawUrl.includes("facebook.com/groups/")) continue;
+
+          const url = extractFbGroupUrl(rawUrl);
+
+          if (seenGroupUrls.has(url)) continue;
+          seenGroupUrls.add(url);
+
+          const title = result.title || "";
+          const snippet = result.description || result.snippet || "";
+          const fullText = `${title} ${snippet}`;
+
+          const groupName = title
+            .replace(/\s*\|\s*Facebook$/i, "")
+            .replace(/\s*[-–—]\s*Facebook$/i, "")
+            .replace(/\s*Facebook\s*$/i, "")
+            .trim();
+
+          const memberCount = parseMemberCountFromSnippet(fullText);
+
+          if (minMembers > 0 && memberCount > 0 && memberCount < minMembers) { filteredOut++; continue; }
+          if (maxMembers > 0 && memberCount > 0 && memberCount > maxMembers) { filteredOut++; continue; }
+
+          const channels: Record<string, string> = { facebook: url };
+
+          const descUrls = extractUrlsFromText(snippet);
+          const socialFromDesc = extractSocialChannelsFromUrls(descUrls);
+          Object.assign(channels, socialFromDesc);
+
+          if (snippet.toLowerCase().includes("discord") && !channels.discord) channels.discord = "detected";
+          if (snippet.toLowerCase().includes("newsletter") && !channels.newsletter) channels.newsletter = "detected";
+
+          const descEmails = extractEmailsFromText(snippet);
+
+          leads.push({
+            source: "facebook",
+            communityName: groupName,
+            communityType: detectCommunityType(fullText),
+            description: snippet.substring(0, 2000),
+            location: "",
+            website: channels.website || url,
+            email: descEmails[0] || "",
+            phone: "",
+            leaderName: "",
+            memberCount,
+            subscriberCount: 0,
+            ownedChannels: channels,
+            monetizationSignals: detectMonetization(snippet),
+            engagementSignals: {
+              member_count: memberCount,
+              attendance_proxy: memberCount,
+              ...detectEngagement(snippet),
+            },
+            tripFitSignals: detectTripFit(fullText),
+            raw: result,
+          });
         }
-        const fullText = `${groupName} ${description}`;
-
-        if (url && seenGroupUrls.has(url)) continue;
-        if (url) seenGroupUrls.add(url);
-
-        if (minMembers > 0 && memberCount < minMembers) { filteredOut++; continue; }
-        if (maxMembers > 0 && memberCount > maxMembers) { filteredOut++; continue; }
-
-        const channels: Record<string, string> = { facebook: url || "active" };
-
-        const descUrls = extractUrlsFromText(description);
-        const socialFromDesc = extractSocialChannelsFromUrls(descUrls);
-        Object.assign(channels, socialFromDesc);
-
-        if (description.toLowerCase().includes("discord") && !channels.discord) channels.discord = "detected";
-        if (description.toLowerCase().includes("newsletter") && !channels.newsletter) channels.newsletter = "detected";
-
-        const descEmails = extractEmailsFromText(description);
-        const adminName = item.adminName || "";
-
-        leads.push({
-          source: "facebook",
-          communityName: groupName,
-          communityType: detectCommunityType(fullText),
-          description: description.substring(0, 2000),
-          location: item.location || "",
-          website: channels.website || url,
-          email: descEmails[0] || "",
-          phone: "",
-          leaderName: adminName,
-          memberCount,
-          subscriberCount: 0,
-          ownedChannels: channels,
-          monetizationSignals: detectMonetization(description),
-          engagementSignals: {
-            member_count: memberCount,
-            attendance_proxy: memberCount,
-            ...detectEngagement(description),
-          },
-          tripFitSignals: detectTripFit(fullText),
-          raw: item,
-        });
       }
 
       await appendAndSave(`Facebook: found ${leads.length} groups so far${filteredOut > 0 ? ` (${filteredOut} filtered by member count)` : ""}`);
@@ -1089,7 +1144,7 @@ async function scrapeFacebookGroups(
       if (err.costUsd) {
         await storage.incrementApifySpend(runId, err.costUsd);
       }
-      await appendAndSave(`[WARN] Facebook search failed for "${kw}": ${err.message}`);
+      await appendAndSave(`[WARN] Facebook Google search failed: ${err.message}`);
     }
   }
 

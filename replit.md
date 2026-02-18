@@ -89,7 +89,7 @@ The discovery form uses platform-specific tabs. Patreon and Facebook Groups are 
 - `streamers~youtube-scraper` - YouTube channel/video search (structured data)
 - `trudax~reddit-scraper-lite` - Reddit community search (structured data)
 - `aitorsm~eventbrite` - Eventbrite event/organizer search (structured data)
-- `easyapi/facebook-groups-search-scraper` - Facebook group keyword search (structured data: name, URL, memberInfo, visibility)
+- `apify~google-search-scraper` - Also used for Facebook group discovery via `site:facebook.com/groups` queries (no dedicated Facebook scraper needed)
 - `louisdeconinck~patreon-scraper` - Patreon creator search (social links, about text, tiers, earnings)
 - `apify/instagram-profile-scraper` - Instagram profile bio/email/website scraping ($1.60/1K profiles)
 - `apidojo/twitter-user-scraper` - Twitter/X profile bio/website/location scraping ($0.40/1K users)
