@@ -1014,11 +1014,9 @@ async function scrapeFacebookGroups(
     if (leads.length >= maxItems) break;
     try {
       await appendAndSave(`Facebook: searching for "${kw}"...`);
-      const { items, costUsd: actorCost } = await runActorAndGetResults("apify~facebook-groups-scraper", {
-        searchType: "groups",
+      const { items, costUsd: actorCost } = await runActorAndGetResults("easyapi~facebook-groups-search-scraper", {
         searchQuery: kw,
-        maxGroups: Math.min(50, maxItems - leads.length),
-        maxPostsPerGroup: 0,
+        maxItems: Math.min(50, maxItems - leads.length),
       }, 180000);
       await storage.incrementApifySpend(runId, actorCost);
 
@@ -1026,10 +1024,22 @@ async function scrapeFacebookGroups(
       for (const item of items) {
         if (leads.length >= maxItems) break;
 
-        const groupName = item.name || item.title || "";
-        const description = item.description || item.about || "";
-        const memberCount = item.membersCount || item.members || 0;
-        const url = item.url || item.groupUrl || "";
+        const groupName = item.name || item.groupName || item.title || "";
+        const description = item.description || item.groupDescription || item.about || "";
+        const url = item.url || item.groupUrl || item.link || "";
+
+        let memberCount = item.membersCount || item.members || 0;
+        if (!memberCount && item.memberInfo) {
+          const memberStr = String(item.memberInfo).replace(/,/g, "");
+          const match = memberStr.match(/([\d.]+)\s*([KkMm]?)/);
+          if (match) {
+            let num = parseFloat(match[1]);
+            const suffix = match[2].toUpperCase();
+            if (suffix === "K") num *= 1000;
+            if (suffix === "M") num *= 1000000;
+            memberCount = Math.round(num);
+          }
+        }
         const fullText = `${groupName} ${description}`;
 
         if (url && seenGroupUrls.has(url)) continue;
