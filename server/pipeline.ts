@@ -1200,7 +1200,7 @@ async function scrapeApplePodcasts(
         country: country,
         maxResults: maxResultsPerQuery,
         includeEpisodes: false,
-      }, 180000);
+      }, 180000, 0.03);
       await storage.incrementApifySpend(runId, actorCost);
 
       let skippedDupe = 0;
@@ -2086,7 +2086,7 @@ async function enrichFromInstagramBios(
   try {
     const { items: results, costUsd: actorCost } = await runActorAndGetResults("apify~instagram-profile-scraper", {
       usernames,
-    }, 120000);
+    }, 120000, 0.0016);
     await storage.incrementApifySpend(runId, actorCost);
 
     let enrichedCount = 0;
@@ -2219,7 +2219,7 @@ async function enrichFromTwitterBios(
       getRetweeters: false,
       includeUnavailableUsers: false,
       maxItems: Math.max(handles.length + 5, 10),
-    }, 120000);
+    }, 120000, 0.0004);
     await storage.incrementApifySpend(runId, actorCost);
 
     let enrichedCount = 0;
@@ -3285,7 +3285,7 @@ export async function runPipeline(runId: number): Promise<void> {
             company_domain: domains,
             email_status: ["validated"],
             fetch_count: Math.min(domains.length * 5, 200),
-          }, 120000);
+          }, 120000, 0.0015);
           await storage.incrementApifySpend(runId, actorCost);
 
           const emailByDomain = new Map<string, any>();
@@ -3637,7 +3637,7 @@ export async function reEnrichRun(runId: number): Promise<void> {
             company_domain: domains,
             email_status: ["validated"],
             fetch_count: Math.min(domains.length * 5, 200),
-          }, 120000);
+          }, 120000, 0.0015);
           await storage.incrementApifySpend(runId, actorCost);
 
           const emailByDomain = new Map<string, any>();

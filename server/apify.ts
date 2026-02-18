@@ -113,7 +113,7 @@ export interface ActorRunOutput {
   costUsd: number;
 }
 
-export async function runActorAndGetResults(actorId: string, input: Record<string, any>, timeoutMs = 300000): Promise<ActorRunOutput> {
+export async function runActorAndGetResults(actorId: string, input: Record<string, any>, timeoutMs = 300000, perResultCostUsd?: number): Promise<ActorRunOutput> {
   log(`[APIFY] Starting actor ${actorId}`, "apify");
   const runId = await startActorRun(actorId, input);
   log(`[APIFY] Run ${runId} started, waiting...`, "apify");
@@ -128,8 +128,9 @@ export async function runActorAndGetResults(actorId: string, input: Record<strin
   }
 
   const items = await getDatasetItems(runId);
-  log(`[APIFY] Got ${items.length} items from run ${runId}`, "apify");
-  return { items, costUsd: result.usageTotalUsd };
+  const costUsd = perResultCostUsd ? items.length * perResultCostUsd : result.usageTotalUsd;
+  log(`[APIFY] Got ${items.length} items from run ${runId}${perResultCostUsd ? ` (pay-per-result: $${costUsd.toFixed(2)})` : ''}`, "apify");
+  return { items, costUsd };
 }
 
 function sleep(ms: number): Promise<void> {
