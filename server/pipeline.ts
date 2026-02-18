@@ -1156,11 +1156,12 @@ async function scrapeApplePodcasts(
   keywords: string[],
   maxItems: number,
   appendAndSave: (msg: string) => Promise<void>,
-  filters: { minEpisodeCount?: number } = {},
+  filters: { minEpisodeCount?: number; podcastCountry?: string } = {},
 ): Promise<PlatformLead[]> {
   const leads: PlatformLead[] = [];
   const seenPodcastIds = new Set<string>();
   const minEpisodes = filters.minEpisodeCount || 0;
+  const country = filters.podcastCountry || "US";
 
   const existingLeads = await storage.listLeads();
   for (const l of existingLeads) {
@@ -1179,7 +1180,7 @@ async function scrapeApplePodcasts(
   }
 
   const keywordPreview = dedupedKeywords.length <= 5 ? dedupedKeywords.join(", ") : `${dedupedKeywords.slice(0, 5).join(", ")} (+${dedupedKeywords.length - 5} more)`;
-  await appendAndSave(`Podcasts: searching ${dedupedKeywords.length} keywords: ${keywordPreview}`);
+  await appendAndSave(`Podcasts: searching ${dedupedKeywords.length} keywords in ${country} store: ${keywordPreview}`);
 
   const maxResultsPerQuery = Math.max(10, Math.min(200, Math.ceil(maxItems * 1.5 / dedupedKeywords.length)));
 
@@ -1192,7 +1193,7 @@ async function scrapeApplePodcasts(
       const { items, costUsd: actorCost } = await runActorAndGetResults("benthepythondev~podcast-intelligence-aggregator", {
         mode: "search",
         searchQuery: kw,
-        country: "US",
+        country: country,
         maxResults: maxResultsPerQuery,
         includeEpisodes: false,
       }, 180000);
@@ -2355,6 +2356,7 @@ export async function runPipeline(runId: number): Promise<void> {
     if (enabledSources.includes("podcast")) {
       platformTasks.push({ name: "Podcasts", promise: scrapeApplePodcasts(runId, keywords, maxPerPlatform, (msg) => appendAndSave(msg), {
         minEpisodeCount: params.minEpisodeCount || 0,
+        podcastCountry: params.podcastCountry || "US",
       }) });
     }
 

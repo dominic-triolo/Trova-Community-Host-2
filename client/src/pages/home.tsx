@@ -21,6 +21,7 @@ import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Rocket,
   Search,
@@ -188,7 +189,7 @@ export default function Home() {
     } else if (tab === "facebook") {
       setParams((p) => ({ ...p, enabledSources: ["facebook"], seedKeywords: [], minMemberCount: 100, maxMemberCount: 0, minPostCount: 0, minEpisodeCount: 0 }));
     } else if (tab === "podcast") {
-      setParams((p) => ({ ...p, enabledSources: ["podcast"], seedKeywords: [], minMemberCount: 0, maxMemberCount: 0, minPostCount: 0, minEpisodeCount: 10 }));
+      setParams((p) => ({ ...p, enabledSources: ["podcast"], seedKeywords: [], minMemberCount: 0, maxMemberCount: 0, minPostCount: 0, minEpisodeCount: 10, podcastCountry: "US" }));
     }
   };
 
@@ -708,8 +709,37 @@ export default function Home() {
                 <Filter className="w-4 h-4 text-muted-foreground" />
                 <Label className="text-sm font-medium">Podcast Filters</Label>
               </div>
-              <p className="text-xs text-muted-foreground">Podcasts with fewer episodes than the minimum are excluded. Set to 0 to disable.</p>
+              <p className="text-xs text-muted-foreground">Filter by country and minimum episode count.</p>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">Country</Label>
+                  <Select
+                    value={params.podcastCountry || "US"}
+                    onValueChange={(val) => setParams((p) => ({ ...p, podcastCountry: val }))}
+                  >
+                    <SelectTrigger data-testid="select-pod-country">
+                      <SelectValue placeholder="Select country" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="US">United States</SelectItem>
+                      <SelectItem value="GB">United Kingdom</SelectItem>
+                      <SelectItem value="CA">Canada</SelectItem>
+                      <SelectItem value="AU">Australia</SelectItem>
+                      <SelectItem value="DE">Germany</SelectItem>
+                      <SelectItem value="FR">France</SelectItem>
+                      <SelectItem value="ES">Spain</SelectItem>
+                      <SelectItem value="IT">Italy</SelectItem>
+                      <SelectItem value="MX">Mexico</SelectItem>
+                      <SelectItem value="BR">Brazil</SelectItem>
+                      <SelectItem value="JP">Japan</SelectItem>
+                      <SelectItem value="IN">India</SelectItem>
+                      <SelectItem value="NZ">New Zealand</SelectItem>
+                      <SelectItem value="IE">Ireland</SelectItem>
+                      <SelectItem value="ZA">South Africa</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-[11px] text-muted-foreground">Apple Podcasts store region to search.</p>
+                </div>
                 <div className="space-y-1.5">
                   <Label className="text-xs text-muted-foreground">Min Episodes</Label>
                   <Input

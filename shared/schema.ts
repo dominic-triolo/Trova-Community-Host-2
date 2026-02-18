@@ -117,6 +117,7 @@ export const runParamsSchema = z.object({
   maxMemberCount: z.number().min(0).default(0),
   minPostCount: z.number().min(0).default(0),
   minEpisodeCount: z.number().min(0).default(0),
+  podcastCountry: z.string().default("US"),
   enableApollo: z.boolean().default(true),
 });
 
@@ -217,5 +218,6 @@ export const DEFAULT_RUN_PARAMS: RunParams = {
   maxMemberCount: 0,
   minPostCount: 0,
   minEpisodeCount: 0,
+  podcastCountry: "US",
   enableApollo: true,
 };
