@@ -1014,7 +1014,7 @@ async function scrapeFacebookGroups(
     if (leads.length >= maxItems) break;
     try {
       await appendAndSave(`Facebook: searching for "${kw}"...`);
-      const { items, costUsd: actorCost } = await runActorAndGetResults("apify/facebook-groups-scraper", {
+      const { items, costUsd: actorCost } = await runActorAndGetResults("apify~facebook-groups-scraper", {
         searchType: "groups",
         searchQuery: kw,
         maxGroups: Math.min(50, maxItems - leads.length),
