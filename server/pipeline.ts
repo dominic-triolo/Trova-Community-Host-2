@@ -1086,6 +1086,286 @@ async function scrapeFacebookGroups(
   return leads;
 }
 
+async function scrapeApplePodcasts(
+  runId: number,
+  keywords: string[],
+  maxItems: number,
+  appendAndSave: (msg: string) => Promise<void>,
+  filters: { minEpisodeCount?: number } = {},
+): Promise<PlatformLead[]> {
+  const leads: PlatformLead[] = [];
+  const seenPodcastIds = new Set<string>();
+  const minEpisodes = filters.minEpisodeCount || 0;
+
+  const existingLeads = await storage.listLeads();
+  for (const l of existingLeads) {
+    const ch = (l.ownedChannels as Record<string, string>) || {};
+    if (ch.podcast && ch.podcast.includes("podcasts.apple.com")) {
+      const idMatch = ch.podcast.match(/id(\d+)/);
+      if (idMatch) seenPodcastIds.add(idMatch[1]);
+    }
+  }
+  await appendAndSave(`Podcasts: ${seenPodcastIds.size} known podcast IDs from previous runs`);
+
+  const dedupedKeywords = Array.from(new Set(keywords.map(k => k.trim()).filter(Boolean)));
+  if (dedupedKeywords.length === 0) {
+    await appendAndSave(`Podcasts: no keywords to search`);
+    return leads;
+  }
+
+  const keywordPreview = dedupedKeywords.length <= 5 ? dedupedKeywords.join(", ") : `${dedupedKeywords.slice(0, 5).join(", ")} (+${dedupedKeywords.length - 5} more)`;
+  await appendAndSave(`Podcasts: searching ${dedupedKeywords.length} keywords: ${keywordPreview}`);
+
+  const maxResultsPerQuery = Math.max(10, Math.min(200, Math.ceil(maxItems * 1.5 / dedupedKeywords.length)));
+
+  for (const kw of dedupedKeywords) {
+    if (leads.length >= maxItems) break;
+
+    try {
+      await appendAndSave(`Podcasts: searching "${kw}" (max ${maxResultsPerQuery} results)...`);
+
+      const { items, costUsd: actorCost } = await runActorAndGetResults("benthepythondev~podcast-intelligence-aggregator", {
+        mode: "search",
+        searchQuery: kw,
+        country: "US",
+        maxResults: maxResultsPerQuery,
+        includeEpisodes: false,
+      }, 180000);
+      await storage.incrementApifySpend(runId, actorCost);
+
+      let skippedDupe = 0;
+      let skippedFilter = 0;
+
+      for (const item of items) {
+        if (leads.length >= maxItems) break;
+
+        const podcastId = String(item.itunes_id || item.id || "");
+        const podcastTitle = item.title || item.name || "";
+        if (!podcastTitle) continue;
+
+        if (podcastId && seenPodcastIds.has(podcastId)) {
+          skippedDupe++;
+          continue;
+        }
+
+        const episodeCount = item.track_count || item.rss_data?.episode_count || 0;
+        if (minEpisodes > 0 && episodeCount < minEpisodes) {
+          skippedFilter++;
+          continue;
+        }
+
+        if (podcastId) seenPodcastIds.add(podcastId);
+
+        const artistName = item.artist || item.artistName || item.rss_data?.author || "";
+        const description = item.description?.standard || item.description || item.rss_data?.description || "";
+        const feedUrl = item.feed_url || item.feedUrl || "";
+        const podcastUrl = item.itunes_url || item.url || "";
+        const websiteUrl = item.websiteUrl || item.rss_data?.link || "";
+        const genres = item.genres || item.genreNames || [];
+        const primaryGenre = item.primary_genre || (Array.isArray(genres) && genres.length > 0 ? (typeof genres[0] === "string" ? genres[0] : genres[0]?.name || "") : "");
+
+        const channels: Record<string, string> = {};
+        if (podcastUrl) channels.podcast = podcastUrl;
+        if (feedUrl) channels.rss = feedUrl;
+        if (websiteUrl && !websiteUrl.includes("podcasts.apple.com")) channels.website = websiteUrl;
+
+        const allTextUrls = extractUrlsFromText(description);
+        const socialFromDesc = extractSocialChannelsFromUrls(allTextUrls);
+        for (const [k, v] of Object.entries(socialFromDesc)) {
+          if (!channels[k]) channels[k] = v;
+        }
+
+        if (description.toLowerCase().includes("linktree") || description.toLowerCase().includes("linktr.ee")) {
+          const ltMatch = description.match(/https?:\/\/linktr\.ee\/[^\s"'<>,)}\]]+/i);
+          if (ltMatch && !channels.linktree) channels.linktree = ltMatch[0].replace(/[.,;:!?)]+$/, "");
+        }
+
+        const fullText = `${podcastTitle} ${artistName} ${description}`;
+        const descEmails = extractEmailsFromText(description);
+
+        const monetization: Record<string, any> = { podcast: true };
+        if (episodeCount > 100) monetization.established = true;
+        if (description.toLowerCase().includes("sponsor") || description.toLowerCase().includes("patreon")) monetization.sponsored = true;
+
+        leads.push({
+          source: "podcast",
+          communityName: podcastTitle,
+          communityType: detectCommunityType(fullText),
+          description: description.substring(0, 2000),
+          location: "",
+          website: websiteUrl || podcastUrl || "",
+          email: descEmails[0] || "",
+          phone: "",
+          leaderName: artistName || podcastTitle,
+          memberCount: 0,
+          subscriberCount: 0,
+          ownedChannels: channels,
+          monetizationSignals: { ...monetization, ...detectMonetization(description) },
+          engagementSignals: {
+            episode_count: episodeCount,
+            genre: primaryGenre,
+            attendance_proxy: episodeCount,
+            recurring: true,
+            ...detectEngagement(description),
+          },
+          tripFitSignals: detectTripFit(fullText),
+          raw: { ...item, feedUrl, podcastId },
+        });
+      }
+
+      await appendAndSave(`Podcasts: ${leads.length} podcasts found so far (skipped ${skippedDupe} dupes, ${skippedFilter} filtered by episode count)`);
+    } catch (err: any) {
+      if (err.costUsd) {
+        await storage.incrementApifySpend(runId, err.costUsd);
+      }
+      await appendAndSave(`[WARN] Podcast search failed for "${kw}": ${err.message}`);
+    }
+  }
+
+  const withWebsite = leads.filter(l => l.ownedChannels?.website).length;
+  const withRss = leads.filter(l => l.ownedChannels?.rss).length;
+  const withEmail = leads.filter(l => l.email).length;
+  await appendAndSave(`Podcasts: ${leads.length} total (${withWebsite} with website, ${withRss} with RSS feed, ${withEmail} with email from description)`);
+
+  return leads;
+}
+
+async function enrichFromRssFeeds(
+  runId: number,
+  leads: PlatformLead[],
+  appendAndSave: (msg: string) => Promise<void>,
+): Promise<void> {
+  const leadsWithRss = leads.filter(l =>
+    l.ownedChannels?.rss && l.ownedChannels.rss.startsWith("http")
+  );
+
+  if (leadsWithRss.length === 0) return;
+
+  await appendAndSave(`RSS feed scrape: ${leadsWithRss.length} podcast feeds to parse for host emails...`);
+
+  const startUrls = leadsWithRss.map(l => ({ url: l.ownedChannels!.rss! }));
+
+  try {
+    const { items: results, costUsd: actorCost } = await runActorAndGetResults("apify~cheerio-scraper", {
+      startUrls,
+      maxCrawlPages: leadsWithRss.length,
+      maxConcurrency: 5,
+      pageFunction: `async function pageFunction(context) {
+  const { body, request } = context;
+  const text = typeof body === 'string' ? body : body.toString('utf8');
+  var ownerEmail = '';
+  var ownerName = '';
+  var link = '';
+  var author = '';
+  var emails = [];
+  var ownerMatch = text.match(/<itunes:owner>[\\s\\S]*?<itunes:email>([^<]+)<\\/itunes:email>[\\s\\S]*?<\\/itunes:owner>/i);
+  if (ownerMatch) ownerEmail = ownerMatch[1].trim();
+  var nameMatch = text.match(/<itunes:owner>[\\s\\S]*?<itunes:name>([^<]+)<\\/itunes:name>[\\s\\S]*?<\\/itunes:owner>/i);
+  if (nameMatch) ownerName = nameMatch[1].trim();
+  var linkMatch = text.match(/<link>([^<]+)<\\/link>/);
+  if (linkMatch) link = linkMatch[1].trim();
+  var authorMatch = text.match(/<itunes:author>([^<]+)<\\/itunes:author>/);
+  if (authorMatch) author = authorMatch[1].trim();
+  var emailRegex = /[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}/g;
+  var found = text.match(emailRegex) || [];
+  for (var i = 0; i < Math.min(found.length, 10); i++) { emails.push(found[i]); }
+  var urls = [];
+  var urlRegex = /https?:\\/\\/[^\\s<>"'\\)\\]\\},]+/g;
+  var urlFound = text.substring(0, 20000).match(urlRegex) || [];
+  for (var j = 0; j < Math.min(urlFound.length, 50); j++) { urls.push(urlFound[j]); }
+  return { url: request.url, ownerEmail: ownerEmail, ownerName: ownerName, link: link, author: author, emails: emails, urls: urls };
+}`,
+    }, 120000);
+    await storage.incrementApifySpend(runId, actorCost);
+
+    let enrichedCount = 0;
+    let emailsFound = 0;
+
+    for (const result of results) {
+      const feedUrl = result.url || "";
+      const matchLead = leadsWithRss.find(l =>
+        l.ownedChannels?.rss && feedUrl.toLowerCase().includes(
+          new URL(l.ownedChannels.rss).hostname.replace(/^www\./, "").toLowerCase()
+        ) && feedUrl.toLowerCase().includes(
+          new URL(l.ownedChannels.rss).pathname.split("/").filter(Boolean).slice(0, 2).join("/").toLowerCase()
+        )
+      );
+
+      if (!matchLead) continue;
+
+      let foundAnything = false;
+
+      const ownerEmail = result.ownerEmail || "";
+      if (ownerEmail && !isBlockedEmail(ownerEmail) && !matchLead.email) {
+        matchLead.email = cleanEmail(ownerEmail);
+        if (matchLead.email) {
+          emailsFound++;
+          foundAnything = true;
+        }
+      }
+
+      if (!matchLead.email) {
+        const allEmails: string[] = result.emails || [];
+        for (const email of allEmails) {
+          if (!isBlockedEmail(email)) {
+            matchLead.email = cleanEmail(email);
+            if (matchLead.email) {
+              emailsFound++;
+              foundAnything = true;
+              break;
+            }
+          }
+        }
+      }
+
+      const ownerName = result.ownerName || result.author || "";
+      if (ownerName && (!matchLead.leaderName || matchLead.leaderName === matchLead.communityName)) {
+        matchLead.leaderName = ownerName;
+        foundAnything = true;
+      }
+
+      const rssLink = result.link || "";
+      if (rssLink && rssLink.startsWith("http") && !rssLink.includes("podcasts.apple.com") && !matchLead.ownedChannels?.website) {
+        matchLead.ownedChannels!.website = rssLink;
+        foundAnything = true;
+      }
+
+      const rssUrls: string[] = result.urls || [];
+      for (const url of rssUrls) {
+        if (!url || !url.startsWith("http")) continue;
+        try {
+          const host = new URL(url).hostname.replace(/^www\./, "");
+          if (host.includes("linkedin.com") && url.includes("/in/") && !matchLead.ownedChannels?.linkedin) {
+            matchLead.ownedChannels!.linkedin = url.split("?")[0];
+            foundAnything = true;
+          }
+          if (host.includes("instagram.com") && !matchLead.ownedChannels?.instagram) {
+            matchLead.ownedChannels!.instagram = url.split("?")[0];
+            foundAnything = true;
+          }
+          if ((host.includes("twitter.com") || host === "x.com") && !matchLead.ownedChannels?.twitter) {
+            matchLead.ownedChannels!.twitter = url.split("?")[0];
+            foundAnything = true;
+          }
+          if ((host.includes("linktr.ee") || host.includes("beacons.ai") || host.includes("bio.link")) && !matchLead.ownedChannels?.linktree) {
+            matchLead.ownedChannels!.linktree = url.split("?")[0];
+            foundAnything = true;
+          }
+        } catch {}
+      }
+
+      if (foundAnything) enrichedCount++;
+    }
+
+    await appendAndSave(`RSS feed scrape: enriched ${enrichedCount}/${leadsWithRss.length} leads (${emailsFound} direct emails from RSS feeds)`);
+  } catch (err: any) {
+    if (err.costUsd) {
+      await storage.incrementApifySpend(runId, err.costUsd);
+    }
+    await appendAndSave(`[WARN] RSS feed scraping failed: ${err.message}`);
+  }
+}
+
 const GOOGLE_ENRICHMENT_MAX = Infinity;
 const GOOGLE_ENRICHMENT_SOCIAL_HOSTS = ["youtube.com", "youtu.be", "instagram.com", "twitter.com", "x.com", "discord.gg", "discord.com", "facebook.com", "tiktok.com", "twitch.tv", "linkedin.com", "patreon.com", "google.com", "apple.com", "spotify.com", "amazon.com", "reddit.com", "tumblr.com", "pinterest.com", "github.com", "medium.com", "wordpress.com", "linktr.ee", "beacons.ai", "ko-fi.com", "buymeacoffee.com", "gumroad.com", "substack.com", "bit.ly", "apify.com", "meetup.com", "eventbrite.com", "yelp.com", "tripadvisor.com", "bbb.org"];
 
@@ -2007,6 +2287,11 @@ export async function runPipeline(runId: number): Promise<void> {
         minPostCount: params.minPostCount || 0,
       }) });
     }
+    if (enabledSources.includes("podcast")) {
+      platformTasks.push({ name: "Podcasts", promise: scrapeApplePodcasts(runId, keywords, maxPerPlatform, (msg) => appendAndSave(msg), {
+        minEpisodeCount: params.minEpisodeCount || 0,
+      }) });
+    }
 
     if (platformTasks.length === 0) {
       await appendAndSave("No platform sources selected, skipping platform discovery");
@@ -2041,6 +2326,15 @@ export async function runPipeline(runId: number): Promise<void> {
         await googleBridgeEnrichFacebookGroups(runId, allPlatformLeads, appendAndSave);
       } else {
         await appendAndSave("Google Bridge: skipped (all Facebook leads already have contact paths)");
+      }
+    }
+
+    const hasPodcastLeads = allPlatformLeads.some(l => l.source === "podcast");
+    if (hasPodcastLeads) {
+      const podcastLeadsWithRss = allPlatformLeads.filter(l => l.source === "podcast" && l.ownedChannels?.rss);
+      if (podcastLeadsWithRss.length > 0) {
+        await appendAndSave(`RSS feed scrape: ${podcastLeadsWithRss.length} podcasts have RSS feeds for email extraction`, 29, "Step 1c: RSS feed email extraction");
+        await enrichFromRssFeeds(runId, allPlatformLeads, appendAndSave);
       }
     }
 

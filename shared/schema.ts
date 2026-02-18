@@ -92,10 +92,11 @@ export const AVAILABLE_SOURCES = [
   { id: "eventbrite", label: "Eventbrite Events", description: "Event organizers with followers" },
   { id: "facebook", label: "Facebook Groups", description: "Public groups with member counts" },
   { id: "patreon", label: "Patreon Creators", description: "Creators with patron counts & tiers" },
+  { id: "podcast", label: "Podcasters", description: "Podcast hosts with episode counts & RSS emails" },
   { id: "google", label: "Google Search + Websites", description: "Generic website discovery" },
 ] as const;
 
-export type SourceId = "meetup" | "youtube" | "reddit" | "eventbrite" | "facebook" | "patreon" | "google";
+export type SourceId = "meetup" | "youtube" | "reddit" | "eventbrite" | "facebook" | "patreon" | "podcast" | "google";
 export const DEFAULT_ENABLED_SOURCES: SourceId[] = ["patreon"];
 
 export const TEMPORARILY_DISABLED_SOURCES: SourceId[] = ["meetup", "youtube", "reddit", "eventbrite", "google"];
@@ -111,10 +112,11 @@ export const runParamsSchema = z.object({
   seedGeos: z.array(z.string()).default([]),
   maxDiscoveredUrls: z.number().min(1).max(200).default(200),
   maxGoogleResultsPerQuery: z.number().min(1).max(100).default(10),
-  enabledSources: z.array(z.enum(["meetup", "youtube", "reddit", "eventbrite", "facebook", "patreon", "google"])).min(1, "At least one source must be selected").default(DEFAULT_ENABLED_SOURCES),
+  enabledSources: z.array(z.enum(["meetup", "youtube", "reddit", "eventbrite", "facebook", "patreon", "podcast", "google"])).min(1, "At least one source must be selected").default(DEFAULT_ENABLED_SOURCES),
   minMemberCount: z.number().min(0).default(0),
   maxMemberCount: z.number().min(0).default(0),
   minPostCount: z.number().min(0).default(0),
+  minEpisodeCount: z.number().min(0).default(0),
   enableApollo: z.boolean().default(true),
 });
 
@@ -187,6 +189,24 @@ export const FB_RECOMMENDED_KEYWORDS = [
   { label: "Food & wine", keywords: ["food group", "wine club", "supper club"] },
 ] as const;
 
+export const PODCAST_RECOMMENDED_KEYWORDS = [
+  { label: "Travel & adventure", keywords: ["travel podcast", "adventure travel podcast", "group travel"] },
+  { label: "Fitness & wellness", keywords: ["fitness podcast", "wellness podcast", "health podcast"] },
+  { label: "Hiking & outdoors", keywords: ["hiking podcast", "outdoor adventure podcast", "trails"] },
+  { label: "Yoga & mindfulness", keywords: ["yoga podcast", "mindfulness podcast", "meditation"] },
+  { label: "Running & endurance", keywords: ["running podcast", "marathon podcast", "trail running"] },
+  { label: "Cycling", keywords: ["cycling podcast", "bike touring", "gravel cycling podcast"] },
+  { label: "Women's empowerment", keywords: ["women empowerment podcast", "women community", "sisterhood"] },
+  { label: "Photography", keywords: ["photography podcast", "travel photography", "photo tours"] },
+  { label: "Food & culinary", keywords: ["food podcast", "culinary travel", "wine podcast"] },
+  { label: "Spiritual & faith", keywords: ["spiritual podcast", "faith podcast", "ministry podcast"] },
+  { label: "Solo travel", keywords: ["solo travel podcast", "backpacking podcast", "nomad podcast"] },
+  { label: "Surf & water sports", keywords: ["surfing podcast", "diving podcast", "water sports"] },
+  { label: "Camping & van life", keywords: ["camping podcast", "van life podcast", "road trip"] },
+  { label: "Nature & wildlife", keywords: ["nature podcast", "wildlife podcast", "birdwatching"] },
+  { label: "Book clubs", keywords: ["book club podcast", "reading podcast", "literary podcast"] },
+] as const;
+
 export const DEFAULT_RUN_PARAMS: RunParams = {
   seedKeywords: [],
   seedGeos: ["United States"],
@@ -196,5 +216,6 @@ export const DEFAULT_RUN_PARAMS: RunParams = {
   minMemberCount: 0,
   maxMemberCount: 0,
   minPostCount: 0,
+  minEpisodeCount: 0,
   enableApollo: true,
 };

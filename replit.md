@@ -46,9 +46,10 @@ shared/
 - **leads** - Flattened, scored, export-ready lead records
 
 ## Pipeline Steps (Social Graph Enrichment Chain)
-1. **Platform Discovery** - Patreon creator search (social links, about text, tiers, earnings) + Facebook Groups search (group name, description, member count, admin name, URLs from descriptions) + bare domain/email extraction from about text + obfuscated email extraction ("[at]", "(at)" patterns) + real name extraction from about text (regex patterns for "I'm X", "my name is X", etc.) + brand name parsing ("Jenne Sluder Yoga" → "Jenne Sluder") + link aggregator URL extraction (Linktree, Beacons, etc.)
+1. **Platform Discovery** - Patreon creator search (social links, about text, tiers, earnings) + Facebook Groups search (group name, description, member count, admin name, URLs from descriptions) + Apple Podcasts search via `benthepythondev/podcast-intelligence-aggregator` ($30/1K results, pay-per-use) extracting feedUrl, websiteUrl, artistName, episodeCount, genres, social links + bare domain/email extraction from about text + obfuscated email extraction ("[at]", "(at)" patterns) + real name extraction from about text (regex patterns for "I'm X", "my name is X", etc.) + brand name parsing ("Jenne Sluder Yoga" → "Jenne Sluder") + link aggregator URL extraction (Linktree, Beacons, etc.)
 1a. **Google Bridge for Facebook Groups** - Smart Google search for each Facebook group to find leader/organizer websites, LinkedIn profiles, and org contact pages. Searches by group name + admin name (if available) or group name + "organizer/founder/leader". Extracts websites, LinkedIn, Instagram, Twitter from results.
-1b. **Link Aggregator Scrape (Pass 1)** - Cheerio scraper on Linktree/Beacons/bio.link pages from Patreon about text (uncapped)
+1b. **RSS Feed Email Extraction (Podcasts)** - Cheerio scraper parses podcast RSS feeds to extract `<itunes:email>` (host email), `<itunes:name>`, website links, and social URLs from show notes. Expected 40-60% direct email hit rate. Runs after platform discovery, before link aggregator scrape.
+1c. **Link Aggregator Scrape (Pass 1)** - Cheerio scraper on Linktree/Beacons/bio.link pages from Patreon about text (uncapped)
 2a. **YouTube About Page Scrape** - Scrape ALL YouTube channels (no email/website filter) for business emails, websites, LinkedIn, and link aggregator URLs (uncapped)
 2b. **Instagram Bio Scrape** - Scrape Instagram profiles (`apify~instagram-profile-scraper`, $1.60/1K) for emails, websites, Linktree links, real names, and follower counts (uncapped)
 2c. **Twitter/X Bio Scrape** - Scrape Twitter profiles (`apidojo~twitter-user-scraper`, $0.40/1K) for emails, website links, Linktree links, real names, locations, and follower counts (uncapped)
@@ -92,6 +93,7 @@ The discovery form uses platform-specific tabs. Patreon and Facebook Groups are 
 - `louisdeconinck~patreon-scraper` - Patreon creator search (social links, about text, tiers, earnings)
 - `apify/instagram-profile-scraper` - Instagram profile bio/email/website scraping ($1.60/1K profiles)
 - `apidojo/twitter-user-scraper` - Twitter/X profile bio/website/location scraping ($0.40/1K users)
+- `benthepythondev/podcast-intelligence-aggregator` - Apple Podcasts search ($30/1K results, pay-per-use, structured podcast data)
 - `code_crafter~leads-finder` - Email enrichment fallback ($1.50/1k leads, verified emails by domain)
 
 ## API Endpoints
