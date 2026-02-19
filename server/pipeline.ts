@@ -1045,19 +1045,22 @@ function extractSocialChannelsFromUrls(urls: string[]): Record<string, string> {
 
 function parseMemberCountFromSnippet(text: string): number {
   const memberPatterns = [
+    /([\d,.]+)\s*[Mm](?:illion)?\s+(?:members|people|followers)/i,
     /([\d,.]+)\s*[Kk]\s*(?:members|people|followers)/i,
-    /([\d,.]+)\s*[Mm](?:illion)?\s*(?:members|people|followers)/i,
-    /([\d,.]+)\s*(?:members|people|followers)/i,
-    /(?:members|people|followers)[:\s]*([\d,.]+)\s*[Kk]?/i,
+    /([\d,.]+)\+?\s*(?:members|people|followers)/i,
+    /(?:members|people|followers)[:\s]*([\d,.]+)\s*([KkMm])?/i,
   ];
   for (const pat of memberPatterns) {
     const m = text.match(pat);
     if (m) {
       const raw = m[1].replace(/,/g, "");
       let num = parseFloat(raw);
-      const afterNum = text.substring(text.indexOf(m[0]) + m[0].indexOf(m[1]) + m[1].length, text.indexOf(m[0]) + m[0].length);
-      if (/^\s*[Kk]/.test(afterNum)) num *= 1000;
-      else if (/^\s*[Mm]/.test(afterNum)) num *= 1000000;
+      if (isNaN(num) || num <= 0) continue;
+      const suffix = m[2] || "";
+      if (/[Kk]/.test(suffix)) num *= 1000;
+      else if (/[Mm]/.test(suffix)) num *= 1000000;
+      else if (pat === memberPatterns[0]) num *= 1000000;
+      else if (pat === memberPatterns[1]) num *= 1000;
       return Math.round(num);
     }
   }
