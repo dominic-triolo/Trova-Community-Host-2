@@ -239,22 +239,26 @@ export async function registerRoutes(
 
       const cancellableStatuses = ["running", "queued", "interrupted"];
       if (!cancellableStatuses.includes(run.status)) {
-        return res.status(409).json({ message: `Run cannot be cancelled (status: ${run.status})` });
+        return res.status(409).json({ message: `Run cannot be stopped (status: ${run.status})` });
       }
 
       cancelledRunIds.add(id);
       activeRunIds.delete(id);
 
       if (run.status === "queued" || run.status === "interrupted") {
+        const emailCount = await storage.countLeadsByRunWithEmail(id);
+        const validEmailCount = await storage.countLeadsByRunWithValidEmail(id);
         await storage.updateRun(id, {
-          status: "failed",
-          step: "Cancelled by user",
+          status: "stopped",
+          step: "Stopped by user",
+          leadsWithEmail: emailCount,
+          leadsWithValidEmail: validEmailCount,
           finishedAt: new Date(),
-          logs: (run.logs || "") + `\n[${new Date().toLocaleTimeString("en-US", { hour12: false })}] Run cancelled by user (was ${run.status})\n`,
+          logs: (run.logs || "") + `\n[${new Date().toLocaleTimeString("en-US", { hour12: false })}] Run stopped by user. ${emailCount} leads with email preserved.\n`,
         });
       }
 
-      res.json({ message: "Cancellation requested", runId: id });
+      res.json({ message: "Stop requested", runId: id });
     } catch (err: any) {
       res.status(500).json({ message: err.message });
     }
@@ -284,8 +288,8 @@ export async function registerRoutes(
       const run = await storage.getRun(id);
       if (!run) return res.status(404).json({ message: "Run not found" });
       if (run.status === "running") return res.status(409).json({ message: "Run is already in progress" });
-      if (run.status !== "interrupted" && run.status !== "failed") {
-        return res.status(400).json({ message: "Only interrupted or failed runs can be resumed" });
+      if (run.status !== "interrupted" && run.status !== "failed" && run.status !== "stopped") {
+        return res.status(400).json({ message: "Only interrupted, failed, or stopped runs can be resumed" });
       }
 
       resumeRun(id).catch((err) => console.error("Resume error:", err));
@@ -303,8 +307,8 @@ export async function registerRoutes(
       const run = await storage.getRun(id);
       if (!run) return res.status(404).json({ message: "Run not found" });
       if (run.status === "running") return res.status(409).json({ message: "Run is already in progress" });
-      if (run.status !== "interrupted" && run.status !== "failed") {
-        return res.status(400).json({ message: "Only interrupted or failed runs can be restarted" });
+      if (run.status !== "interrupted" && run.status !== "failed" && run.status !== "stopped") {
+        return res.status(400).json({ message: "Only interrupted, failed, or stopped runs can be restarted" });
       }
 
       restartRun(id).catch((err) => console.error("Restart error:", err));

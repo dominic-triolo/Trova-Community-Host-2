@@ -14,6 +14,7 @@ import {
   Plus,
   Activity,
   AlertTriangle,
+  StopCircle,
 } from "lucide-react";
 
 function statusIcon(status: string) {
@@ -22,6 +23,7 @@ function statusIcon(status: string) {
     case "succeeded": return <CheckCircle2 className="w-3.5 h-3.5" />;
     case "failed": return <XCircle className="w-3.5 h-3.5" />;
     case "interrupted": return <AlertTriangle className="w-3.5 h-3.5" />;
+    case "stopped": return <StopCircle className="w-3.5 h-3.5" />;
     default: return <Clock className="w-3.5 h-3.5" />;
   }
 }
@@ -32,6 +34,7 @@ function statusVariant(status: string): "default" | "secondary" | "destructive" 
     case "succeeded": return "outline";
     case "failed": return "destructive";
     case "interrupted": return "secondary";
+    case "stopped": return "secondary";
     default: return "secondary";
   }
 }

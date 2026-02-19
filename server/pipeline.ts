@@ -4697,11 +4697,15 @@ export async function runPipeline(runId: number): Promise<void> {
     log(`Pipeline run ${runId} completed successfully`, "pipeline");
   } catch (err: any) {
     if (err instanceof RunCancelledError || cancelledRunIds.has(runId)) {
-      log(`Pipeline run ${runId} cancelled by user`, "pipeline");
+      log(`Pipeline run ${runId} stopped by user`, "pipeline");
+      const emailCount = await storage.countLeadsByRunWithEmail(runId);
+      const validEmailCount = await storage.countLeadsByRunWithValidEmail(runId);
       await storage.updateRun(runId, {
-        status: "failed",
-        step: "Cancelled by user",
-        logs: appendLog(currentLogs, `Run cancelled by user`),
+        status: "stopped",
+        step: "Stopped by user",
+        leadsWithEmail: emailCount,
+        leadsWithValidEmail: validEmailCount,
+        logs: appendLog(currentLogs, `Run stopped by user. ${emailCount} leads with email preserved.`),
         finishedAt: new Date(),
       });
     } else {
@@ -5111,11 +5115,15 @@ export async function reEnrichRun(runId: number): Promise<void> {
     log(`Re-enrichment of run ${runId} completed successfully`, "pipeline");
   } catch (err: any) {
     if (err instanceof RunCancelledError || cancelledRunIds.has(runId)) {
-      log(`Re-enrichment of run ${runId} cancelled by user`, "pipeline");
+      log(`Re-enrichment of run ${runId} stopped by user`, "pipeline");
+      const emailCount = await storage.countLeadsByRunWithEmail(runId);
+      const validEmailCount = await storage.countLeadsByRunWithValidEmail(runId);
       await storage.updateRun(runId, {
-        status: "failed",
-        step: "Cancelled by user",
-        logs: appendLog(currentLogs, `Run cancelled by user`),
+        status: "stopped",
+        step: "Stopped by user",
+        leadsWithEmail: emailCount,
+        leadsWithValidEmail: validEmailCount,
+        logs: appendLog(currentLogs, `Re-enrichment stopped by user. ${emailCount} leads with email preserved.`),
         finishedAt: new Date(),
       });
     } else {
@@ -5544,11 +5552,15 @@ export async function resumeRun(runId: number): Promise<void> {
     }
   } catch (err: any) {
     if (err instanceof RunCancelledError || cancelledRunIds.has(runId)) {
-      log(`Resume of run ${runId} cancelled by user`, "pipeline");
+      log(`Resume of run ${runId} stopped by user`, "pipeline");
+      const emailCount = await storage.countLeadsByRunWithEmail(runId);
+      const validEmailCount = await storage.countLeadsByRunWithValidEmail(runId);
       await storage.updateRun(runId, {
-        status: "failed",
-        step: "Cancelled by user",
-        logs: appendLog(currentLogs, `Run cancelled by user`),
+        status: "stopped",
+        step: "Stopped by user",
+        leadsWithEmail: emailCount,
+        leadsWithValidEmail: validEmailCount,
+        logs: appendLog(currentLogs, `Resume stopped by user. ${emailCount} leads with email preserved.`),
         finishedAt: new Date(),
       });
     } else {

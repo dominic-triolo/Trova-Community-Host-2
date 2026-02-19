@@ -38,6 +38,7 @@ function StatusBadge({ status }: { status: string }) {
     succeeded: { variant: "outline", icon: CheckCircle2 },
     failed: { variant: "destructive", icon: XCircle },
     interrupted: { variant: "secondary", icon: AlertTriangle },
+    stopped: { variant: "secondary", icon: StopCircle },
   };
   const config = variants[status] || variants.queued;
   const Icon = config.icon;
@@ -71,7 +72,7 @@ export default function RunStatus() {
     queryKey: ["/api/runs", id],
     refetchInterval: (query) => {
       const d = query.state.data as Run | undefined;
-      if (d && (d.status === "succeeded" || d.status === "failed" || d.status === "interrupted")) return false;
+      if (d && (d.status === "succeeded" || d.status === "failed" || d.status === "interrupted" || d.status === "stopped")) return false;
       return 2000;
     },
   });
@@ -205,7 +206,7 @@ export default function RunStatus() {
                 End Run
               </Button>
             )}
-            {(run.status === "interrupted" || run.status === "failed") && (run as any).lastCompletedStep && (
+            {(run.status === "interrupted" || run.status === "failed" || run.status === "stopped") && (run as any).lastCompletedStep && (
               <Button
                 size="sm"
                 onClick={() => resumeMutation.mutate()}
@@ -216,7 +217,7 @@ export default function RunStatus() {
                 Resume (from {PIPELINE_STEP_LABELS[(run as any).lastCompletedStep as PipelineStep] || (run as any).lastCompletedStep})
               </Button>
             )}
-            {(run.status === "interrupted" || run.status === "failed") && (
+            {(run.status === "interrupted" || run.status === "failed" || run.status === "stopped") && (
               <Button
                 variant="outline"
                 size="sm"
@@ -228,7 +229,7 @@ export default function RunStatus() {
                 Restart from beginning
               </Button>
             )}
-            {(run.status === "succeeded" || run.status === "failed" || run.status === "interrupted") && (
+            {(run.status === "succeeded" || run.status === "failed" || run.status === "interrupted" || run.status === "stopped") && (
               <Button
                 variant="outline"
                 size="sm"
@@ -240,7 +241,7 @@ export default function RunStatus() {
                 Re-enrich
               </Button>
             )}
-            {(run.status === "succeeded" || run.status === "interrupted") && (
+            {(run.status === "succeeded" || run.status === "interrupted" || run.status === "stopped") && (
               <>
                 <Link href={`/results?runId=${run.id}`}>
                   <Button size="sm" data-testid="button-view-results">
