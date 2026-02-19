@@ -1377,7 +1377,7 @@ async function scrapeApplePodcasts(
   const keywordPreview = dedupedKeywords.length <= 5 ? dedupedKeywords.join(", ") : `${dedupedKeywords.slice(0, 5).join(", ")} (+${dedupedKeywords.length - 5} more)`;
   await appendAndSave(`Podcasts: email target ${emailTarget} — searching ${dedupedKeywords.length} keywords in ${country} store: ${keywordPreview}`);
 
-  const maxResultsPerQuery = Math.max(50, Math.min(500, Math.ceil(emailTarget * 3 / dedupedKeywords.length)));
+  const maxResultsPerQuery = Math.max(10, Math.min(500, Math.ceil(emailTarget * 3 / dedupedKeywords.length)));
 
   for (const kw of dedupedKeywords) {
     if (totalEmailsFound >= emailTarget) {
@@ -3103,43 +3103,52 @@ export async function runPipeline(runId: number): Promise<void> {
     const geos = params.seedGeos;
     const enabledSources = params.enabledSources || ["meetup", "youtube", "reddit", "eventbrite", "google"];
     const platformSources = enabledSources.filter((s) => s !== "google");
-    const maxPerPlatform = Math.floor(params.maxDiscoveredUrls / Math.max(1, platformSources.length));
+    const defaultMaxPerPlatform = Math.floor(params.maxDiscoveredUrls / Math.max(1, platformSources.length));
+
+    const budgetAllocation = (run.budgetAllocation as BudgetAllocation | null);
+    const platformMaxLeads = new Map<string, number>();
+    if (isAutonomousRun && budgetAllocation?.platforms) {
+      for (const pa of budgetAllocation.platforms) {
+        platformMaxLeads.set(pa.platform, pa.maxLeads);
+      }
+    }
+    const getMaxForPlatform = (platform: string) => platformMaxLeads.get(platform) || defaultMaxPerPlatform;
 
     const platformTasks: { name: string; promise: Promise<PlatformLead[]> }[] = [];
     if (enabledSources.includes("meetup")) {
-      platformTasks.push({ name: "Meetup", promise: scrapeMeetupGroups(runId, keywords, geos, maxPerPlatform, (msg) => appendAndSave(msg)) });
+      platformTasks.push({ name: "Meetup", promise: scrapeMeetupGroups(runId, keywords, geos, getMaxForPlatform("meetup"), (msg) => appendAndSave(msg)) });
     }
     if (enabledSources.includes("youtube")) {
-      platformTasks.push({ name: "YouTube", promise: scrapeYouTubeChannels(runId, keywords, maxPerPlatform, (msg) => appendAndSave(msg)) });
+      platformTasks.push({ name: "YouTube", promise: scrapeYouTubeChannels(runId, keywords, getMaxForPlatform("youtube"), (msg) => appendAndSave(msg)) });
     }
     if (enabledSources.includes("reddit")) {
-      platformTasks.push({ name: "Reddit", promise: scrapeRedditCommunities(runId, keywords, maxPerPlatform, (msg) => appendAndSave(msg)) });
+      platformTasks.push({ name: "Reddit", promise: scrapeRedditCommunities(runId, keywords, getMaxForPlatform("reddit"), (msg) => appendAndSave(msg)) });
     }
     if (enabledSources.includes("eventbrite")) {
-      platformTasks.push({ name: "Eventbrite", promise: scrapeEventbriteEvents(runId, keywords, geos, maxPerPlatform, (msg) => appendAndSave(msg)) });
+      platformTasks.push({ name: "Eventbrite", promise: scrapeEventbriteEvents(runId, keywords, geos, getMaxForPlatform("eventbrite"), (msg) => appendAndSave(msg)) });
     }
     if (enabledSources.includes("facebook")) {
-      platformTasks.push({ name: "Facebook", promise: scrapeFacebookGroups(runId, keywords, maxPerPlatform, (msg) => appendAndSave(msg), {
+      platformTasks.push({ name: "Facebook", promise: scrapeFacebookGroups(runId, keywords, getMaxForPlatform("facebook"), (msg) => appendAndSave(msg), {
         minMemberCount: params.minMemberCount || 0,
         maxMemberCount: params.maxMemberCount || 0,
         geos,
       }) });
     }
     if (enabledSources.includes("patreon")) {
-      platformTasks.push({ name: "Patreon", promise: scrapePatreonCreators(runId, keywords, maxPerPlatform, (msg) => appendAndSave(msg), {
+      platformTasks.push({ name: "Patreon", promise: scrapePatreonCreators(runId, keywords, getMaxForPlatform("patreon"), (msg) => appendAndSave(msg), {
         minMemberCount: params.minMemberCount || 0,
         maxMemberCount: params.maxMemberCount || 0,
         minPostCount: params.minPostCount || 0,
       }) });
     }
     if (enabledSources.includes("podcast")) {
-      platformTasks.push({ name: "Podcasts", promise: scrapeApplePodcasts(runId, keywords, params.maxDiscoveredUrls, (msg) => appendAndSave(msg), {
+      platformTasks.push({ name: "Podcasts", promise: scrapeApplePodcasts(runId, keywords, getMaxForPlatform("podcast"), (msg) => appendAndSave(msg), {
         minEpisodeCount: params.minEpisodeCount || 0,
         podcastCountry: params.podcastCountry || "US",
       }) });
     }
     if (enabledSources.includes("substack")) {
-      platformTasks.push({ name: "Substack", promise: scrapeSubstackWriters(runId, keywords, maxPerPlatform, (msg) => appendAndSave(msg)) });
+      platformTasks.push({ name: "Substack", promise: scrapeSubstackWriters(runId, keywords, getMaxForPlatform("substack"), (msg) => appendAndSave(msg)) });
     }
 
     if (platformTasks.length === 0) {
@@ -3262,11 +3271,8 @@ export async function runPipeline(runId: number): Promise<void> {
       enrichGroup3.push({ name: "Link aggregators (pass 2)", promise: enrichFromLinkAggregators(runId, allPlatformLeads, appendAndSave) });
     }
 
-    const budgetExhaustedBeforeG3 = await isBudgetExhausted(runId, 0.05);
     const leadsWithoutContactInfo = allPlatformLeads.filter(l => !l.email && !l.ownedChannels?.website && !l.ownedChannels?.linkedin);
-    if (budgetExhaustedBeforeG3 && leadsWithoutContactInfo.length > 0) {
-      await appendAndSave(`Budget limit reached — skipping Google contact search (${leadsWithoutContactInfo.length} leads)`);
-    } else if (leadsWithoutContactInfo.length > 0) {
+    if (leadsWithoutContactInfo.length > 0) {
       await appendAndSave(`Google enrichment: ${leadsWithoutContactInfo.length} leads need website/LinkedIn lookup`);
       enrichGroup3.push({ name: "Google contact search", promise: googleSearchEnrichCreators(runId, allPlatformLeads, appendAndSave) });
     } else {
@@ -3302,11 +3308,7 @@ export async function runPipeline(runId: number): Promise<void> {
       await appendAndSave(`Slug domain probe: trying ${slugDomainsProbed} Patreon slugs as .com domains`);
     }
 
-    const budgetExhaustedBeforeCrawl = await isBudgetExhausted(runId, 0.05);
-    const leadsNeedingEmail = budgetExhaustedBeforeCrawl ? [] : allPlatformLeads.filter(l => !l.email && l.ownedChannels?.website && !isPatreonCdnUrl(l.ownedChannels.website));
-    if (budgetExhaustedBeforeCrawl) {
-      await appendAndSave(`Budget limit reached — skipping website contact crawl`);
-    }
+    const leadsNeedingEmail = allPlatformLeads.filter(l => !l.email && l.ownedChannels?.website && !isPatreonCdnUrl(l.ownedChannels.website));
     if (leadsNeedingEmail.length > 0) {
       await appendAndSave(`Crawling ${leadsNeedingEmail.length} creator websites for contact emails...`, 38, "Step 3: Website contact crawl");
       const websiteEmailMap = await crawlCreatorWebsitesForEmails(runId, leadsNeedingEmail, appendAndSave);
@@ -3962,10 +3964,9 @@ export async function runPipeline(runId: number): Promise<void> {
     }
     await markStepComplete(runId, PIPELINE_STEPS.APOLLO);
 
-    const budgetExhaustedBeforeFinder = await isBudgetExhausted(runId, 0.10);
     const LEADS_FINDER_MAX_PER_RUN = Infinity;
     const refreshedLeads = await storage.listLeadsByRun(runId);
-    const leadsForFinder = budgetExhaustedBeforeFinder ? [] : refreshedLeads
+    const leadsForFinder = refreshedLeads
       .filter((l) => !l.email)
       .filter((l) => {
         const channels = (l.ownedChannels as Record<string, string>) || {};
@@ -3975,10 +3976,6 @@ export async function runPipeline(runId: number): Promise<void> {
       })
       .sort((a, b) => (b.score || 0) - (a.score || 0))
       .slice(0, LEADS_FINDER_MAX_PER_RUN);
-
-    if (budgetExhaustedBeforeFinder) {
-      await appendAndSave(`Budget limit reached — skipping Leads Finder enrichment`);
-    }
 
     if (leadsForFinder.length > 0) {
       await appendAndSave(`Leads Finder: enriching ${leadsForFinder.length} leads by domain...`, 87, "Step 9: Leads Finder enrichment");
