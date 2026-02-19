@@ -36,6 +36,9 @@ import {
   Mail,
   Lock,
   Lightbulb,
+  Zap,
+  DollarSign,
+  Wrench,
 } from "lucide-react";
 import { SiPatreon, SiFacebook, SiLinkedin, SiApplepodcasts, SiSubstack } from "react-icons/si";
 
@@ -108,6 +111,11 @@ export default function Home() {
   const [, navigate] = useLocation();
   const { toast } = useToast();
 
+  const [mode, setMode] = useState<"manual" | "autonomous">("manual");
+  const [autoBudget, setAutoBudget] = useState(5);
+  const [autoKeywords, setAutoKeywords] = useState<string[]>([]);
+  const [autoCustomKeyword, setAutoCustomKeyword] = useState("");
+
   const [params, setParams] = useState<RunParams>({
     ...DEFAULT_RUN_PARAMS,
     enabledSources: ["patreon"],
@@ -139,6 +147,24 @@ export default function Home() {
     onSuccess: (data: { id: number }) => {
       queryClient.invalidateQueries({ queryKey: ["/api/runs"] });
       toast({ title: "Pipeline started", description: "Navigating to run status..." });
+      navigate(`/runs/${data.id}`);
+    },
+    onError: (err: Error) => {
+      toast({ title: "Failed to start", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const autoRunMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/runs/autonomous", {
+        keywords: autoKeywords,
+        budgetUsd: autoBudget,
+      });
+      return res.json();
+    },
+    onSuccess: (data: { id: number }) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/runs"] });
+      toast({ title: "Autonomous run started", description: `Budget: $${autoBudget.toFixed(2)}` });
       navigate(`/runs/${data.id}`);
     },
     onError: (err: Error) => {
@@ -204,11 +230,167 @@ export default function Home() {
             Community Host Finder
           </h1>
           <p className="text-sm text-muted-foreground">
-            Select a platform and keywords to discover high-potential community hosts.
+            Discover high-potential community hosts from multiple platforms.
           </p>
         </div>
 
-        <Tabs value={platformTab} onValueChange={handlePlatformTabChange}>
+        <div className="flex gap-2" data-testid="mode-toggle">
+          <Button
+            variant={mode === "autonomous" ? "default" : "outline"}
+            onClick={() => setMode("autonomous")}
+            className="gap-1.5"
+            data-testid="button-mode-autonomous"
+          >
+            <Zap className="w-4 h-4" />
+            Autonomous
+          </Button>
+          <Button
+            variant={mode === "manual" ? "default" : "outline"}
+            onClick={() => setMode("manual")}
+            className="gap-1.5"
+            data-testid="button-mode-manual"
+          >
+            <Wrench className="w-4 h-4" />
+            Manual
+          </Button>
+        </div>
+
+        {mode === "autonomous" && (
+          <div className="space-y-4">
+            <Card className="p-4 space-y-4">
+              <div className="flex items-center gap-2">
+                <DollarSign className="w-4 h-4 text-muted-foreground" />
+                <Label className="text-sm font-medium">Budget</Label>
+              </div>
+              <div className="space-y-2">
+                <div className="flex items-center gap-3">
+                  <Input
+                    type="number"
+                    min={1}
+                    max={20}
+                    step={0.5}
+                    value={autoBudget}
+                    onChange={(e) => setAutoBudget(Math.min(20, Math.max(1, parseFloat(e.target.value) || 1)))}
+                    className="w-24"
+                    data-testid="input-auto-budget"
+                  />
+                  <span className="text-sm text-muted-foreground">USD ($1 - $20)</span>
+                </div>
+                <div className="flex gap-1.5">
+                  {[2, 5, 10, 15, 20].map((v) => (
+                    <Badge
+                      key={v}
+                      variant={autoBudget === v ? "default" : "outline"}
+                      className={`cursor-pointer select-none toggle-elevate ${autoBudget === v ? "toggle-elevated" : ""}`}
+                      onClick={() => setAutoBudget(v)}
+                      data-testid={`badge-budget-${v}`}
+                    >
+                      ${v}
+                    </Badge>
+                  ))}
+                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  The system auto-selects platforms and optimizes enrichment to maximize leads with valid emails within your budget.
+                </p>
+              </div>
+            </Card>
+
+            <Card className="p-4 space-y-4">
+              <div className="flex items-center gap-2">
+                <Search className="w-4 h-4 text-muted-foreground" />
+                <Label className="text-sm font-medium">Keywords</Label>
+              </div>
+              {autoKeywords.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {autoKeywords.map((kw) => (
+                    <Badge
+                      key={kw}
+                      variant="secondary"
+                      className="gap-1 cursor-pointer select-none"
+                      data-testid={`badge-auto-kw-${kw.replace(/\s+/g, "-")}`}
+                    >
+                      {kw}
+                      <X
+                        className="w-3 h-3"
+                        onClick={() => setAutoKeywords((prev) => prev.filter((k) => k !== kw))}
+                      />
+                    </Badge>
+                  ))}
+                </div>
+              )}
+              <Separator />
+              <div>
+                <p className="text-xs text-muted-foreground mb-2">Click to add:</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {RECOMMENDED_KEYWORDS.map((rec) => {
+                    const isActive = rec.keywords.every((kw) => autoKeywords.includes(kw));
+                    return (
+                      <Badge
+                        key={rec.label}
+                        variant={isActive ? "default" : "outline"}
+                        className={`cursor-pointer select-none toggle-elevate ${isActive ? "toggle-elevated" : ""}`}
+                        onClick={() => {
+                          if (isActive) {
+                            setAutoKeywords((prev) => prev.filter((kw) => !rec.keywords.includes(kw)));
+                          } else {
+                            setAutoKeywords((prev) => [...new Set([...prev, ...rec.keywords])]);
+                          }
+                        }}
+                        data-testid={`badge-auto-rec-${rec.label.replace(/\s+/g, "-")}`}
+                      >
+                        {rec.label}
+                      </Badge>
+                    );
+                  })}
+                </div>
+              </div>
+              <form
+                className="flex gap-2"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const trimmed = autoCustomKeyword.trim();
+                  if (trimmed && !autoKeywords.includes(trimmed)) {
+                    setAutoKeywords((prev) => [...prev, trimmed]);
+                    setAutoCustomKeyword("");
+                  }
+                }}
+              >
+                <Input
+                  placeholder="Add custom keyword..."
+                  value={autoCustomKeyword}
+                  onChange={(e) => setAutoCustomKeyword(e.target.value)}
+                  data-testid="input-auto-custom-keyword"
+                />
+                <Button type="submit" size="default" variant="outline" data-testid="button-auto-add-keyword">
+                  <Plus className="w-4 h-4" />
+                </Button>
+              </form>
+            </Card>
+
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+              <p className="text-sm text-muted-foreground">
+                {autoKeywords.length} keyword{autoKeywords.length !== 1 ? "s" : ""} / ${autoBudget.toFixed(2)} budget
+              </p>
+              <Button
+                size="lg"
+                onClick={() => autoRunMutation.mutate()}
+                disabled={autoRunMutation.isPending || autoKeywords.length === 0}
+                data-testid="button-run-autonomous"
+                className="gap-2 min-w-[180px]"
+              >
+                {autoRunMutation.isPending ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Zap className="w-4 h-4" />
+                )}
+                {autoRunMutation.isPending ? "Starting..." : "Run Autonomous"}
+                {!autoRunMutation.isPending && <ArrowRight className="w-4 h-4" />}
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {mode === "manual" && <><Tabs value={platformTab} onValueChange={handlePlatformTabChange}>
           <TabsList data-testid="tabs-platform">
             <TabsTrigger value="patreon" className="gap-1.5" data-testid="tab-patreon">
               <SiPatreon className="w-3.5 h-3.5" />
@@ -942,6 +1124,7 @@ export default function Home() {
             {!runMutation.isPending && <ArrowRight className="w-4 h-4" />}
           </Button>
         </div>
+        </>}
       </div>
     </div>
   );

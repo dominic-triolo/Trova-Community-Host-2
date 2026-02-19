@@ -96,8 +96,18 @@ The discovery form uses platform-specific tabs. Patreon, Facebook Groups, Podcas
 - `benthepythondev/podcast-intelligence-aggregator` - Apple Podcasts search ($30/1K results, pay-per-use, structured podcast data)
 - `code_crafter~leads-finder` - Email enrichment fallback ($1.50/1k leads, verified emails by domain)
 
+## Autonomous Mode
+- Users provide keywords + dollar budget ($1-$20), system auto-selects platforms and optimizes enrichment
+- Budget engine (`server/budget-engine.ts`) maps keywords to platforms, allocates budget 65/35 discovery/enrichment
+- Platform cost estimates: Patreon $0.03, Facebook $0.01, Podcast $0.03, Substack $0.01 per lead
+- Email yield rates: Podcast 55%, Substack 40%, Patreon 35%, Facebook 15%
+- Pipeline checks budget at key expensive steps (social scraping, Google search, website crawl, Leads Finder) and skips when exhausted
+- Schema fields: `isAutonomous`, `budgetUsd`, `budgetAllocation` on runs table
+- Frontend: Mode toggle (Autonomous/Manual) on home page, budget display on run status page
+
 ## API Endpoints
-- `POST /api/runs` - Start a new pipeline run
+- `POST /api/runs` - Start a new manual pipeline run
+- `POST /api/runs/autonomous` - Start autonomous run (keywords + budgetUsd)
 - `GET /api/runs` - List all runs
 - `GET /api/runs/:id` - Get run status
 - `GET /api/leads` - List all leads (optional `?runId=` filter)

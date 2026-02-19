@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, timestamp, jsonb, serial, real } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, timestamp, jsonb, serial, real, boolean } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -62,6 +62,9 @@ export const runs = pgTable("runs", {
   leadsExtracted: integer("leads_extracted").default(0),
   leadsWithEmail: integer("leads_with_email").default(0),
   apifySpendUsd: real("apify_spend_usd").default(0),
+  isAutonomous: boolean("is_autonomous").default(false),
+  budgetUsd: real("budget_usd").default(0),
+  budgetAllocation: jsonb("budget_allocation").$type<BudgetAllocation>(),
 });
 
 export const sourceUrls = pgTable("source_urls", {
@@ -170,6 +173,62 @@ export const runParamsSchema = z.object({
 });
 
 export type RunParams = z.infer<typeof runParamsSchema>;
+
+export interface PlatformAllocation {
+  platform: SourceId;
+  maxLeads: number;
+  estimatedCostUsd: number;
+  costPerLead: number;
+}
+
+export interface BudgetAllocation {
+  totalBudgetUsd: number;
+  discoveryBudgetUsd: number;
+  enrichmentBudgetUsd: number;
+  platforms: PlatformAllocation[];
+  estimatedTotalLeads: number;
+  estimatedEmailRate: number;
+}
+
+export const PLATFORM_COST_PER_LEAD: Record<string, number> = {
+  patreon: 0.03,
+  facebook: 0.01,
+  podcast: 0.03,
+  substack: 0.01,
+};
+
+export const PLATFORM_EMAIL_YIELD: Record<string, number> = {
+  patreon: 0.35,
+  facebook: 0.15,
+  podcast: 0.55,
+  substack: 0.40,
+};
+
+export const KEYWORD_PLATFORM_MAP: Record<string, SourceId[]> = {
+  "podcast": ["podcast"],
+  "patreon": ["patreon"],
+  "newsletter": ["substack"],
+  "substack": ["substack"],
+  "facebook group": ["facebook"],
+  "fb group": ["facebook"],
+  "church": ["facebook", "patreon"],
+  "ministry": ["facebook", "patreon"],
+  "faith": ["facebook", "patreon"],
+  "run club": ["facebook", "patreon"],
+  "running": ["facebook", "patreon", "podcast"],
+  "hiking": ["facebook", "patreon", "podcast"],
+  "cycling": ["facebook", "patreon", "podcast"],
+  "alumni": ["facebook"],
+  "social club": ["facebook"],
+};
+
+export const autonomousParamsSchema = z.object({
+  seedKeywords: z.array(z.string()).min(1, "At least one keyword is required"),
+  budgetUsd: z.number().min(1).max(20),
+  seedGeos: z.array(z.string()).default(["United States"]),
+});
+
+export type AutonomousParams = z.infer<typeof autonomousParamsSchema>;
 
 export interface ScoreBreakdown {
   nicheIdentity: number;

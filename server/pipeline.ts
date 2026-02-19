@@ -5,11 +5,27 @@ import { apolloPersonMatch, isApolloAvailable, extractDomainFromUrl as apolloExt
 import { extractDomainFromUrl, isEnrichableDomain } from "./hunter";
 import { verifyEmailBatch, mapResultToValidation } from "./millionverifier";
 import { log } from "./index";
-import type { RunParams, InsertSourceUrl, InsertLead, InsertLeader, PipelineStep } from "@shared/schema";
+import type { RunParams, InsertSourceUrl, InsertLead, InsertLeader, PipelineStep, BudgetAllocation } from "@shared/schema";
 import { PIPELINE_STEPS } from "@shared/schema";
 
 export const activeRunIds = new Set<number>();
 export const cancelledRunIds = new Set<number>();
+
+async function getRunBudgetInfo(runId: number): Promise<{ isAutonomous: boolean; budgetUsd: number; spentUsd: number }> {
+  const run = await storage.getRun(runId);
+  if (!run) return { isAutonomous: false, budgetUsd: 0, spentUsd: 0 };
+  return {
+    isAutonomous: run.isAutonomous || false,
+    budgetUsd: run.budgetUsd || 0,
+    spentUsd: run.apifySpendUsd || 0,
+  };
+}
+
+async function isBudgetExhausted(runId: number, estimatedNextCost: number = 0): Promise<boolean> {
+  const { isAutonomous, budgetUsd, spentUsd } = await getRunBudgetInfo(runId);
+  if (!isAutonomous || budgetUsd <= 0) return false;
+  return (spentUsd + estimatedNextCost) > budgetUsd * 1.05;
+}
 
 async function markStepComplete(runId: number, step: PipelineStep): Promise<void> {
   await storage.updateRun(runId, { lastCompletedStep: step });
@@ -3074,7 +3090,14 @@ export async function runPipeline(runId: number): Promise<void> {
     activeRunIds.add(runId);
     await storage.updateRun(runId, { status: "running", startedAt: new Date() });
 
-    await appendAndSave("Pipeline started", 2, "Step 1: Platform-specific discovery");
+    const isAutonomousRun = run.isAutonomous || false;
+    const budgetUsd = run.budgetUsd || 0;
+
+    if (isAutonomousRun && budgetUsd > 0) {
+      await appendAndSave(`Autonomous mode: $${budgetUsd.toFixed(2)} budget`, 2, "Step 1: Platform-specific discovery");
+    } else {
+      await appendAndSave("Pipeline started", 2, "Step 1: Platform-specific discovery");
+    }
 
     const keywords = params.seedKeywords;
     const geos = params.seedGeos;
@@ -3188,29 +3211,34 @@ export async function runPipeline(runId: number): Promise<void> {
 
     const enrichGroup2: { name: string; promise: Promise<void> }[] = [];
 
-    const leadsWithYouTube = allPlatformLeads.filter(l =>
-      l.ownedChannels?.youtube && l.ownedChannels.youtube.startsWith("http")
-    );
-    if (leadsWithYouTube.length > 0) {
-      await appendAndSave(`YouTube about pages: ${leadsWithYouTube.length} leads have YouTube channels`, 30, "Step 2: Parallel enrichment group 2");
-      enrichGroup2.push({ name: "YouTube about pages", promise: enrichFromYouTubeAboutPages(runId, allPlatformLeads, appendAndSave) });
-    }
+    const budgetExhaustedBeforeG2 = await isBudgetExhausted(runId, 0.05);
+    if (budgetExhaustedBeforeG2) {
+      await appendAndSave(`Budget limit reached ($${(await getRunBudgetInfo(runId)).spentUsd.toFixed(2)} spent) — skipping social scraping to preserve budget for enrichment`);
+    } else {
+      const leadsWithYouTube = allPlatformLeads.filter(l =>
+        l.ownedChannels?.youtube && l.ownedChannels.youtube.startsWith("http")
+      );
+      if (leadsWithYouTube.length > 0) {
+        await appendAndSave(`YouTube about pages: ${leadsWithYouTube.length} leads have YouTube channels`, 30, "Step 2: Parallel enrichment group 2");
+        enrichGroup2.push({ name: "YouTube about pages", promise: enrichFromYouTubeAboutPages(runId, allPlatformLeads, appendAndSave) });
+      }
 
-    const leadsWithInstagram = allPlatformLeads.filter(l =>
-      l.ownedChannels?.instagram && l.ownedChannels.instagram.startsWith("http")
-    );
-    if (leadsWithInstagram.length > 0) {
-      await appendAndSave(`Instagram bios: ${leadsWithInstagram.length} leads have Instagram profiles`);
-      enrichGroup2.push({ name: "Instagram bios", promise: enrichFromInstagramBios(runId, allPlatformLeads, appendAndSave) });
-    }
+      const leadsWithInstagram = allPlatformLeads.filter(l =>
+        l.ownedChannels?.instagram && l.ownedChannels.instagram.startsWith("http")
+      );
+      if (leadsWithInstagram.length > 0) {
+        await appendAndSave(`Instagram bios: ${leadsWithInstagram.length} leads have Instagram profiles`);
+        enrichGroup2.push({ name: "Instagram bios", promise: enrichFromInstagramBios(runId, allPlatformLeads, appendAndSave) });
+      }
 
-    const leadsWithTwitter = allPlatformLeads.filter(l => {
-      const tw = l.ownedChannels?.twitter;
-      return tw && (tw.startsWith("http") || tw.startsWith("@"));
-    });
-    if (leadsWithTwitter.length > 0) {
-      await appendAndSave(`Twitter bios: ${leadsWithTwitter.length} leads have Twitter/X profiles`);
-      enrichGroup2.push({ name: "Twitter/X bios", promise: enrichFromTwitterBios(runId, allPlatformLeads, appendAndSave) });
+      const leadsWithTwitter = allPlatformLeads.filter(l => {
+        const tw = l.ownedChannels?.twitter;
+        return tw && (tw.startsWith("http") || tw.startsWith("@"));
+      });
+      if (leadsWithTwitter.length > 0) {
+        await appendAndSave(`Twitter bios: ${leadsWithTwitter.length} leads have Twitter/X profiles`);
+        enrichGroup2.push({ name: "Twitter/X bios", promise: enrichFromTwitterBios(runId, allPlatformLeads, appendAndSave) });
+      }
     }
 
     if (enrichGroup2.length > 0) {
@@ -3234,8 +3262,11 @@ export async function runPipeline(runId: number): Promise<void> {
       enrichGroup3.push({ name: "Link aggregators (pass 2)", promise: enrichFromLinkAggregators(runId, allPlatformLeads, appendAndSave) });
     }
 
+    const budgetExhaustedBeforeG3 = await isBudgetExhausted(runId, 0.05);
     const leadsWithoutContactInfo = allPlatformLeads.filter(l => !l.email && !l.ownedChannels?.website && !l.ownedChannels?.linkedin);
-    if (leadsWithoutContactInfo.length > 0) {
+    if (budgetExhaustedBeforeG3 && leadsWithoutContactInfo.length > 0) {
+      await appendAndSave(`Budget limit reached — skipping Google contact search (${leadsWithoutContactInfo.length} leads)`);
+    } else if (leadsWithoutContactInfo.length > 0) {
       await appendAndSave(`Google enrichment: ${leadsWithoutContactInfo.length} leads need website/LinkedIn lookup`);
       enrichGroup3.push({ name: "Google contact search", promise: googleSearchEnrichCreators(runId, allPlatformLeads, appendAndSave) });
     } else {
@@ -3271,7 +3302,11 @@ export async function runPipeline(runId: number): Promise<void> {
       await appendAndSave(`Slug domain probe: trying ${slugDomainsProbed} Patreon slugs as .com domains`);
     }
 
-    const leadsNeedingEmail = allPlatformLeads.filter(l => !l.email && l.ownedChannels?.website && !isPatreonCdnUrl(l.ownedChannels.website));
+    const budgetExhaustedBeforeCrawl = await isBudgetExhausted(runId, 0.05);
+    const leadsNeedingEmail = budgetExhaustedBeforeCrawl ? [] : allPlatformLeads.filter(l => !l.email && l.ownedChannels?.website && !isPatreonCdnUrl(l.ownedChannels.website));
+    if (budgetExhaustedBeforeCrawl) {
+      await appendAndSave(`Budget limit reached — skipping website contact crawl`);
+    }
     if (leadsNeedingEmail.length > 0) {
       await appendAndSave(`Crawling ${leadsNeedingEmail.length} creator websites for contact emails...`, 38, "Step 3: Website contact crawl");
       const websiteEmailMap = await crawlCreatorWebsitesForEmails(runId, leadsNeedingEmail, appendAndSave);
@@ -3927,9 +3962,10 @@ export async function runPipeline(runId: number): Promise<void> {
     }
     await markStepComplete(runId, PIPELINE_STEPS.APOLLO);
 
+    const budgetExhaustedBeforeFinder = await isBudgetExhausted(runId, 0.10);
     const LEADS_FINDER_MAX_PER_RUN = Infinity;
     const refreshedLeads = await storage.listLeadsByRun(runId);
-    const leadsForFinder = refreshedLeads
+    const leadsForFinder = budgetExhaustedBeforeFinder ? [] : refreshedLeads
       .filter((l) => !l.email)
       .filter((l) => {
         const channels = (l.ownedChannels as Record<string, string>) || {};
@@ -3939,6 +3975,10 @@ export async function runPipeline(runId: number): Promise<void> {
       })
       .sort((a, b) => (b.score || 0) - (a.score || 0))
       .slice(0, LEADS_FINDER_MAX_PER_RUN);
+
+    if (budgetExhaustedBeforeFinder) {
+      await appendAndSave(`Budget limit reached — skipping Leads Finder enrichment`);
+    }
 
     if (leadsForFinder.length > 0) {
       await appendAndSave(`Leads Finder: enriching ${leadsForFinder.length} leads by domain...`, 87, "Step 9: Leads Finder enrichment");
@@ -4094,6 +4134,12 @@ export async function runPipeline(runId: number): Promise<void> {
 
     await markStepComplete(runId, PIPELINE_STEPS.SCORING);
 
+    let budgetSummary = "";
+    if (isAutonomousRun && budgetUsd > 0) {
+      const finalBudget = await getRunBudgetInfo(runId);
+      budgetSummary = ` Budget: $${finalBudget.spentUsd.toFixed(2)}/$${budgetUsd.toFixed(2)} spent.`;
+    }
+
     await storage.updateRun(runId, {
       status: "succeeded",
       progress: 100,
@@ -4101,7 +4147,7 @@ export async function runPipeline(runId: number): Promise<void> {
       finishedAt: new Date(),
       logs: appendLog(
         currentLogs,
-        `Pipeline complete! ${createdCount} leads discovered, ${emailCount} with email. Sources: ${sourcesUsed.join(", ")}.`
+        `Pipeline complete! ${createdCount} leads discovered, ${emailCount} with email.${budgetSummary} Sources: ${sourcesUsed.join(", ")}.`
       ),
     });
 

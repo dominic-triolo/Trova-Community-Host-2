@@ -5,6 +5,7 @@ import { runPipeline, reEnrichRun, resumeRun, activeRunIds, cancelledRunIds } fr
 import { runParamsSchema, DEFAULT_RUN_PARAMS } from "@shared/schema";
 import { fromError } from "zod-validation-error";
 import { log } from "./index";
+import { allocateBudget } from "./budget-engine";
 
 async function recoverStuckRuns() {
   try {
@@ -73,6 +74,55 @@ export async function registerRoutes(
       }, 100);
 
       res.json({ id: run.id });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.post("/api/runs/autonomous", async (req, res) => {
+    try {
+      const { keywords, budgetUsd } = req.body;
+      if (!keywords || !Array.isArray(keywords) || keywords.length === 0) {
+        return res.status(400).json({ message: "Keywords are required" });
+      }
+      const budget = Number(budgetUsd);
+      if (!budget || budget < 1 || budget > 20) {
+        return res.status(400).json({ message: "Budget must be between $1 and $20" });
+      }
+
+      const allocation = allocateBudget(keywords, budget);
+
+      const enabledSources = allocation.platforms.map(p => p.platform);
+      const totalLeads = allocation.platforms.reduce((s, p) => s + p.maxLeads, 0);
+
+      const params = {
+        ...DEFAULT_RUN_PARAMS,
+        seedKeywords: keywords,
+        seedGeos: [],
+        enabledSources,
+        maxDiscoveredUrls: totalLeads,
+        enableApollo: allocation.enrichmentBudgetUsd > 0,
+        enableLeadsFinder: allocation.enrichmentBudgetUsd > 0.05,
+      };
+
+      const run = await storage.createRun({
+        status: "queued",
+        progress: 0,
+        step: "Queued",
+        logs: "",
+        params,
+        isAutonomous: true,
+        budgetUsd: budget,
+        budgetAllocation: allocation,
+      });
+
+      setTimeout(() => {
+        runPipeline(run.id).catch((err) => {
+          console.error(`Autonomous pipeline run ${run.id} error:`, err);
+        });
+      }, 100);
+
+      res.json({ id: run.id, allocation });
     } catch (err: any) {
       res.status(500).json({ message: err.message });
     }

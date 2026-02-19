@@ -254,10 +254,13 @@ export default function RunStatus() {
           <Card className="p-3 space-y-1">
             <div className="flex items-center gap-1.5 text-muted-foreground">
               <DollarSign className="w-3.5 h-3.5" />
-              <span className="text-xs">Apify Spend</span>
+              <span className="text-xs">{(run as any).isAutonomous ? "Budget Used" : "Apify Spend"}</span>
             </div>
             <p className="text-lg font-semibold" data-testid="text-apify-spend">
               ${((run as any).apifySpendUsd || 0).toFixed(2)}
+              {(run as any).isAutonomous && (run as any).budgetUsd > 0 && (
+                <span className="text-sm font-normal text-muted-foreground"> / ${((run as any).budgetUsd || 0).toFixed(2)}</span>
+              )}
             </p>
           </Card>
         </div>
