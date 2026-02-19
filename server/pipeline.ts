@@ -4270,6 +4270,153 @@ export async function runPipeline(runId: number): Promise<void> {
 
         await appendAndSave(`Expansion: discovered ${newPlatformLeads.length} new platform results`);
 
+        if (newPlatformLeads.length === 0) {
+          await appendAndSave(`Expansion: no new leads discovered, lead pool exhausted. Stopping expansion.`);
+          break;
+        }
+
+        // --- Enrichment chain on PlatformLead[] before creating DB leads ---
+
+        // Step E1: Google Bridge for Facebook groups
+        const expFbLeads = newPlatformLeads.filter(l => l.source === "facebook" && !l.email && !l.ownedChannels?.website && !l.ownedChannels?.linkedin);
+        if (expFbLeads.length > 0 && !(await isBudgetExhausted(runId, 0.10))) {
+          await appendAndSave(`Expansion: Google Bridge for ${expFbLeads.length} Facebook groups...`);
+          try {
+            await googleBridgeEnrichFacebookGroups(runId, newPlatformLeads, appendAndSave);
+          } catch (err: any) {
+            await appendAndSave(`[WARN] Expansion Google Bridge failed: ${err.message}`);
+          }
+        }
+
+        // Step E1b: RSS feed extraction
+        const expRssLeads = newPlatformLeads.filter(l => l.ownedChannels?.rss && l.ownedChannels.rss.startsWith("http") && !l.email);
+        if (expRssLeads.length > 0) {
+          await appendAndSave(`Expansion: RSS feed extraction for ${expRssLeads.length} leads...`);
+          try {
+            await enrichFromRssFeeds(runId, newPlatformLeads, appendAndSave);
+          } catch (err: any) {
+            await appendAndSave(`[WARN] Expansion RSS feed extraction failed: ${err.message}`);
+          }
+        }
+
+        // Step E1c: Link aggregator scrape (pass 1)
+        const expLinktreeLeads = newPlatformLeads.filter(l => !l.email && l.ownedChannels?.linktree && l.ownedChannels.linktree.startsWith("http"));
+        if (expLinktreeLeads.length > 0 && !(await isBudgetExhausted(runId, 0.10))) {
+          await appendAndSave(`Expansion: Link aggregator scrape for ${expLinktreeLeads.length} leads...`);
+          try {
+            await enrichFromLinkAggregators(runId, newPlatformLeads, appendAndSave);
+          } catch (err: any) {
+            await appendAndSave(`[WARN] Expansion link aggregator scrape failed: ${err.message}`);
+          }
+        }
+
+        // Step E2: Social scraping (YouTube, Instagram, Twitter) — budget-gated
+        if (!(await isBudgetExhausted(runId, 0.10))) {
+          const expSocialTasks: { name: string; promise: Promise<void> }[] = [];
+
+          const expYtLeads = newPlatformLeads.filter(l => l.ownedChannels?.youtube && l.ownedChannels.youtube.startsWith("http"));
+          if (expYtLeads.length > 0) {
+            await appendAndSave(`Expansion: YouTube about pages for ${expYtLeads.length} leads...`);
+            expSocialTasks.push({ name: "YouTube", promise: enrichFromYouTubeAboutPages(runId, newPlatformLeads, appendAndSave) });
+          }
+
+          const expIgLeads = newPlatformLeads.filter(l => l.ownedChannels?.instagram && l.ownedChannels.instagram.startsWith("http"));
+          if (expIgLeads.length > 0) {
+            await appendAndSave(`Expansion: Instagram bios for ${expIgLeads.length} leads...`);
+            expSocialTasks.push({ name: "Instagram", promise: enrichFromInstagramBios(runId, newPlatformLeads, appendAndSave) });
+          }
+
+          const expTwLeads = newPlatformLeads.filter(l => {
+            const tw = l.ownedChannels?.twitter;
+            return tw && (tw.startsWith("http") || tw.startsWith("@"));
+          });
+          if (expTwLeads.length > 0) {
+            await appendAndSave(`Expansion: Twitter bios for ${expTwLeads.length} leads...`);
+            expSocialTasks.push({ name: "Twitter", promise: enrichFromTwitterBios(runId, newPlatformLeads, appendAndSave) });
+          }
+
+          if (expSocialTasks.length > 0) {
+            await appendAndSave(`Expansion: running ${expSocialTasks.length} social scrape tasks in parallel...`);
+            const socialResults = await Promise.allSettled(expSocialTasks.map(t => t.promise));
+            for (let i = 0; i < socialResults.length; i++) {
+              if (socialResults[i].status === "rejected") {
+                await appendAndSave(`[WARN] Expansion ${expSocialTasks[i].name} failed: ${(socialResults[i] as PromiseRejectedResult).reason?.message || "Unknown error"}`);
+              }
+            }
+          }
+
+          // Step E2d: Link aggregator pass 2 (new URLs from social scraping)
+          const expNewLinktreeLeads = newPlatformLeads.filter(l =>
+            !l.email && l.ownedChannels?.linktree && l.ownedChannels.linktree.startsWith("http") &&
+            !expLinktreeLeads.includes(l)
+          );
+          if (expNewLinktreeLeads.length > 0 && !(await isBudgetExhausted(runId, 0.10))) {
+            await appendAndSave(`Expansion: Link aggregator pass 2 for ${expNewLinktreeLeads.length} new URLs...`);
+            try {
+              await enrichFromLinkAggregators(runId, newPlatformLeads, appendAndSave);
+            } catch (err: any) {
+              await appendAndSave(`[WARN] Expansion link aggregator pass 2 failed: ${err.message}`);
+            }
+          }
+        }
+
+        // Step E2e: Google Contact Search for leads without contact info
+        const expNoContactLeads = newPlatformLeads.filter(l => !l.email && !l.ownedChannels?.website && !l.ownedChannels?.linkedin);
+        if (expNoContactLeads.length > 0 && !(await isBudgetExhausted(runId, 0.10))) {
+          await appendAndSave(`Expansion: Google contact search for ${expNoContactLeads.length} leads...`);
+          try {
+            await googleSearchEnrichCreators(runId, newPlatformLeads, appendAndSave);
+          } catch (err: any) {
+            await appendAndSave(`[WARN] Expansion Google contact search failed: ${err.message}`);
+          }
+        }
+
+        // Step E2f: Slug domain probe for Patreon creators without websites
+        let expSlugProbed = 0;
+        for (const pl of newPlatformLeads) {
+          if (pl.ownedChannels?.website || pl.email) continue;
+          const patreonUrl = pl.website || pl.ownedChannels?.patreon || "";
+          if (!patreonUrl.includes("patreon.com/")) continue;
+          const slug = patreonUrl.split("patreon.com/")[1]?.split(/[?#/]/)[0]?.toLowerCase();
+          if (!slug || slug.length < 3 || (slug.startsWith("u") && /^\d+$/.test(slug.slice(1)))) continue;
+          if (/[^a-z0-9_-]/.test(slug)) continue;
+          const cleanSlug = slug.replace(/[_-]/g, "");
+          if (cleanSlug.length < 4) continue;
+          const candidateDomain = `${cleanSlug}.com`;
+          if (!pl.ownedChannels) pl.ownedChannels = {} as Record<string, string>;
+          pl.ownedChannels.website = `https://${candidateDomain}`;
+          expSlugProbed++;
+        }
+        if (expSlugProbed > 0) {
+          await appendAndSave(`Expansion: slug domain probe tried ${expSlugProbed} Patreon slugs as .com domains`);
+        }
+
+        // Step E3: Website contact crawl for leads with websites but no email
+        const expWebsiteLeads = newPlatformLeads.filter(l => !l.email && l.ownedChannels?.website && !isPatreonCdnUrl(l.ownedChannels.website));
+        if (expWebsiteLeads.length > 0 && !(await isBudgetExhausted(runId, 0.10))) {
+          await appendAndSave(`Expansion: crawling ${expWebsiteLeads.length} websites for contact emails...`);
+          try {
+            const websiteEmailMap = await crawlCreatorWebsitesForEmails(runId, expWebsiteLeads, appendAndSave);
+            let expWebEmails = 0;
+            for (const pl of newPlatformLeads) {
+              if (!pl.email && pl.ownedChannels?.website) {
+                const domain = extractDomain(pl.ownedChannels.website);
+                if (domain && websiteEmailMap.has(domain)) {
+                  pl.email = websiteEmailMap.get(domain)!;
+                  expWebEmails++;
+                }
+              }
+            }
+            await appendAndSave(`Expansion: website crawl found ${expWebEmails} emails from contact pages`);
+          } catch (err: any) {
+            await appendAndSave(`[WARN] Expansion website crawl failed: ${err.message}`);
+          }
+        }
+
+        const expEmailsAfterEnrichment = newPlatformLeads.filter(l => l.email).length;
+        await appendAndSave(`Expansion: after enrichment chain, ${expEmailsAfterEnrichment}/${newPlatformLeads.length} leads have emails`);
+
+        // --- Now create DB leads from enriched PlatformLeads ---
         let expansionCreated = 0;
         for (const pl of newPlatformLeads) {
           try {
@@ -4304,7 +4451,7 @@ export async function runPipeline(runId: number): Promise<void> {
             const breakdown = scoreLead({
               name: pl.communityName, description: pl.description, type: pl.communityType,
               location: pl.location, website: pl.website, email: pl.email, phone: pl.phone,
-              linkedin: "", ownedChannels: pl.ownedChannels,
+              linkedin: pl.ownedChannels?.linkedin || "", ownedChannels: pl.ownedChannels,
               monetizationSignals: pl.monetizationSignals, engagementSignals: pl.engagementSignals,
               tripFitSignals: pl.tripFitSignals, leaderName: pl.leaderName,
               memberCount: pl.memberCount, subscriberCount: pl.subscriberCount, raw: pl.raw,
@@ -4326,11 +4473,87 @@ export async function runPipeline(runId: number): Promise<void> {
 
         await appendAndSave(`Expansion: created ${expansionCreated} new leads (deduped from ${newPlatformLeads.length})`);
 
-        if (newPlatformLeads.length === 0 && expansionCreated === 0) {
-          await appendAndSave(`Expansion: no new leads discovered, lead pool exhausted. Stopping expansion.`);
+        if (expansionCreated === 0) {
+          await appendAndSave(`Expansion: all leads were duplicates, stopping expansion.`);
           break;
         }
 
+        // --- Apollo enrichment on newly created DB leads ---
+        if (params.enableApollo !== false && isApolloAvailable() && !(await isBudgetExhausted(runId, 0.10))) {
+          const APOLLO_MIN_SCORE = 15;
+          const expDbLeads = await storage.listLeadsByRun(runId);
+          const expApolloLeads = expDbLeads
+            .filter(l => !l.email && (l.score || 0) >= APOLLO_MIN_SCORE && !l.apolloEnrichedAt)
+            .sort((a, b) => (b.score || 0) - (a.score || 0));
+
+          if (expApolloLeads.length > 0) {
+            await appendAndSave(`Expansion: Apollo enrichment for ${expApolloLeads.length} leads without email...`);
+            let expApolloEnriched = 0;
+            let expApolloCalls = 0;
+            for (const lead of expApolloLeads) {
+              try {
+                if (await isBudgetExhausted(runId, 0.05)) break;
+                const currentHash = computeApolloInputHash(lead);
+                if (lead.apolloEnrichedAt && lead.apolloInputHash === currentHash) continue;
+
+                const leaderName = lead.leaderName || lead.communityName || "";
+                if (!leaderName) continue;
+                if (!isValidApolloCandidate(leaderName)) continue;
+
+                const nameParts = leaderName.trim().split(/\s+/);
+                const firstName = nameParts[0] || "";
+                const lastName = nameParts.length > 1 ? nameParts.slice(1).join(" ") : "";
+                const hasRealName = nameParts.length >= 2 && firstName.length > 1 && lastName.length > 1;
+
+                const channels = (lead.ownedChannels as Record<string, string>) || {};
+                let domain = apolloExtractDomain(lead.website || "");
+                if (!domain || !apolloIsEnrichable(domain)) {
+                  if (channels.website) domain = apolloExtractDomain(channels.website);
+                }
+                const enrichableDomain = domain && apolloIsEnrichable(domain) ? domain : undefined;
+                const linkedinUrl = channels.linkedin && channels.linkedin.startsWith("http") ? channels.linkedin : undefined;
+
+                expApolloCalls++;
+                let result = await apolloPersonMatch({
+                  name: leaderName,
+                  firstName: hasRealName ? firstName : undefined,
+                  lastName: hasRealName ? lastName : undefined,
+                  domain: enrichableDomain,
+                  organizationName: lead.communityName !== leaderName ? lead.communityName || undefined : undefined,
+                  linkedinUrl,
+                });
+
+                if (!result && hasRealName && !linkedinUrl) {
+                  expApolloCalls++;
+                  result = await apolloPersonMatch({ firstName, lastName, domain: enrichableDomain });
+                  await new Promise((r) => setTimeout(r, 300));
+                }
+
+                if (!result) {
+                  await storage.updateLead(lead.id, { apolloEnrichedAt: new Date(), apolloInputHash: currentHash });
+                  continue;
+                }
+
+                const updateData: Record<string, any> = { apolloEnrichedAt: new Date(), apolloInputHash: currentHash };
+                if (result.email && !isBlockedEmail(result.email)) {
+                  updateData.email = result.email;
+                  expApolloEnriched++;
+                }
+                if (result.phone) updateData.phone = result.phone;
+                if (result.linkedin) updateData.linkedin = result.linkedin;
+                if (result.title) updateData.title = result.title;
+                if (result.orgName) updateData.company = result.orgName;
+                await storage.updateLead(lead.id, updateData);
+                await new Promise((r) => setTimeout(r, 300));
+              } catch (err: any) {
+                await appendAndSave(`[WARN] Expansion Apollo failed for lead ${lead.id}: ${err.message}`);
+              }
+            }
+            await appendAndSave(`Expansion: Apollo enriched ${expApolloEnriched} of ${expApolloLeads.length} leads (${expApolloCalls} API calls)`);
+          }
+        }
+
+        // --- Leads Finder fallback for leads still missing email ---
         const refreshedExpLeads = await storage.listLeadsByRun(runId);
         const leadsForExpFinder = refreshedExpLeads
           .filter(l => !l.email && !l.emailValidation)
