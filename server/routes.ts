@@ -2,6 +2,8 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { runPipeline, reEnrichRun, resumeRun, restartRun, activeRunIds, cancelledRunIds } from "./pipeline";
+import { verifyEmailBatch, mapResultToValidation } from "./millionverifier";
+import { checkEmailsInHubspot, isHubspotConfigured } from "./hubspot";
 import { runParamsSchema, DEFAULT_RUN_PARAMS, PLATFORM_COST_PER_LEAD, PLATFORM_EMAIL_YIELD, PLATFORM_VALID_EMAIL_RATE, type SourceId } from "@shared/schema";
 import { fromError } from "zod-validation-error";
 import { log } from "./index";
@@ -490,6 +492,84 @@ export async function registerRoutes(
 
       res.json({ fixed, duped, total: fbLeads.length });
     } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.post("/api/backfill/verify-and-check", async (req, res) => {
+    try {
+      const sitePassword = process.env.SITE_PASSWORD;
+      if (sitePassword && req.body.password !== sitePassword) {
+        return res.status(403).json({ message: "Unauthorized" });
+      }
+
+      const allLeads = await storage.listLeads();
+      const summary: any = { totalLeads: allLeads.length, emailVerified: 0, hubspotChecked: 0, errors: [] };
+
+      const needsVerification = allLeads.filter(l => l.email && (!l.emailValidation || l.emailValidation === ""));
+      summary.needsVerification = needsVerification.length;
+      log(`Backfill: ${needsVerification.length} leads need email verification`, "backfill");
+
+      if (needsVerification.length > 0) {
+        const emailInputs = needsVerification.map(l => ({ email: l.email!, leadId: l.id }));
+        try {
+          const verifyResults = await verifyEmailBatch(emailInputs, (done, total) => {
+            log(`Backfill: MillionVerifier progress ${done}/${total}`, "backfill");
+          });
+          const verifyEntries = Array.from(verifyResults.entries());
+          for (const [leadId, result] of verifyEntries) {
+            const validation = mapResultToValidation(result.result);
+            await storage.updateLead(leadId, { emailValidation: validation });
+            summary.emailVerified++;
+          }
+          log(`Backfill: Verified ${summary.emailVerified} emails`, "backfill");
+        } catch (err: any) {
+          log(`Backfill: MillionVerifier error: ${err.message}`, "backfill");
+          summary.errors.push(`MillionVerifier: ${err.message}`);
+        }
+      }
+
+      if (isHubspotConfigured()) {
+        const refreshedLeads = await storage.listLeads();
+        const needsHubspot = refreshedLeads.filter(l =>
+          l.email && l.emailValidation === "valid" && (!(l as any).hubspotStatus || (l as any).hubspotStatus === "")
+        );
+        summary.needsHubspot = needsHubspot.length;
+        log(`Backfill: ${needsHubspot.length} leads need HubSpot check`, "backfill");
+
+        if (needsHubspot.length > 0) {
+          try {
+            const emailToLeadIds = new Map<string, number[]>();
+            for (const lead of needsHubspot) {
+              const email = lead.email!.toLowerCase();
+              if (!emailToLeadIds.has(email)) emailToLeadIds.set(email, []);
+              emailToLeadIds.get(email)!.push(lead.id);
+            }
+            const uniqueEmails = Array.from(emailToLeadIds.keys());
+            const hubResults = await checkEmailsInHubspot(uniqueEmails);
+            const hubEntries = Array.from(hubResults.entries());
+            for (const [email, exists] of hubEntries) {
+              const status = exists ? "existing" : "net_new";
+              const leadIds = emailToLeadIds.get(email.toLowerCase()) || [];
+              for (const leadId of leadIds) {
+                await storage.updateLead(leadId, { hubspotStatus: status });
+                summary.hubspotChecked++;
+              }
+            }
+            log(`Backfill: HubSpot checked ${summary.hubspotChecked} leads`, "backfill");
+          } catch (err: any) {
+            log(`Backfill: HubSpot error: ${err.message}`, "backfill");
+            summary.errors.push(`HubSpot: ${err.message}`);
+          }
+        }
+      } else {
+        summary.hubspotSkipped = "HUBSPOT_ACCESS_TOKEN not configured";
+      }
+
+      log(`Backfill complete: ${summary.emailVerified} verified, ${summary.hubspotChecked} HubSpot checked`, "backfill");
+      res.json(summary);
+    } catch (err: any) {
+      log(`Backfill error: ${err.message}`, "backfill");
       res.status(500).json({ message: err.message });
     }
   });
