@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation, Link } from "wouter";
 import type { Lead, ScoreBreakdown } from "@shared/schema";
@@ -34,7 +34,6 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
@@ -63,8 +62,10 @@ import {
   Youtube,
   BookOpen,
   Users,
-  BarChart3,
   ChevronRight,
+  ChevronLeft,
+  ChevronsLeft,
+  ChevronsRight,
   Link2,
   ShieldCheck,
   ShieldAlert,
@@ -295,6 +296,8 @@ function LeadDetail({ lead }: { lead: Lead }) {
   );
 }
 
+const PAGE_SIZE_OPTIONS = [25, 50, 100] as const;
+
 export default function Results() {
   const [location] = useLocation();
   const params = new URLSearchParams(location.split("?")[1] || "");
@@ -305,6 +308,8 @@ export default function Results() {
   const [sourceFilter, setSourceFilter] = useState("all");
   const [emailOnly, setEmailOnly] = useState(false);
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState<number>(50);
 
   const { data: leads, isLoading } = useQuery<Lead[]>({
     queryKey: ["/api/leads", runId],
@@ -320,7 +325,7 @@ export default function Results() {
     new Set((leads || []).map((l) => l.source || "").filter(Boolean))
   ).sort();
 
-  const filtered = (leads || []).filter((lead) => {
+  const filtered = useMemo(() => (leads || []).filter((lead) => {
     if (typeFilter !== "all" && lead.communityType !== typeFilter) return false;
     if (sourceFilter !== "all" && (lead.source || "") !== sourceFilter) return false;
     if (emailOnly && !lead.email) return false;
@@ -334,7 +339,16 @@ export default function Results() {
       );
     }
     return true;
-  });
+  }), [leads, typeFilter, sourceFilter, emailOnly, searchQ]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const paginatedLeads = filtered.slice((safePage - 1) * pageSize, safePage * pageSize);
+
+  const handleFilterChange = (setter: (v: any) => void) => (v: any) => {
+    setter(v);
+    setPage(1);
+  };
 
   const downloadCsv = async () => {
     const exportUrl = runId ? `/api/exports/csv?runId=${runId}` : `/api/exports/csv`;
@@ -350,8 +364,8 @@ export default function Results() {
   };
 
   return (
-    <div className="flex-1 overflow-auto">
-      <div className="max-w-6xl mx-auto p-6 space-y-6">
+    <div className="flex flex-col flex-1 overflow-hidden">
+      <div className="flex-shrink-0 p-4 pb-0 space-y-4 max-w-[1400px] w-full mx-auto">
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <div className="space-y-1">
             <h1 className="text-2xl font-semibold tracking-tight" data-testid="text-results-title">
@@ -359,7 +373,7 @@ export default function Results() {
             </h1>
             <div className="flex items-center gap-2 flex-wrap">
               <p className="text-sm text-muted-foreground">
-                {(leads || []).length} leads found
+                {filtered.length} of {(leads || []).length} leads
                 {leads && leads.filter((l) => l.email).length > 0 && (
                   <span className="ml-1">({leads.filter((l) => l.email).length} with email)</span>
                 )}
@@ -382,12 +396,12 @@ export default function Results() {
             <Input
               placeholder="Search leads..."
               value={searchQ}
-              onChange={(e) => setSearchQ(e.target.value)}
+              onChange={(e) => { setSearchQ(e.target.value); setPage(1); }}
               className="pl-9"
               data-testid="input-search-leads"
             />
           </div>
-          <Select value={sourceFilter} onValueChange={setSourceFilter}>
+          <Select value={sourceFilter} onValueChange={handleFilterChange(setSourceFilter)}>
             <SelectTrigger className="w-[180px]" data-testid="select-source-filter">
               <SelectValue placeholder="Source" />
             </SelectTrigger>
@@ -398,7 +412,7 @@ export default function Results() {
               ))}
             </SelectContent>
           </Select>
-          <Select value={typeFilter} onValueChange={setTypeFilter}>
+          <Select value={typeFilter} onValueChange={handleFilterChange(setTypeFilter)}>
             <SelectTrigger className="w-[180px]" data-testid="select-type-filter">
               <SelectValue placeholder="Community type" />
             </SelectTrigger>
@@ -412,44 +426,46 @@ export default function Results() {
           <label className="flex items-center gap-2 cursor-pointer text-sm text-muted-foreground whitespace-nowrap">
             <Checkbox
               checked={emailOnly}
-              onCheckedChange={(v) => setEmailOnly(v === true)}
+              onCheckedChange={handleFilterChange(setEmailOnly)}
               data-testid="checkbox-email-only"
             />
             Has email
           </label>
         </div>
+      </div>
 
-        {isLoading ? (
-          <div className="space-y-2">
-            {[1, 2, 3, 4, 5].map((i) => (
-              <Skeleton key={i} className="h-12 w-full" />
-            ))}
-          </div>
-        ) : filtered.length === 0 ? (
-          <Card className="p-8 text-center space-y-3">
-            <Users className="w-10 h-10 text-muted-foreground mx-auto" />
-            <p className="text-sm font-medium">No leads found</p>
-            <p className="text-xs text-muted-foreground">
-              Run the finder to discover leads.
-            </p>
-          </Card>
-        ) : (
-          <Card className="overflow-hidden">
-            <ScrollArea className="max-h-[600px]">
+      <div className="flex-1 overflow-auto p-4 pt-3">
+        <div className="max-w-[1400px] w-full mx-auto">
+          {isLoading ? (
+            <div className="space-y-2">
+              {[1, 2, 3, 4, 5].map((i) => (
+                <Skeleton key={i} className="h-12 w-full" />
+              ))}
+            </div>
+          ) : filtered.length === 0 ? (
+            <Card className="p-8 text-center space-y-3">
+              <Users className="w-10 h-10 text-muted-foreground mx-auto" />
+              <p className="text-sm font-medium">No leads found</p>
+              <p className="text-xs text-muted-foreground">
+                Run the finder to discover leads.
+              </p>
+            </Card>
+          ) : (
+            <Card className="overflow-hidden">
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="w-[200px]">Community / Leader</TableHead>
-                    <TableHead>Type</TableHead>
-                    <TableHead>Location</TableHead>
-                    <TableHead className="text-center">Score</TableHead>
-                    <TableHead>Contact</TableHead>
-                    <TableHead>Platforms</TableHead>
-                    <TableHead className="w-8"></TableHead>
+                    <TableHead className="w-[200px] sticky top-0 bg-card z-10">Community / Leader</TableHead>
+                    <TableHead className="sticky top-0 bg-card z-10">Type</TableHead>
+                    <TableHead className="sticky top-0 bg-card z-10">Location</TableHead>
+                    <TableHead className="text-center sticky top-0 bg-card z-10">Score</TableHead>
+                    <TableHead className="sticky top-0 bg-card z-10">Contact</TableHead>
+                    <TableHead className="sticky top-0 bg-card z-10">Platforms</TableHead>
+                    <TableHead className="w-8 sticky top-0 bg-card z-10"></TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filtered.map((lead) => {
+                  {paginatedLeads.map((lead) => {
                     const channels = lead.ownedChannels as Record<string, string> | null;
                     const channelKeys = channels ? Object.keys(channels) : [];
                     return (
@@ -480,9 +496,7 @@ export default function Results() {
                             <TableCell>
                               <div className="flex items-center gap-1.5">
                                 {lead.email && (
-                                  <>
-                                    <Mail className={`w-3.5 h-3.5 ${(lead as any).emailValidation === "valid" ? "text-green-600 dark:text-green-400" : (lead as any).emailValidation === "invalid" ? "text-destructive" : "text-muted-foreground"}`} />
-                                  </>
+                                  <Mail className={`w-3.5 h-3.5 ${(lead as any).emailValidation === "valid" ? "text-green-600 dark:text-green-400" : (lead as any).emailValidation === "invalid" ? "text-destructive" : "text-muted-foreground"}`} />
                                 )}
                                 {lead.phone && <Phone className="w-3.5 h-3.5 text-muted-foreground" />}
                                 {lead.website && <Globe className="w-3.5 h-3.5 text-muted-foreground" />}
@@ -517,10 +531,72 @@ export default function Results() {
                   })}
                 </TableBody>
               </Table>
-            </ScrollArea>
-          </Card>
-        )}
+            </Card>
+          )}
+        </div>
       </div>
+
+      {!isLoading && filtered.length > 0 && (
+        <div className="flex-shrink-0 border-t bg-background px-4 py-2">
+          <div className="max-w-[1400px] w-full mx-auto flex items-center justify-between gap-4 flex-wrap">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <span>Rows per page</span>
+              <Select value={String(pageSize)} onValueChange={(v) => { setPageSize(Number(v)); setPage(1); }}>
+                <SelectTrigger className="w-[70px]" data-testid="select-page-size">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {PAGE_SIZE_OPTIONS.map((s) => (
+                    <SelectItem key={s} value={String(s)}>{s}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="flex items-center gap-1">
+              <span className="text-sm text-muted-foreground mr-2" data-testid="text-page-info">
+                {(safePage - 1) * pageSize + 1}–{Math.min(safePage * pageSize, filtered.length)} of {filtered.length}
+              </span>
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={() => setPage(1)}
+                disabled={safePage <= 1}
+                data-testid="button-first-page"
+              >
+                <ChevronsLeft className="w-4 h-4" />
+              </Button>
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={() => setPage(safePage - 1)}
+                disabled={safePage <= 1}
+                data-testid="button-prev-page"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </Button>
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={() => setPage(safePage + 1)}
+                disabled={safePage >= totalPages}
+                data-testid="button-next-page"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </Button>
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={() => setPage(totalPages)}
+                disabled={safePage >= totalPages}
+                data-testid="button-last-page"
+              >
+                <ChevronsRight className="w-4 h-4" />
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
