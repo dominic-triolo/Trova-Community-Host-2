@@ -1042,19 +1042,93 @@ function extractFbGroupUrl(rawUrl: string): string {
   }
 }
 
+function expandFacebookKeywords(keywords: string[], geos: string[], maxQueries: number = 100): string[] {
+  const synonymMap: Record<string, string[]> = {
+    "book club": ["book group", "reading club", "reading group", "book lovers", "readers group", "literature club", "book discussion"],
+    "hiking": ["hiking group", "hiking club", "hikers group", "trail club", "outdoor hiking", "day hikes"],
+    "hiking club": ["hiking group", "hikers club", "trail club", "outdoor hiking"],
+    "run club": ["running club", "runners group", "running group", "joggers club", "run group"],
+    "running club": ["run club", "runners group", "running group", "joggers club"],
+    "fitness": ["fitness group", "fitness club", "workout group", "gym group", "exercise group"],
+    "yoga": ["yoga group", "yoga club", "yoga community", "yoga lovers"],
+    "travel": ["travel group", "travel club", "travelers group", "travel community", "travel buddies"],
+    "travel club": ["travel group", "travelers club", "travel community", "travel buddies"],
+    "social club": ["social group", "social gathering", "social events", "meetup group"],
+    "women": ["women's group", "women's club", "ladies group", "women's community"],
+    "mom": ["moms group", "mothers group", "mommy group", "parents group"],
+    "church": ["church group", "faith group", "ministry group", "bible study group", "worship community"],
+    "alumni": ["alumni group", "alumni club", "alumni network", "alumni association"],
+    "professional": ["professional group", "professional network", "networking group", "career group"],
+    "photography": ["photography group", "photographers club", "photo club", "camera club"],
+    "cooking": ["cooking group", "cooking club", "foodies group", "culinary club", "recipe group"],
+    "wine": ["wine club", "wine group", "wine lovers", "wine tasting group"],
+    "outdoor": ["outdoor group", "outdoor club", "outdoor adventure", "nature group"],
+    "cycling": ["cycling group", "cycling club", "biking group", "bike club", "cyclists group"],
+  };
+
+  const TOP_US_CITIES = [
+    "New York", "Los Angeles", "Chicago", "Houston", "Phoenix",
+    "Philadelphia", "San Antonio", "San Diego", "Dallas", "Austin",
+    "Denver", "Seattle", "Portland", "Nashville", "Atlanta",
+    "Miami", "Boston", "Minneapolis", "Charlotte", "San Francisco",
+  ];
+
+  const expanded: string[] = [];
+  const seen = new Set<string>();
+  const addQuery = (q: string) => {
+    if (!seen.has(q) && expanded.length < maxQueries) {
+      seen.add(q);
+      expanded.push(q);
+    }
+  };
+
+  for (const kw of keywords) {
+    addQuery(`site:facebook.com/groups "${kw}"`);
+
+    const kwLower = kw.toLowerCase().trim();
+    const synonyms = synonymMap[kwLower] || [];
+    for (const syn of synonyms) {
+      addQuery(`site:facebook.com/groups "${syn}"`);
+    }
+
+    addQuery(`site:facebook.com/groups ${kw} community`);
+    addQuery(`site:facebook.com/groups ${kw} group`);
+    addQuery(`site:facebook.com/groups ${kw} meetup`);
+    addQuery(`site:facebook.com/groups ${kw} network`);
+  }
+
+  const allSearchTerms = [...keywords];
+  for (const kw of keywords) {
+    const kwLower = kw.toLowerCase().trim();
+    const synonyms = synonymMap[kwLower] || [];
+    for (const syn of synonyms) allSearchTerms.push(syn);
+  }
+
+  const geoCities = geos.length > 0 ? geos.slice(0, 20) : TOP_US_CITIES;
+  for (const term of allSearchTerms) {
+    if (expanded.length >= maxQueries) break;
+    for (const geo of geoCities) {
+      addQuery(`site:facebook.com/groups "${term}" "${geo}"`);
+    }
+  }
+
+  return expanded;
+}
+
 async function scrapeFacebookGroups(
   runId: number,
   keywords: string[],
   maxItems: number,
   appendAndSave: (msg: string) => Promise<void>,
-  filters: { minMemberCount?: number; maxMemberCount?: number } = {},
+  filters: { minMemberCount?: number; maxMemberCount?: number; geos?: string[] } = {},
 ): Promise<PlatformLead[]> {
   const leads: PlatformLead[] = [];
   const seenGroupUrls = new Set<string>();
   const minMembers = filters.minMemberCount || 0;
   const maxMembers = filters.maxMemberCount || 0;
 
-  const googleQueries = keywords.map(kw => `site:facebook.com/groups "${kw}"`);
+  const googleQueries = expandFacebookKeywords(keywords, filters.geos || []);
+  await appendAndSave(`Facebook: expanded ${keywords.length} keyword(s) into ${googleQueries.length} Google queries (target: ${maxItems} groups)`);
   const batchSize = 5;
 
   for (let i = 0; i < googleQueries.length; i += batchSize) {
@@ -1062,10 +1136,10 @@ async function scrapeFacebookGroups(
     const batch = googleQueries.slice(i, i + batchSize);
 
     try {
-      await appendAndSave(`Facebook (via Google): searching ${batch.length} queries...`);
+      await appendAndSave(`Facebook (via Google): batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(googleQueries.length / batchSize)} (${leads.length}/${maxItems} found so far)...`);
       const { items, costUsd: actorCost } = await runActorAndGetResults("apify~google-search-scraper", {
         queries: batch.join("\n"),
-        maxPagesPerQuery: 2,
+        maxPagesPerQuery: 5,
         resultsPerPage: 20,
         countryCode: "us",
         languageCode: "en",
@@ -1140,15 +1214,16 @@ async function scrapeFacebookGroups(
         }
       }
 
-      await appendAndSave(`Facebook: found ${leads.length} groups so far${filteredOut > 0 ? ` (${filteredOut} filtered by member count)` : ""}`);
+      await appendAndSave(`Facebook: found ${leads.length} unique groups so far${filteredOut > 0 ? ` (${filteredOut} filtered by member count)` : ""}`);
     } catch (err: any) {
       if (err.costUsd) {
         await storage.incrementApifySpend(runId, err.costUsd);
       }
-      await appendAndSave(`[WARN] Facebook Google search failed: ${err.message}`);
+      await appendAndSave(`[WARN] Facebook Google search batch failed: ${err.message}`);
     }
   }
 
+  await appendAndSave(`Facebook discovery complete: ${leads.length} groups from ${googleQueries.length} queries`);
   return leads;
 }
 
@@ -2493,6 +2568,7 @@ export async function runPipeline(runId: number): Promise<void> {
       platformTasks.push({ name: "Facebook", promise: scrapeFacebookGroups(runId, keywords, maxPerPlatform, (msg) => appendAndSave(msg), {
         minMemberCount: params.minMemberCount || 0,
         maxMemberCount: params.maxMemberCount || 0,
+        geos,
       }) });
     }
     if (enabledSources.includes("patreon")) {
