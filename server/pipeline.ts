@@ -1067,6 +1067,52 @@ function parseMemberCountFromSnippet(text: string): number {
   return 0;
 }
 
+function isFbGroupPostUrl(rawUrl: string): boolean {
+  try {
+    const u = new URL(rawUrl);
+    return /\/groups\/[^/]+\/posts\//i.test(u.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function extractFbGroupSlug(rawUrl: string): string {
+  try {
+    const u = new URL(rawUrl);
+    const path = u.pathname.replace(/\/+$/, "");
+    const parts = path.split("/").filter(Boolean);
+    if (parts[0] === "groups" && parts[1]) return parts[1];
+  } catch {}
+  return "";
+}
+
+function slugToGroupName(slug: string): string {
+  return slug
+    .replace(/[-_]+/g, " ")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+    .trim();
+}
+
+function extractGroupNameFromSnippet(snippet: string): string {
+  const arrowMatch = snippet.match(/▻\s*(.+?)(?:\.\s|\s*$)/);
+  if (arrowMatch && arrowMatch[1] && arrowMatch[1].length > 3 && arrowMatch[1].length < 100) {
+    let name = arrowMatch[1].trim();
+    name = name.replace(/\s*\((?:www|http).*$/i, "").trim();
+    if (name.length > 3) return name;
+  }
+  const nameEnding = /(?:Group|Club|Community|Society|Network|Team|Crew|Alliance|Association|Coalition)\b/i;
+  const headMatch = snippet.match(/^([A-Z][A-Za-z0-9 &'''\-()]+?(?:Group|Club|Community|Society|Network|Team|Crew|Alliance|Association|Coalition))\b/);
+  if (headMatch && headMatch[1] && headMatch[1].length > 3 && headMatch[1].length < 100) {
+    const name = headMatch[1].trim();
+    const wordCount = name.split(/\s+/).length;
+    if (wordCount <= 8 && !/^(She|He|They|We|I|It|The|This|That|How|What|Where|When|Why|Who|Is|Are|Was|Were|Do|Does|Did|Can|Could|Would|Should|If|So|But|And|Or|Just|Also|Some|Any|All|My|Your|Our|Her|His|Its|No)\s/i.test(name)) {
+      return name;
+    }
+  }
+  return "";
+}
+
 function extractFbGroupUrl(rawUrl: string): string {
   try {
     const u = new URL(rawUrl);
@@ -1213,12 +1259,21 @@ async function scrapeFacebookGroups(
           const title = result.title || "";
           const snippet = result.description || result.snippet || "";
           const fullText = `${title} ${snippet}`;
+          const isPostUrl = isFbGroupPostUrl(rawUrl);
 
-          const groupName = title
-            .replace(/\s*\|\s*Facebook$/i, "")
-            .replace(/\s*[-–—]\s*Facebook$/i, "")
-            .replace(/\s*Facebook\s*$/i, "")
-            .trim();
+          let groupName: string;
+          if (isPostUrl) {
+            const fromSnippet = extractGroupNameFromSnippet(snippet);
+            const slug = extractFbGroupSlug(rawUrl);
+            const isNumericSlug = /^\d+$/.test(slug);
+            groupName = fromSnippet || (isNumericSlug ? "" : slugToGroupName(slug)) || `FB Group ${slug}`;
+          } else {
+            groupName = title
+              .replace(/\s*\|\s*Facebook$/i, "")
+              .replace(/\s*[-–—]\s*Facebook$/i, "")
+              .replace(/\s*Facebook\s*$/i, "")
+              .trim();
+          }
 
           const memberCount = parseMemberCountFromSnippet(fullText);
 

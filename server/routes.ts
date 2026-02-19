@@ -290,5 +290,79 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/admin/fix-fb-names", async (req, res) => {
+    try {
+      const sitePassword = process.env.SITE_PASSWORD;
+      if (sitePassword && req.body.password !== sitePassword) {
+        return res.status(403).json({ message: "Unauthorized" });
+      }
+      const runId = req.body.runId;
+      if (!runId) return res.status(400).json({ message: "runId required" });
+      const allLeads = await storage.listLeadsByRun(runId);
+      const fbLeads = allLeads.filter((l: any) => l.source === "facebook");
+      let fixed = 0;
+      let duped = 0;
+      const seenGroupUrls = new Set<string>();
+
+      for (const lead of fbLeads) {
+        const raw = lead.raw as any;
+        const rawUrl = raw?.url || raw?.link || "";
+        const channels = lead.ownedChannels as Record<string, string> | null;
+        const groupUrl = channels?.facebook || "";
+
+        if (seenGroupUrls.has(groupUrl) && groupUrl) {
+          duped++;
+          continue;
+        }
+        if (groupUrl) seenGroupUrls.add(groupUrl);
+
+        const isPostUrl = /\/groups\/[^/]+\/posts\//i.test(rawUrl);
+        if (!isPostUrl) continue;
+
+        const snippet = raw?.description || raw?.snippet || "";
+        const slug = rawUrl.match(/\/groups\/([^/]+)\//)?.[1] || "";
+        const isNumericSlug = /^\d+$/.test(slug);
+
+        const fromSnippet = extractGroupNameFromSnippetStatic(snippet);
+        const newName = fromSnippet || (isNumericSlug ? "" : slugToGroupNameStatic(slug)) || `FB Group ${slug}`;
+
+        if (newName && newName !== lead.communityName) {
+          await storage.updateLead(lead.id, { communityName: newName });
+          fixed++;
+        }
+      }
+
+      res.json({ fixed, duped, total: fbLeads.length });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
   return httpServer;
+}
+
+function extractGroupNameFromSnippetStatic(snippet: string): string {
+  const arrowMatch = snippet.match(/▻\s*(.+?)(?:\.\s|\s*$)/);
+  if (arrowMatch && arrowMatch[1] && arrowMatch[1].length > 3 && arrowMatch[1].length < 100) {
+    let name = arrowMatch[1].trim();
+    name = name.replace(/\s*\((?:www|http).*$/i, "").trim();
+    if (name.length > 3) return name;
+  }
+  const headMatch = snippet.match(/^([A-Z][A-Za-z0-9 &'''\-()]+?(?:Group|Club|Community|Society|Network|Team|Crew|Alliance|Association|Coalition))\b/);
+  if (headMatch && headMatch[1] && headMatch[1].length > 3 && headMatch[1].length < 100) {
+    const name = headMatch[1].trim();
+    const wordCount = name.split(/\s+/).length;
+    if (wordCount <= 8 && !/^(She|He|They|We|I|It|The|This|That|How|What|Where|When|Why|Who|Is|Are|Was|Were|Do|Does|Did|Can|Could|Would|Should|If|So|But|And|Or|Just|Also|Some|Any|All|My|Your|Our|Her|His|Its|No)\s/i.test(name)) {
+      return name;
+    }
+  }
+  return "";
+}
+
+function slugToGroupNameStatic(slug: string): string {
+  return slug
+    .replace(/[-_]+/g, " ")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+    .trim();
 }
