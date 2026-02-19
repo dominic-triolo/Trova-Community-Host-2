@@ -107,13 +107,15 @@ The discovery form uses platform-specific tabs. Patreon and Facebook Groups are 
 - **Step 1 - Website Crawl**: Cheerio scraper crawls personal websites from social graph for emails (contact/about pages)
 - **Step 2 - Apollo.io**: People Match API (free 10k credits/mo) - searches by name + domain + LinkedIn URL (uncapped, min score 15)
 - **Step 3 - Leads Finder**: Apify actor `code_crafter~leads-finder` ($1.50/1k leads) - fallback for leads still missing email after Apollo (uncapped, batched by domain, verified emails)
-- All three passes run sequentially after lead creation, before final scoring
+- **Step 4 - Email Validation**: MillionVerifier real-time API (~$0.50/1K emails) - validates all discovered emails as valid/invalid/catch-all/unknown (optional, requires MILLIONVERIFIER_API_KEY)
+- All passes run sequentially after lead creation, before final scoring
 - Apollo already accepts linkedinUrl from social graph data for better match rates
 
 ## Environment Variables
 - `DATABASE_URL` - PostgreSQL connection
 - `APIFY_TOKEN` - Apify API token (secret)
 - `APOLLO_API_KEY` - Apollo.io API key (secret, primary enrichment)
+- `MILLIONVERIFIER_API_KEY` - MillionVerifier API key (secret, optional, email validation)
 
 ## Running
 - `npm run dev` - Start development server

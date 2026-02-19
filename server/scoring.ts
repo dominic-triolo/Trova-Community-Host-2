@@ -17,6 +17,7 @@ export interface ScoringInput {
   memberCount?: number;
   subscriberCount?: number;
   raw: Record<string, any>;
+  emailValidation?: string;
 }
 
 const NICHE_KEYWORDS = [
@@ -118,6 +119,10 @@ export function scoreLead(input: ScoringInput): ScoreBreakdown {
   if (!input.email && !input.website && !input.phone) penalties -= 10;
   if (engagement === 0 && Object.keys(es).length === 0 && memberCount === 0) penalties -= 5;
   if (nicheIdentity < 3) penalties -= 5;
+
+  if (input.emailValidation === "valid") penalties += 5;
+  else if (input.emailValidation === "invalid") penalties -= 8;
+  else if (input.emailValidation === "catch-all") penalties -= 2;
 
   const total = Math.max(0, Math.min(100,
     nicheIdentity + trustLeadership + engagement + monetization + ownedChannels + tripFit + penalties

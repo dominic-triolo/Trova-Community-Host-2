@@ -173,7 +173,7 @@ export async function registerRoutes(
 
       const headers = [
         "Community Name", "Community Type", "Leader Name", "Leader Role",
-        "Location", "Website", "Email", "Phone", "LinkedIn",
+        "Location", "Website", "Email", "Email Status", "Phone", "LinkedIn",
         "Patreon URL", "Personal Website",
         "Member/Patron Count", "Subscriber Count", "Episode Count", "Post/Video Count",
         "Instagram Followers", "Twitter Followers", "Genre",
@@ -208,6 +208,7 @@ export async function registerRoutes(
           esc(lead.location),
           esc(lead.website),
           esc(lead.email),
+          esc(lead.emailValidation || ""),
           esc(lead.phone),
           esc(lead.linkedin),
           esc(channels.patreon || ""),

@@ -53,6 +53,9 @@ import {
   BarChart3,
   ChevronRight,
   Link2,
+  ShieldCheck,
+  ShieldAlert,
+  ShieldQuestion,
 } from "lucide-react";
 import { SiPatreon, SiInstagram, SiX, SiFacebook, SiLinkedin, SiTiktok, SiDiscord, SiTwitch, SiSubstack } from "react-icons/si";
 
@@ -71,6 +74,40 @@ const PLATFORM_ICONS: Record<string, { icon: any; label: string; color: string }
   website: { icon: Globe, label: "Website", color: "text-muted-foreground" },
   newsletter: { icon: BookOpen, label: "Newsletter", color: "text-muted-foreground" },
 };
+
+function EmailValidationBadge({ validation }: { validation: string }) {
+  if (!validation) return null;
+  if (validation === "valid") {
+    return (
+      <Badge variant="outline" className="text-green-600 border-green-300 dark:text-green-400 dark:border-green-700 gap-1" data-testid="badge-email-valid">
+        <ShieldCheck className="w-3 h-3" />
+        Verified
+      </Badge>
+    );
+  }
+  if (validation === "invalid") {
+    return (
+      <Badge variant="outline" className="text-destructive border-destructive/30 gap-1" data-testid="badge-email-invalid">
+        <ShieldAlert className="w-3 h-3" />
+        Invalid
+      </Badge>
+    );
+  }
+  if (validation === "catch-all") {
+    return (
+      <Badge variant="outline" className="text-yellow-600 border-yellow-300 dark:text-yellow-400 dark:border-yellow-700 gap-1" data-testid="badge-email-catchall">
+        <ShieldQuestion className="w-3 h-3" />
+        Catch-all
+      </Badge>
+    );
+  }
+  return (
+    <Badge variant="outline" className="text-muted-foreground gap-1" data-testid="badge-email-unknown">
+      <ShieldQuestion className="w-3 h-3" />
+      Unknown
+    </Badge>
+  );
+}
 
 function ScoreBar({ label, value, max }: { label: string; value: number; max: number }) {
   const pct = max > 0 ? (value / max) * 100 : 0;
@@ -136,9 +173,10 @@ function LeadDetail({ lead }: { lead: Lead }) {
         <p className="text-xs font-medium text-muted-foreground">Contact Info</p>
         <div className="space-y-1.5">
           {lead.email && (
-            <div className="flex items-center gap-2 text-sm">
+            <div className="flex items-center gap-2 flex-wrap text-sm">
               <Mail className="w-3.5 h-3.5 text-muted-foreground" />
               <a href={`mailto:${lead.email}`} className="text-primary underline-offset-2 hover:underline">{lead.email}</a>
+              <EmailValidationBadge validation={(lead as any).emailValidation || ""} />
             </div>
           )}
           {lead.phone && (
@@ -394,7 +432,11 @@ export default function Results() {
                             </TableCell>
                             <TableCell>
                               <div className="flex items-center gap-1.5">
-                                {lead.email && <Mail className="w-3.5 h-3.5 text-muted-foreground" />}
+                                {lead.email && (
+                                  <>
+                                    <Mail className={`w-3.5 h-3.5 ${(lead as any).emailValidation === "valid" ? "text-green-600 dark:text-green-400" : (lead as any).emailValidation === "invalid" ? "text-destructive" : "text-muted-foreground"}`} />
+                                  </>
+                                )}
                                 {lead.phone && <Phone className="w-3.5 h-3.5 text-muted-foreground" />}
                                 {lead.website && <Globe className="w-3.5 h-3.5 text-muted-foreground" />}
                                 {!lead.email && !lead.phone && !lead.website && <span className="text-xs text-muted-foreground">—</span>}

@@ -3,6 +3,7 @@ import { runActorAndGetResults } from "./apify";
 import { scoreLead } from "./scoring";
 import { apolloPersonMatch, isApolloAvailable, extractDomainFromUrl as apolloExtractDomain, isEnrichableDomain as apolloIsEnrichable } from "./apollo";
 import { extractDomainFromUrl, isEnrichableDomain } from "./hunter";
+import { verifyEmailBatch, mapResultToValidation } from "./millionverifier";
 import { log } from "./index";
 import type { RunParams, InsertSourceUrl, InsertLead, InsertLeader } from "@shared/schema";
 
@@ -3254,6 +3255,7 @@ export async function runPipeline(runId: number): Promise<void> {
               memberCount: (lead.engagementSignals as any)?.member_count || 0,
               subscriberCount: (lead.engagementSignals as any)?.subscriber_count || 0,
               raw: (lead.raw as Record<string, any>) || {},
+              emailValidation: lead.emailValidation || "",
             });
 
             updateData.score = breakdown.total;
@@ -3356,6 +3358,7 @@ export async function runPipeline(runId: number): Promise<void> {
               memberCount: (lead.engagementSignals as any)?.member_count || 0,
               subscriberCount: (lead.engagementSignals as any)?.subscriber_count || 0,
               raw: (lead.raw as Record<string, any>) || {},
+              emailValidation: lead.emailValidation || "",
             });
 
             updateData.score = breakdown.total;
@@ -3376,7 +3379,48 @@ export async function runPipeline(runId: number): Promise<void> {
       }
     }
 
-    await appendAndSave("Finalizing...", 92, "Step 10: Finalizing");
+    if (process.env.MILLIONVERIFIER_API_KEY) {
+      await appendAndSave("Validating emails...", 90, "Step 10: Email validation");
+      if (cancelledRunIds.has(runId)) throw new RunCancelledError(runId);
+
+      const allLeadsForValidation = await storage.listLeadsByRun(runId);
+      const leadsWithEmail = allLeadsForValidation.filter(l => l.email && !l.emailValidation);
+
+      if (leadsWithEmail.length > 0) {
+        await appendAndSave(`Email validation: verifying ${leadsWithEmail.length} emails via MillionVerifier...`);
+
+        const emailsToVerify = leadsWithEmail.map(l => ({ email: l.email!, leadId: l.id }));
+
+        try {
+          const results = await verifyEmailBatch(emailsToVerify, async (verified, total) => {
+            if (verified % 20 === 0 || verified === total) {
+              await appendAndSave(`Email validation: ${verified}/${total} verified...`);
+            }
+          });
+
+          let validCount = 0, invalidCount = 0, catchAllCount = 0, unknownCount = 0;
+
+          for (const [leadId, result] of Array.from(results.entries())) {
+            const validation = mapResultToValidation(result.result);
+            await storage.updateLead(leadId, { emailValidation: validation });
+            if (validation === "valid") validCount++;
+            else if (validation === "invalid") invalidCount++;
+            else if (validation === "catch-all") catchAllCount++;
+            else unknownCount++;
+          }
+
+          await appendAndSave(
+            `Email validation complete: ${validCount} valid, ${invalidCount} invalid, ${catchAllCount} catch-all, ${unknownCount} unknown`
+          );
+        } catch (err: any) {
+          await appendAndSave(`[WARN] Email validation failed: ${err.message}`);
+        }
+      } else {
+        await appendAndSave("Email validation: no new emails to verify");
+      }
+    }
+
+    await appendAndSave("Finalizing...", 92, "Step 11: Finalizing");
 
     const emailCount = await storage.countLeadsByRunWithEmail(runId);
 
@@ -3392,7 +3436,7 @@ export async function runPipeline(runId: number): Promise<void> {
     await appendAndSave(
       `Scoring complete: ${createdCount} leads, ${emailCount} with email`,
       96,
-      "Step 10: Finalizing"
+      "Step 11: Finalizing"
     );
 
     await storage.updateRun(runId, {
@@ -3704,7 +3748,46 @@ export async function reEnrichRun(runId: number): Promise<void> {
       }
     }
 
-    await appendAndSave(`Step 5: Re-scoring all leads...`, 80, "Re-enrichment: Scoring");
+    if (process.env.MILLIONVERIFIER_API_KEY) {
+      await appendAndSave("Step 5: Validating emails...", 75, "Re-enrichment: Email validation");
+      if (cancelledRunIds.has(runId)) throw new RunCancelledError(runId);
+
+      const leadsForValidation = await storage.listLeadsByRun(runId);
+      const leadsNeedingValidation = leadsForValidation.filter(l => l.email && !l.emailValidation);
+
+      if (leadsNeedingValidation.length > 0) {
+        await appendAndSave(`Email validation: verifying ${leadsNeedingValidation.length} emails...`);
+        const emailsToVerify = leadsNeedingValidation.map(l => ({ email: l.email!, leadId: l.id }));
+
+        try {
+          const results = await verifyEmailBatch(emailsToVerify, async (verified, total) => {
+            if (verified % 20 === 0 || verified === total) {
+              await appendAndSave(`Email validation: ${verified}/${total} verified...`);
+            }
+          });
+
+          let validCount = 0, invalidCount = 0, catchAllCount = 0, unknownCount = 0;
+          for (const [leadId, result] of Array.from(results.entries())) {
+            const validation = mapResultToValidation(result.result);
+            await storage.updateLead(leadId, { emailValidation: validation });
+            if (validation === "valid") validCount++;
+            else if (validation === "invalid") invalidCount++;
+            else if (validation === "catch-all") catchAllCount++;
+            else unknownCount++;
+          }
+
+          await appendAndSave(
+            `Email validation: ${validCount} valid, ${invalidCount} invalid, ${catchAllCount} catch-all, ${unknownCount} unknown`
+          );
+        } catch (err: any) {
+          await appendAndSave(`[WARN] Email validation failed: ${err.message}`);
+        }
+      } else {
+        await appendAndSave("Email validation: no new emails to verify");
+      }
+    }
+
+    await appendAndSave(`Step 6: Re-scoring all leads...`, 80, "Re-enrichment: Scoring");
     const finalLeads = await storage.listLeadsByRun(runId);
     let reScored = 0;
     for (const lead of finalLeads) {
@@ -3725,6 +3808,7 @@ export async function reEnrichRun(runId: number): Promise<void> {
         memberCount: (lead.engagementSignals as any)?.member_count || 0,
         subscriberCount: (lead.engagementSignals as any)?.subscriber_count || 0,
         raw: (lead.raw as Record<string, any>) || {},
+        emailValidation: lead.emailValidation || "",
       });
 
       await storage.updateLead(lead.id, {
