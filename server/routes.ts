@@ -194,18 +194,21 @@ export async function registerRoutes(
 
       const run = await storage.getRun(id);
       if (!run) return res.status(404).json({ message: "Run not found" });
-      if (run.status !== "running" && run.status !== "queued") {
-        return res.status(409).json({ message: "Run is not currently active" });
+
+      const cancellableStatuses = ["running", "queued", "interrupted"];
+      if (!cancellableStatuses.includes(run.status)) {
+        return res.status(409).json({ message: `Run cannot be cancelled (status: ${run.status})` });
       }
 
       cancelledRunIds.add(id);
+      activeRunIds.delete(id);
 
-      if (run.status === "queued") {
+      if (run.status === "queued" || run.status === "interrupted") {
         await storage.updateRun(id, {
           status: "failed",
           step: "Cancelled by user",
           finishedAt: new Date(),
-          logs: (run.logs || "") + `\n[${new Date().toLocaleTimeString("en-US", { hour12: false })}] Run cancelled by user\n`,
+          logs: (run.logs || "") + `\n[${new Date().toLocaleTimeString("en-US", { hour12: false })}] Run cancelled by user (was ${run.status})\n`,
         });
       }
 

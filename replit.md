@@ -62,7 +62,7 @@ shared/
 6. **Leads Finder Enrichment** - Apify `code_crafter~leads-finder` actor as fallback for leads still missing email after Apollo (uncapped, batched by domain)
 7. **Email Validation** - MillionVerifier validates all discovered emails as valid/invalid/catch-all/unknown
 8. **Scoring** - Final scoring pass (no qualification threshold; scores only)
-9. **Expansion Loop** (autonomous mode only) - If valid emails < target and budget remains, up to 2 rounds of re-enrichment: finds leads without emails, runs Leads Finder by domain, validates new emails via MillionVerifier, updates counts. Exits when target reached, budget exhausted, or lead pool exhausted.
+9. **Expansion Loop** (autonomous mode only) - If valid emails < target and budget remains, up to 2 rounds of deeper discovery: re-runs platform scrapers with expanded keywords (e.g. "yoga community leader", "yoga group organizer"), creates new leads, enriches via batched Leads Finder (correct API: company_domain + email_status + fetch_count), validates via MillionVerifier. Budget-gated via isBudgetExhausted at each step. Exits when target reached, budget exhausted, or lead pool exhausted.
 10. **Export** - CSV download for all leads with scores (global or per-run)
 
 ## Enrichment Methods (User-Toggleable)

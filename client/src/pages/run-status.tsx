@@ -192,6 +192,18 @@ export default function RunStatus() {
                 Stop Run
               </Button>
             )}
+            {run.status === "interrupted" && (
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={() => cancelMutation.mutate()}
+                disabled={cancelMutation.isPending}
+                data-testid="button-cancel-interrupted"
+              >
+                <StopCircle className={`w-4 h-4 mr-1 ${cancelMutation.isPending ? "animate-spin" : ""}`} />
+                End Run
+              </Button>
+            )}
             {(run.status === "interrupted" || run.status === "failed") && (run as any).lastCompletedStep && (
               <Button
                 size="sm"

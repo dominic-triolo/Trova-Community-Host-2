@@ -4184,97 +4184,216 @@ export async function runPipeline(runId: number): Promise<void> {
 
         expansionRound++;
         await appendAndSave(
-          `Expansion round ${expansionRound}: ${currentValidCount}/${globalEmailTarget} valid emails (${deficit} short). $${remainingBudget.toFixed(2)} remaining. Re-enriching leads without emails...`,
+          `Expansion round ${expansionRound}: ${currentValidCount}/${globalEmailTarget} valid emails (${deficit} short). $${remainingBudget.toFixed(2)} remaining. Running deeper discovery + enrichment...`,
           93,
-          `Expansion round ${expansionRound}: re-enrichment`
+          `Expansion round ${expansionRound}`
         );
 
-        const allLeads = await storage.listLeadsByRun(runId);
-        const leadsWithoutEmail = allLeads.filter(l => !l.email || l.emailStatus === "invalid");
+        const expandSuffixes = expansionRound === 1
+          ? ["community leader", "group organizer"]
+          : ["travel group", "adventure community", "retreat host"];
+        const expandedKws = keywords.flatMap(kw => expandSuffixes.map(s => `${kw} ${s}`));
+        const uniqueExpKws = Array.from(new Set(expandedKws)).slice(0, 8);
 
-        if (leadsWithoutEmail.length === 0) {
-          await appendAndSave(`Expansion: all ${allLeads.length} leads already have emails. Lead pool exhausted — no more leads to enrich.`);
+        let newPlatformLeads: PlatformLead[] = [];
+
+        for (const platform of enabledSources) {
+          if (cancelledRunIds.has(runId)) throw new RunCancelledError(runId);
+          if (await isBudgetExhausted(runId, 0.10)) {
+            await appendAndSave(`Expansion: budget limit reached, stopping discovery.`);
+            break;
+          }
+
+          const maxExpLeads = Math.min(Math.ceil(deficit * 2), 100);
+          try {
+            if (platform === "patreon") {
+              await appendAndSave(`Expansion: deeper Patreon search (${uniqueExpKws.length} queries)...`);
+              const results = await scrapePatreonCreators(runId, uniqueExpKws, maxExpLeads, (msg) => appendAndSave(msg), {
+                minMemberCount: params.minMemberCount || 0,
+                maxMemberCount: params.maxMemberCount || 0,
+                minPostCount: params.minPostCount || 0,
+              });
+              newPlatformLeads.push(...results);
+            } else if (platform === "facebook") {
+              await appendAndSave(`Expansion: deeper Facebook search (${uniqueExpKws.length} queries)...`);
+              const results = await scrapeFacebookGroups(runId, uniqueExpKws, maxExpLeads, (msg) => appendAndSave(msg), {
+                minMemberCount: params.minMemberCount || 0,
+                maxMemberCount: params.maxMemberCount || 0,
+                geos,
+              });
+              newPlatformLeads.push(...results);
+            } else if (platform === "substack") {
+              await appendAndSave(`Expansion: deeper Substack search (${uniqueExpKws.length} queries)...`);
+              const results = await scrapeSubstackWriters(runId, uniqueExpKws, maxExpLeads, (msg) => appendAndSave(msg));
+              newPlatformLeads.push(...results);
+            } else if (platform === "podcast" && run.podcastEnabled !== false) {
+              await appendAndSave(`Expansion: deeper podcast search (${uniqueExpKws.length} queries)...`);
+              const results = await scrapeApplePodcasts(runId, uniqueExpKws, maxExpLeads, (msg) => appendAndSave(msg), {
+                minEpisodeCount: params.minEpisodeCount || 0,
+                podcastCountry: params.podcastCountry || "US",
+              });
+              newPlatformLeads.push(...results);
+            }
+          } catch (err: any) {
+            await appendAndSave(`Expansion: ${platform} search error: ${err.message}`);
+          }
+        }
+
+        await appendAndSave(`Expansion: discovered ${newPlatformLeads.length} new platform results`);
+
+        let expansionCreated = 0;
+        for (const pl of newPlatformLeads) {
+          try {
+            let existingLead = null;
+            if (pl.email) existingLead = await storage.findLeadByEmail(pl.email);
+            if (!existingLead && pl.website) existingLead = await storage.findLeadByWebsite(pl.website);
+            if (!existingLead && pl.communityName) {
+              existingLead = await storage.findLeadByNameAndLocation(pl.communityName, pl.location);
+            }
+            if (existingLead) continue;
+
+            const community = await storage.createCommunity({
+              name: pl.communityName,
+              type: pl.communityType,
+              description: pl.description,
+              website: pl.website,
+              ownedChannels: pl.ownedChannels,
+              eventCadence: pl.engagementSignals,
+              audienceSignals: pl.tripFitSignals,
+              sourceUrls: [pl.website],
+            });
+
+            let leaderId: number | undefined;
+            if (pl.leaderName) {
+              const leader = await storage.createLeader({
+                name: pl.leaderName, role: "", email: pl.email,
+                phone: pl.phone, sourceUrl: pl.website, communityId: community.id,
+              });
+              leaderId = leader.id;
+            }
+
+            const breakdown = scoreLead({
+              name: pl.communityName, description: pl.description, type: pl.communityType,
+              location: pl.location, website: pl.website, email: pl.email, phone: pl.phone,
+              linkedin: "", ownedChannels: pl.ownedChannels,
+              monetizationSignals: pl.monetizationSignals, engagementSignals: pl.engagementSignals,
+              tripFitSignals: pl.tripFitSignals, leaderName: pl.leaderName,
+              memberCount: pl.memberCount, subscriberCount: pl.subscriberCount, raw: pl.raw,
+            });
+
+            await storage.createLead({
+              leadType: pl.leaderName ? "leader" : "community",
+              communityName: pl.communityName, communityType: pl.communityType,
+              leaderName: pl.leaderName, location: pl.location, website: pl.website,
+              email: pl.email, phone: pl.phone, ownedChannels: pl.ownedChannels,
+              monetizationSignals: pl.monetizationSignals, engagementSignals: pl.engagementSignals,
+              tripFitSignals: pl.tripFitSignals, score: breakdown.total, scoreBreakdown: breakdown,
+              status: "new", source: pl.source || "", raw: pl.raw, runId,
+              communityId: community.id, leaderId,
+            });
+            expansionCreated++;
+          } catch {}
+        }
+
+        await appendAndSave(`Expansion: created ${expansionCreated} new leads (deduped from ${newPlatformLeads.length})`);
+
+        if (newPlatformLeads.length === 0 && expansionCreated === 0) {
+          await appendAndSave(`Expansion: no new leads discovered, lead pool exhausted. Stopping expansion.`);
           break;
         }
 
-        await appendAndSave(`Expansion: ${leadsWithoutEmail.length} leads without valid email (of ${allLeads.length} total). Running Leads Finder fallback...`);
+        const refreshedExpLeads = await storage.listLeadsByRun(runId);
+        const leadsForExpFinder = refreshedExpLeads
+          .filter(l => !l.email && !l.emailValidation)
+          .filter(l => {
+            const ch = (l.ownedChannels as Record<string, string>) || {};
+            const websiteUrl = ch.website || l.website || "";
+            const domain = extractDomainFromUrl(websiteUrl);
+            return domain && isEnrichableDomain(domain);
+          });
 
-        const leadsWithWebsite = leadsWithoutEmail.filter(l => l.website);
-        if (leadsWithWebsite.length > 0) {
-          const domainBatches = new Map<string, typeof leadsWithWebsite>();
-          for (const lead of leadsWithWebsite) {
+        if (leadsForExpFinder.length > 0 && !(await isBudgetExhausted(runId, 0.10))) {
+          await appendAndSave(`Expansion: enriching ${leadsForExpFinder.length} leads via Leads Finder (batched)...`);
+
+          const expDomains = Array.from(new Set(
+            leadsForExpFinder.map(l => {
+              const ch = (l.ownedChannels as Record<string, string>) || {};
+              return extractDomainFromUrl(ch.website || l.website || "");
+            }).filter((d): d is string => !!d && isEnrichableDomain(d))
+          ));
+
+          if (expDomains.length > 0) {
             try {
-              const domain = new URL(lead.website!).hostname.replace(/^www\./, "");
-              if (!domainBatches.has(domain)) domainBatches.set(domain, []);
-              domainBatches.get(domain)!.push(lead);
-            } catch {}
-          }
+              const { items: finderResults, costUsd: actorCost } = await runActorAndGetResults("code_crafter~leads-finder", {
+                company_domain: expDomains,
+                email_status: ["validated"],
+                fetch_count: Math.min(expDomains.length * 5, 200),
+              }, 120000, 0.0015);
+              await storage.incrementApifySpend(runId, actorCost);
 
-          let enrichedCount = 0;
-          const maxBatches = Math.min(domainBatches.size, 20);
-          const domainEntries = Array.from(domainBatches.entries()).slice(0, maxBatches);
-
-          for (const [domain, domainLeads] of domainEntries) {
-            if (cancelledRunIds.has(runId)) throw new RunCancelledError(runId);
-            const checkBudget = await getRunBudgetInfo(runId);
-            if (budgetUsd - checkBudget.spentUsd <= 0.25) {
-              await appendAndSave(`Expansion: budget limit reached during re-enrichment.`);
-              break;
-            }
-
-            try {
-              const results = await runActorAndGetResults(
-                "code_crafter~leads-finder",
-                { domain, maxResults: Math.min(domainLeads.length, 10) },
-                runId,
-              );
-
-              if (results && Array.isArray(results)) {
-                for (const result of results) {
-                  const email = result.email || result.Email;
-                  if (!email) continue;
-                  const matchingLead = domainLeads.find(l =>
-                    !l.email || l.emailStatus === "invalid"
-                  );
-                  if (matchingLead) {
-                    await storage.updateLead(matchingLead.id, {
-                      email,
-                      emailSource: "leads-finder-expansion",
-                    });
-                    enrichedCount++;
-                  }
+              const emailByDomain = new Map<string, any>();
+              for (const r of finderResults) {
+                const email = r.email || r.work_email || r.personal_email || "";
+                if (!email || isBlockedEmail(email)) continue;
+                const domain = r.company_domain || r.domain || "";
+                if (domain && !emailByDomain.has(domain.toLowerCase())) {
+                  emailByDomain.set(domain.toLowerCase(), r);
                 }
               }
-            } catch {}
-          }
 
-          await appendAndSave(`Expansion: Leads Finder enriched ${enrichedCount} leads with new emails.`);
+              let expEnriched = 0;
+              for (const lead of leadsForExpFinder) {
+                const ch = (lead.ownedChannels as Record<string, string>) || {};
+                const websiteUrl = ch.website || lead.website || "";
+                const domain = extractDomainFromUrl(websiteUrl);
+                if (!domain) continue;
+                const match = emailByDomain.get(domain.toLowerCase());
+                if (!match) continue;
+                const email = match.email || match.work_email || match.personal_email || "";
+                if (!email || isBlockedEmail(email)) continue;
+
+                const updateData: Record<string, any> = { email };
+                if (match.phone && !lead.phone) updateData.phone = match.phone;
+                if (match.linkedin_url && !lead.linkedin) updateData.linkedin = match.linkedin_url;
+                if (!lead.leaderName && match.first_name && match.last_name) {
+                  updateData.leaderName = `${match.first_name} ${match.last_name}`;
+                }
+                await storage.updateLead(lead.id, updateData);
+                expEnriched++;
+              }
+
+              await appendAndSave(`Expansion: Leads Finder enriched ${expEnriched} of ${leadsForExpFinder.length} leads from ${expDomains.length} domains`);
+            } catch (err: any) {
+              if (err.costUsd) await storage.incrementApifySpend(runId, err.costUsd);
+              await appendAndSave(`Expansion: Leads Finder error: ${err.message}`);
+            }
+          }
         }
 
-        const leadsStillNoStatus = (await storage.listLeadsByRun(runId))
-          .filter(l => l.email && !l.emailStatus);
+        const expLeadsForValidation = (await storage.listLeadsByRun(runId))
+          .filter(l => l.email && !l.emailValidation);
 
-        if (leadsStillNoStatus.length > 0 && process.env.MILLIONVERIFIER_API_KEY) {
-          await appendAndSave(`Expansion: validating ${leadsStillNoStatus.length} newly found emails...`);
-          let validatedCount = 0;
-
-          for (const lead of leadsStillNoStatus) {
-            if (cancelledRunIds.has(runId)) throw new RunCancelledError(runId);
-            try {
-              const mvUrl = `https://api.millionverifier.com/api/v3/?api=${process.env.MILLIONVERIFIER_API_KEY}&email=${encodeURIComponent(lead.email!)}`;
-              const resp = await fetch(mvUrl);
-              if (resp.ok) {
-                const data = await resp.json() as any;
-                const status = (data.result || data.quality || "unknown").toLowerCase();
-                const isValid = status === "ok" || status === "valid" || status === "catch_all";
-                await storage.updateLead(lead.id, {
-                  emailStatus: isValid ? "valid" : status === "catch_all" ? "catch-all" : "invalid",
-                });
-                if (isValid) validatedCount++;
+        if (expLeadsForValidation.length > 0 && process.env.MILLIONVERIFIER_API_KEY) {
+          await appendAndSave(`Expansion: validating ${expLeadsForValidation.length} newly found emails...`);
+          try {
+            const emailsToVerify = expLeadsForValidation.map(l => ({ email: l.email!, leadId: l.id }));
+            const results = await verifyEmailBatch(emailsToVerify, async (verified, total) => {
+              if (verified % 20 === 0 || verified === total) {
+                await appendAndSave(`Expansion validation: ${verified}/${total} verified...`);
               }
-            } catch {}
+            });
+
+            let expValid = 0, expInvalid = 0;
+            for (const [leadId, result] of Array.from(results.entries())) {
+              const validation = mapResultToValidation(result.result);
+              await storage.updateLead(leadId, { emailValidation: validation });
+              if (validation === "valid" || validation === "catch-all") expValid++;
+              else expInvalid++;
+            }
+            await appendAndSave(`Expansion validation: ${expValid} valid, ${expInvalid} invalid`);
+          } catch (err: any) {
+            await appendAndSave(`Expansion validation error: ${err.message}`);
           }
-          await appendAndSave(`Expansion: ${validatedCount} new emails validated.`);
         }
 
         const postExpansionValid = await storage.countLeadsByRunWithValidEmail(runId);
@@ -4282,10 +4401,11 @@ export async function runPipeline(runId: number): Promise<void> {
         await storage.updateRun(runId, {
           leadsWithEmail: postExpansionEmail,
           leadsWithValidEmail: postExpansionValid,
+          leadsExtracted: (await storage.listLeadsByRun(runId)).length,
         });
 
         await appendAndSave(
-          `Expansion round ${expansionRound} complete: ${postExpansionValid}/${globalEmailTarget} valid emails (${postExpansionEmail} total).`,
+          `Expansion round ${expansionRound} complete: ${postExpansionValid}/${globalEmailTarget} valid emails (${postExpansionEmail} total emails, ${(await storage.listLeadsByRun(runId)).length} total leads).`,
           95
         );
 
