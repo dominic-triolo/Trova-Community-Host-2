@@ -313,6 +313,7 @@ export default function Results() {
   const [typeFilter, setTypeFilter] = useState("all");
   const [sourceFilter, setSourceFilter] = useState("all");
   const [hubspotFilter, setHubspotFilter] = useState("all");
+  const [validEmailFilter, setValidEmailFilter] = useState("all");
   const [emailOnly, setEmailOnly] = useState(false);
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
   const [page, setPage] = useState(1);
@@ -340,6 +341,11 @@ export default function Results() {
       if (hubspotFilter === "net_new" && hs !== "net_new") return false;
       if (hubspotFilter === "existing" && hs !== "existing") return false;
     }
+    if (validEmailFilter !== "all") {
+      const ev = (lead as any).emailValidation || "";
+      if (validEmailFilter === "valid" && ev !== "valid") return false;
+      if (validEmailFilter === "no_valid" && ev === "valid") return false;
+    }
     if (emailOnly && !lead.email) return false;
     if (searchQ) {
       const q = searchQ.toLowerCase();
@@ -351,7 +357,7 @@ export default function Results() {
       );
     }
     return true;
-  }), [leads, typeFilter, sourceFilter, hubspotFilter, emailOnly, searchQ]);
+  }), [leads, typeFilter, sourceFilter, hubspotFilter, validEmailFilter, emailOnly, searchQ]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const safePage = Math.min(page, totalPages);
@@ -388,6 +394,11 @@ export default function Results() {
                 {filtered.length} of {(leads || []).length} leads
                 {leads && leads.filter((l) => l.email).length > 0 && (
                   <span className="ml-1">({leads.filter((l) => l.email).length} with email)</span>
+                )}
+                {leads && leads.filter((l: any) => l.emailValidation === "valid").length > 0 && (
+                  <span className="ml-1 text-green-600 dark:text-green-400">
+                    ({leads.filter((l: any) => l.emailValidation === "valid").length} valid)
+                  </span>
                 )}
                 {leads && leads.filter((l: any) => l.hubspotStatus === "net_new").length > 0 && (
                   <span className="ml-1 text-blue-600 dark:text-blue-400">
@@ -429,15 +440,27 @@ export default function Results() {
               ))}
             </SelectContent>
           </Select>
+          {(leads || []).some((l: any) => l.emailValidation) && (
+            <Select value={validEmailFilter} onValueChange={handleFilterChange(setValidEmailFilter)}>
+              <SelectTrigger className="w-[180px]" data-testid="select-valid-email-filter">
+                <SelectValue placeholder="Valid Email" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Emails</SelectItem>
+                <SelectItem value="valid">Has Valid Email</SelectItem>
+                <SelectItem value="no_valid">No Valid Email</SelectItem>
+              </SelectContent>
+            </Select>
+          )}
           {(leads || []).some((l: any) => l.hubspotStatus) && (
             <Select value={hubspotFilter} onValueChange={handleFilterChange(setHubspotFilter)}>
               <SelectTrigger className="w-[180px]" data-testid="select-hubspot-filter">
-                <SelectValue placeholder="HubSpot" />
+                <SelectValue placeholder="Net New Lead" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">All (HubSpot)</SelectItem>
-                <SelectItem value="net_new">Net New</SelectItem>
-                <SelectItem value="existing">Existing</SelectItem>
+                <SelectItem value="all">All Leads</SelectItem>
+                <SelectItem value="net_new">Net New Lead</SelectItem>
+                <SelectItem value="existing">Existing in CRM</SelectItem>
               </SelectContent>
             </Select>
           )}
