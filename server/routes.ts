@@ -172,7 +172,7 @@ export async function registerRoutes(
       }
 
       const headers = [
-        "Community Name", "Community Type", "Leader Name", "Leader Role",
+        "Source", "Community Name", "Community Type", "Leader Name", "Leader Role",
         "Location", "Website", "Email", "Email Status", "Phone", "LinkedIn",
         "Patreon URL", "Personal Website",
         "Member/Patron Count", "Subscriber Count", "Episode Count", "Post/Video Count",
@@ -192,6 +192,17 @@ export async function registerRoutes(
         return `"${s}"`;
       };
 
+      const sourceDisplayNames: Record<string, string> = {
+        patreon: "Patreon",
+        facebook: "Facebook Groups",
+        podcast: "Podcast",
+        meetup: "Meetup",
+        youtube: "YouTube",
+        reddit: "Reddit",
+        eventbrite: "Eventbrite",
+        google: "Google Search",
+      };
+
       const csvRows = [headers.join(",")];
       for (const lead of leads) {
         const engagement = (lead.engagementSignals as Record<string, any>) || {};
@@ -201,6 +212,7 @@ export async function registerRoutes(
         const raw = (lead.raw as Record<string, any>) || {};
 
         const row = [
+          esc(sourceDisplayNames[lead.source || ""] || lead.source || ""),
           esc(lead.communityName),
           esc(lead.communityType),
           esc(lead.leaderName),

@@ -16,10 +16,22 @@ const TYPE_LABELS: Record<string, string> = {
   coworking: "Coworking",
   other: "Other",
 };
+
+const SOURCE_LABELS: Record<string, string> = {
+  patreon: "Patreon",
+  facebook: "Facebook Groups",
+  podcast: "Podcast",
+  meetup: "Meetup",
+  youtube: "YouTube",
+  reddit: "Reddit",
+  eventbrite: "Eventbrite",
+  google: "Google Search",
+};
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
@@ -138,9 +150,16 @@ function LeadDetail({ lead }: { lead: Lead }) {
           <p className="text-sm font-semibold truncate" data-testid="text-detail-name">
             {lead.communityName || lead.leaderName || "Unknown"}
           </p>
-          <p className="text-xs text-muted-foreground">
-            {TYPE_LABELS[lead.communityType || ""] || lead.communityType || "Other"}
-          </p>
+          <div className="flex items-center gap-2 flex-wrap">
+            <p className="text-xs text-muted-foreground">
+              {TYPE_LABELS[lead.communityType || ""] || lead.communityType || "Other"}
+            </p>
+            {lead.source && (
+              <Badge variant="secondary" className="text-[10px]" data-testid="badge-detail-source">
+                {SOURCE_LABELS[lead.source] || lead.source}
+              </Badge>
+            )}
+          </div>
         </div>
       </div>
 
@@ -282,6 +301,8 @@ export default function Results() {
 
   const [searchQ, setSearchQ] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
+  const [sourceFilter, setSourceFilter] = useState("all");
+  const [emailOnly, setEmailOnly] = useState(false);
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
 
   const { data: leads, isLoading } = useQuery<Lead[]>({
@@ -294,8 +315,14 @@ export default function Results() {
     },
   });
 
+  const availableSources = Array.from(
+    new Set((leads || []).map((l) => l.source || "").filter(Boolean))
+  ).sort();
+
   const filtered = (leads || []).filter((lead) => {
     if (typeFilter !== "all" && lead.communityType !== typeFilter) return false;
+    if (sourceFilter !== "all" && (lead.source || "") !== sourceFilter) return false;
+    if (emailOnly && !lead.email) return false;
     if (searchQ) {
       const q = searchQ.toLowerCase();
       return (
@@ -359,6 +386,17 @@ export default function Results() {
               data-testid="input-search-leads"
             />
           </div>
+          <Select value={sourceFilter} onValueChange={setSourceFilter}>
+            <SelectTrigger className="w-[180px]" data-testid="select-source-filter">
+              <SelectValue placeholder="Source" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Sources</SelectItem>
+              {availableSources.map((src) => (
+                <SelectItem key={src} value={src}>{SOURCE_LABELS[src] || src}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <Select value={typeFilter} onValueChange={setTypeFilter}>
             <SelectTrigger className="w-[180px]" data-testid="select-type-filter">
               <SelectValue placeholder="Community type" />
@@ -370,6 +408,14 @@ export default function Results() {
               ))}
             </SelectContent>
           </Select>
+          <label className="flex items-center gap-2 cursor-pointer text-sm text-muted-foreground whitespace-nowrap">
+            <Checkbox
+              checked={emailOnly}
+              onCheckedChange={(v) => setEmailOnly(v === true)}
+              data-testid="checkbox-email-only"
+            />
+            Has email
+          </label>
         </div>
 
         {isLoading ? (
