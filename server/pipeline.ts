@@ -4,6 +4,7 @@ import { scoreLead } from "./scoring";
 import { apolloPersonMatch, isApolloAvailable, extractDomainFromUrl as apolloExtractDomain, isEnrichableDomain as apolloIsEnrichable } from "./apollo";
 import { extractDomainFromUrl, isEnrichableDomain } from "./hunter";
 import { verifyEmailBatch, mapResultToValidation } from "./millionverifier";
+import { checkEmailsInHubspot, isHubspotConfigured } from "./hubspot";
 import { log } from "./index";
 import type { RunParams, InsertSourceUrl, InsertLead, InsertLeader, PipelineStep, BudgetAllocation } from "@shared/schema";
 import { PIPELINE_STEPS } from "@shared/schema";
@@ -4133,6 +4134,34 @@ export async function runPipeline(runId: number): Promise<void> {
 
     await markStepComplete(runId, PIPELINE_STEPS.EMAIL_VALIDATION);
 
+    if (isHubspotConfigured()) {
+      await appendAndSave("Checking HubSpot for existing contacts...", 91, "HubSpot CRM check");
+      try {
+        const allRunLeads = await storage.listLeadsByRun(runId);
+        const leadsWithValidEmail = allRunLeads.filter(l => l.email && l.emailValidation === "valid");
+        if (leadsWithValidEmail.length > 0) {
+          const emailMap = new Map(leadsWithValidEmail.map(l => [l.email!.toLowerCase(), l.id]));
+          const emails = Array.from(emailMap.keys());
+          const hubspotResults = await checkEmailsInHubspot(emails);
+          let existingCount = 0;
+          let netNewCount = 0;
+          for (const entry of Array.from(hubspotResults.entries())) {
+            const leadId = emailMap.get(entry[0].toLowerCase());
+            if (leadId) {
+              const status = entry[1] ? "existing" : "net_new";
+              if (entry[1]) existingCount++; else netNewCount++;
+              await storage.updateLead(leadId, { hubspotStatus: status });
+            }
+          }
+          await appendAndSave(`HubSpot check: ${existingCount} existing, ${netNewCount} net new out of ${leadsWithValidEmail.length} valid emails`);
+        } else {
+          await appendAndSave("HubSpot check: no valid emails to check");
+        }
+      } catch (err: any) {
+        await appendAndSave(`[WARN] HubSpot check failed: ${err.message}`);
+      }
+    }
+
     await appendAndSave("Finalizing...", 92, "Step 11: Finalizing");
 
     const emailCount = await storage.countLeadsByRunWithEmail(runId);
@@ -4776,6 +4805,29 @@ export async function reEnrichRun(runId: number): Promise<void> {
         }
       } else {
         await appendAndSave("Email validation: no new emails to verify");
+      }
+    }
+
+    if (isHubspotConfigured()) {
+      await appendAndSave("Checking HubSpot for existing contacts...", 78, "Re-enrichment: HubSpot check");
+      try {
+        const hubLeads = await storage.listLeadsByRun(runId);
+        const hubValid = hubLeads.filter(l => l.email && l.emailValidation === "valid");
+        if (hubValid.length > 0) {
+          const emailMap = new Map(hubValid.map(l => [l.email!.toLowerCase(), l.id]));
+          const hubResults = await checkEmailsInHubspot(Array.from(emailMap.keys()));
+          let existingCount = 0, netNewCount = 0;
+          for (const entry of Array.from(hubResults.entries())) {
+            const leadId = emailMap.get(entry[0].toLowerCase());
+            if (leadId) {
+              await storage.updateLead(leadId, { hubspotStatus: entry[1] ? "existing" : "net_new" });
+              if (entry[1]) existingCount++; else netNewCount++;
+            }
+          }
+          await appendAndSave(`HubSpot check: ${existingCount} existing, ${netNewCount} net new`);
+        }
+      } catch (err: any) {
+        await appendAndSave(`[WARN] HubSpot check failed: ${err.message}`);
       }
     }
 

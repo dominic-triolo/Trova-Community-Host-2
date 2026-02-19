@@ -41,6 +41,7 @@ export interface IStorage {
   countLeadsByRunWithEmail(runId: number): Promise<number>;
   countLeadsByRunWithValidEmail(runId: number): Promise<number>;
   getPlatformValidEmailStats(): Promise<{ platform: string; totalLeads: number; withEmail: number; validEmails: number; validRate: number }[]>;
+  countLeadsByRunWithNetNewValidEmail(runId: number): Promise<number>;
   deleteLeadsByRun(runId: number): Promise<void>;
   deleteSourceUrlsByRun(runId: number): Promise<void>;
 }
@@ -180,6 +181,13 @@ export class DatabaseStorage implements IStorage {
   async countLeadsByRunWithValidEmail(runId: number): Promise<number> {
     const [result] = await db.select({ count: sql<number>`count(*)::int` }).from(leads).where(
       and(eq(leads.runId, runId), sql`${leads.emailValidation} = 'valid'`)
+    );
+    return result?.count || 0;
+  }
+
+  async countLeadsByRunWithNetNewValidEmail(runId: number): Promise<number> {
+    const [result] = await db.select({ count: sql<number>`count(*)::int` }).from(leads).where(
+      and(eq(leads.runId, runId), sql`${leads.emailValidation} = 'valid'`, eq(leads.hubspotStatus, "net_new"))
     );
     return result?.count || 0;
   }

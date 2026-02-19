@@ -198,6 +198,12 @@ function LeadDetail({ lead }: { lead: Lead }) {
               <Mail className="w-3.5 h-3.5 text-muted-foreground" />
               <a href={`mailto:${lead.email}`} className="text-primary underline-offset-2 hover:underline">{lead.email}</a>
               <EmailValidationBadge validation={(lead as any).emailValidation || ""} />
+              {(lead as any).hubspotStatus === "net_new" && (
+                <Badge variant="outline" className="text-[10px] text-blue-600 border-blue-300 dark:text-blue-400 dark:border-blue-700 gap-1" data-testid="badge-hubspot-detail-new">Net New</Badge>
+              )}
+              {(lead as any).hubspotStatus === "existing" && (
+                <Badge variant="outline" className="text-[10px] text-muted-foreground border-muted gap-1" data-testid="badge-hubspot-detail-existing">In CRM</Badge>
+              )}
             </div>
           )}
           {lead.phone && (
@@ -306,6 +312,7 @@ export default function Results() {
   const [searchQ, setSearchQ] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
   const [sourceFilter, setSourceFilter] = useState("all");
+  const [hubspotFilter, setHubspotFilter] = useState("all");
   const [emailOnly, setEmailOnly] = useState(false);
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
   const [page, setPage] = useState(1);
@@ -328,6 +335,11 @@ export default function Results() {
   const filtered = useMemo(() => (leads || []).filter((lead) => {
     if (typeFilter !== "all" && lead.communityType !== typeFilter) return false;
     if (sourceFilter !== "all" && (lead.source || "") !== sourceFilter) return false;
+    if (hubspotFilter !== "all") {
+      const hs = (lead as any).hubspotStatus || "";
+      if (hubspotFilter === "net_new" && hs !== "net_new") return false;
+      if (hubspotFilter === "existing" && hs !== "existing") return false;
+    }
     if (emailOnly && !lead.email) return false;
     if (searchQ) {
       const q = searchQ.toLowerCase();
@@ -339,7 +351,7 @@ export default function Results() {
       );
     }
     return true;
-  }), [leads, typeFilter, sourceFilter, emailOnly, searchQ]);
+  }), [leads, typeFilter, sourceFilter, hubspotFilter, emailOnly, searchQ]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const safePage = Math.min(page, totalPages);
@@ -377,6 +389,11 @@ export default function Results() {
                 {leads && leads.filter((l) => l.email).length > 0 && (
                   <span className="ml-1">({leads.filter((l) => l.email).length} with email)</span>
                 )}
+                {leads && leads.filter((l: any) => l.hubspotStatus === "net_new").length > 0 && (
+                  <span className="ml-1 text-blue-600 dark:text-blue-400">
+                    ({leads.filter((l: any) => l.hubspotStatus === "net_new").length} net new)
+                  </span>
+                )}
               </p>
               {runId && (
                 <Link href="/results" data-testid="link-show-all-results" className="text-xs text-primary underline-offset-2 hover:underline">
@@ -412,6 +429,18 @@ export default function Results() {
               ))}
             </SelectContent>
           </Select>
+          {(leads || []).some((l: any) => l.hubspotStatus) && (
+            <Select value={hubspotFilter} onValueChange={handleFilterChange(setHubspotFilter)}>
+              <SelectTrigger className="w-[180px]" data-testid="select-hubspot-filter">
+                <SelectValue placeholder="HubSpot" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All (HubSpot)</SelectItem>
+                <SelectItem value="net_new">Net New</SelectItem>
+                <SelectItem value="existing">Existing</SelectItem>
+              </SelectContent>
+            </Select>
+          )}
           <Select value={typeFilter} onValueChange={handleFilterChange(setTypeFilter)}>
             <SelectTrigger className="w-[180px]" data-testid="select-type-filter">
               <SelectValue placeholder="Community type" />
@@ -497,6 +526,12 @@ export default function Results() {
                               <div className="flex items-center gap-1.5">
                                 {lead.email && (
                                   <Mail className={`w-3.5 h-3.5 ${(lead as any).emailValidation === "valid" ? "text-green-600 dark:text-green-400" : (lead as any).emailValidation === "invalid" ? "text-destructive" : "text-muted-foreground"}`} />
+                                )}
+                                {(lead as any).hubspotStatus === "net_new" && (
+                                  <Badge variant="outline" className="text-[9px] px-1 py-0 text-blue-600 border-blue-300 dark:text-blue-400 dark:border-blue-700" data-testid={`badge-hubspot-new-${lead.id}`}>NEW</Badge>
+                                )}
+                                {(lead as any).hubspotStatus === "existing" && (
+                                  <Badge variant="outline" className="text-[9px] px-1 py-0 text-muted-foreground border-muted" data-testid={`badge-hubspot-existing-${lead.id}`}>CRM</Badge>
                                 )}
                                 {lead.phone && <Phone className="w-3.5 h-3.5 text-muted-foreground" />}
                                 {lead.website && <Globe className="w-3.5 h-3.5 text-muted-foreground" />}

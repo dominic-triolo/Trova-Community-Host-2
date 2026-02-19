@@ -61,6 +61,7 @@ shared/
 5. **Apollo.io Enrichment** - Contact lookup by name + domain + LinkedIn URL (toggleable, uncapped, min score 15, deduped across runs via apolloEnrichedAt, skips pseudonyms via isValidApolloCandidate)
 6. **Leads Finder Enrichment** - Apify `code_crafter~leads-finder` actor as fallback for leads still missing email after Apollo (uncapped, batched by domain)
 7. **Email Validation** - MillionVerifier validates all discovered emails as valid/invalid/catch-all/unknown
+7a. **HubSpot CRM Check** - Read-only contact search via Private App token (crm.objects.contacts.read scope). Batch checks valid emails against HubSpot contacts, marks each lead as "existing" or "net_new". Runs after email validation. Results shown in UI (filter + badges) and CSV export. Uses Search API (`POST /crm/v3/objects/contacts/search`), rate-limited with 110ms delay between batches.
 8. **Scoring** - Final scoring pass (no qualification threshold; scores only)
 9. **Expansion Loop** (autonomous mode only) - If valid emails < target and budget remains, up to 2 rounds of deeper discovery: re-runs platform scrapers with expanded keywords (e.g. "yoga community leader", "yoga group organizer"), creates new leads, enriches via batched Leads Finder (correct API: company_domain + email_status + fetch_count), validates via MillionVerifier. Budget-gated via isBudgetExhausted at each step. Exits when target reached, budget exhausted, or lead pool exhausted.
 10. **Export** - CSV download for all leads with scores (global or per-run)
@@ -136,6 +137,7 @@ The discovery form uses platform-specific tabs. Patreon, Facebook Groups, Podcas
 - `APIFY_TOKEN` - Apify API token (secret)
 - `APOLLO_API_KEY` - Apollo.io API key (secret, primary enrichment)
 - `MILLIONVERIFIER_API_KEY` - MillionVerifier API key (secret, optional, email validation)
+- `HUBSPOT_ACCESS_TOKEN` - HubSpot Private App token (secret, optional, CRM contact check)
 
 ## Running
 - `npm run dev` - Start development server

@@ -222,7 +222,8 @@ export async function registerRoutes(
       const run = await storage.getRun(id);
       if (!run) return res.status(404).json({ message: "Run not found" });
 
-      res.json(run);
+      const netNewValidEmails = await storage.countLeadsByRunWithNetNewValidEmail(id);
+      res.json({ ...run, netNewValidEmails });
     } catch (err: any) {
       res.status(500).json({ message: err.message });
     }
@@ -351,6 +352,7 @@ export async function registerRoutes(
         "Has Sponsorships", "Has Merch", "Has Courses", "Has Membership", "Established Creator",
         "Score",
         "Niche Score", "Trust Score", "Engagement Score", "Monetization Score", "Channels Score", "Trip Fit Score",
+        "HubSpot Status",
         "Discovered At",
       ];
 
@@ -424,6 +426,7 @@ export async function registerRoutes(
           breakdown.monetization ?? "",
           breakdown.ownedChannels ?? "",
           breakdown.tripFit ?? "",
+          esc(lead.hubspotStatus === "existing" ? "Existing" : lead.hubspotStatus === "net_new" ? "Net New" : ""),
           esc(lead.firstSeenAt ? new Date(lead.firstSeenAt).toISOString() : ""),
         ];
         csvRows.push(row.join(","));

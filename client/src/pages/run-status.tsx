@@ -28,6 +28,7 @@ import {
   AlertTriangle,
   Play,
   RotateCcw,
+  Sparkles,
 } from "lucide-react";
 
 function StatusBadge({ status }: { status: string }) {
@@ -262,7 +263,7 @@ export default function RunStatus() {
           <Progress value={run.progress} className="h-2" data-testid="progress-bar" />
         </Card>
 
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
           <Card className="p-3 space-y-1">
             <div className="flex items-center gap-1.5 text-muted-foreground">
               <Globe className="w-3.5 h-3.5" />
@@ -302,6 +303,17 @@ export default function RunStatus() {
               )}
             </p>
           </Card>
+          {(run as any).netNewValidEmails > 0 && (
+            <Card className="p-3 space-y-1">
+              <div className="flex items-center gap-1.5 text-muted-foreground">
+                <Sparkles className="w-3.5 h-3.5" />
+                <span className="text-xs">Net New</span>
+              </div>
+              <p className="text-lg font-semibold text-blue-600 dark:text-blue-400" data-testid="text-net-new-emails">
+                {(run as any).netNewValidEmails}
+              </p>
+            </Card>
+          )}
           <Card className="p-3 space-y-1">
             <div className="flex items-center gap-1.5 text-muted-foreground">
               <DollarSign className="w-3.5 h-3.5" />

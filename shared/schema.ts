@@ -131,6 +131,7 @@ export const leads = pgTable("leads", {
   apolloEnrichedAt: timestamp("apollo_enriched_at"),
   apolloInputHash: text("apollo_input_hash"),
   emailValidation: text("email_validation").default(""),
+  hubspotStatus: text("hubspot_status").default(""),
   source: text("source").default(""),
   raw: jsonb("raw").$type<Record<string, any>>().default({}),
   runId: integer("run_id").references(() => runs.id),
