@@ -86,13 +86,14 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Keywords are required" });
       }
       const podcast = podcastEnabled !== false;
+      const historicalStats = await storage.getPlatformValidEmailStats();
 
       if (emailTarget && Number(emailTarget) > 0) {
-        const allocation = estimateBudgetForEmailTarget(keywords, Number(emailTarget), podcast);
+        const allocation = estimateBudgetForEmailTarget(keywords, Number(emailTarget), podcast, historicalStats);
         return res.json({ allocation, derivedFrom: "emailTarget" });
       }
       const budget = Number(budgetUsd) || 5;
-      const allocation = allocateBudget(keywords, Math.max(1, Math.min(20, budget)), podcast);
+      const allocation = allocateBudget(keywords, Math.max(1, Math.min(20, budget)), podcast, historicalStats);
       return res.json({ allocation, derivedFrom: "budget" });
     } catch (err: any) {
       res.status(500).json({ message: err.message });
@@ -106,13 +107,14 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Keywords are required" });
       }
       const podcast = podcastEnabled !== false;
+      const historicalStats = await storage.getPlatformValidEmailStats();
 
       let allocation;
       let budget: number;
       let finalEmailTarget: number;
 
       if (emailTarget && Number(emailTarget) > 0) {
-        allocation = estimateBudgetForEmailTarget(keywords, Number(emailTarget), podcast);
+        allocation = estimateBudgetForEmailTarget(keywords, Number(emailTarget), podcast, historicalStats);
         budget = budgetUsd && Number(budgetUsd) > 0 ? Number(budgetUsd) : allocation.totalBudgetUsd;
         finalEmailTarget = Number(emailTarget);
       } else {
@@ -120,7 +122,7 @@ export async function registerRoutes(
         if (!budget || budget < 1 || budget > 20) {
           return res.status(400).json({ message: "Budget must be between $1 and $20" });
         }
-        allocation = allocateBudget(keywords, budget, podcast);
+        allocation = allocateBudget(keywords, budget, podcast, historicalStats);
         finalEmailTarget = allocation.estimatedEmails;
       }
 

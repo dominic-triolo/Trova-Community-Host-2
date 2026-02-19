@@ -250,7 +250,7 @@ export default function RunStatus() {
           <Progress value={run.progress} className="h-2" data-testid="progress-bar" />
         </Card>
 
-        <div className="grid grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
           <Card className="p-3 space-y-1">
             <div className="flex items-center gap-1.5 text-muted-foreground">
               <Globe className="w-3.5 h-3.5" />
@@ -272,10 +272,19 @@ export default function RunStatus() {
           <Card className="p-3 space-y-1">
             <div className="flex items-center gap-1.5 text-muted-foreground">
               <Mail className="w-3.5 h-3.5" />
-              <span className="text-xs">{(run as any).emailTarget > 0 ? "Emails / Target" : "With Email"}</span>
+              <span className="text-xs">Emails Found</span>
             </div>
-            <p className="text-lg font-semibold text-chart-3" data-testid="text-with-email">
+            <p className="text-lg font-semibold" data-testid="text-with-email">
               {(run as any).leadsWithEmail || 0}
+            </p>
+          </Card>
+          <Card className="p-3 space-y-1">
+            <div className="flex items-center gap-1.5 text-muted-foreground">
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              <span className="text-xs">{(run as any).emailTarget > 0 ? "Valid / Target" : "Valid Emails"}</span>
+            </div>
+            <p className="text-lg font-semibold text-chart-3" data-testid="text-valid-emails">
+              {(run as any).leadsWithValidEmail || 0}
               {(run as any).emailTarget > 0 && (
                 <span className="text-sm font-normal text-muted-foreground"> / {(run as any).emailTarget}</span>
               )}

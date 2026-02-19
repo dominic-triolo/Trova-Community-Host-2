@@ -61,6 +61,7 @@ export const runs = pgTable("runs", {
   urlsDiscovered: integer("urls_discovered").default(0),
   leadsExtracted: integer("leads_extracted").default(0),
   leadsWithEmail: integer("leads_with_email").default(0),
+  leadsWithValidEmail: integer("leads_with_valid_email").default(0),
   apifySpendUsd: real("apify_spend_usd").default(0),
   isAutonomous: boolean("is_autonomous").default(false),
   budgetUsd: real("budget_usd").default(0),
@@ -191,6 +192,8 @@ export interface BudgetAllocation {
   estimatedTotalLeads: number;
   estimatedEmailRate: number;
   estimatedEmails: number;
+  estimatedValidEmails: number;
+  estimatedValidEmailRate: number;
 }
 
 export const PLATFORM_COST_PER_LEAD: Record<string, number> = {
@@ -205,6 +208,13 @@ export const PLATFORM_EMAIL_YIELD: Record<string, number> = {
   facebook: 0.15,
   podcast: 0.55,
   substack: 0.40,
+};
+
+export const PLATFORM_VALID_EMAIL_RATE: Record<string, number> = {
+  patreon: 0.50,
+  facebook: 0.36,
+  podcast: 0.45,
+  substack: 0.21,
 };
 
 export const KEYWORD_PLATFORM_MAP: Record<string, SourceId[]> = {

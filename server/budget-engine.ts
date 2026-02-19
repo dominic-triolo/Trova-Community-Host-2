@@ -1,14 +1,36 @@
 import type { SourceId, BudgetAllocation, PlatformAllocation } from "@shared/schema";
-import { PLATFORM_COST_PER_LEAD, PLATFORM_EMAIL_YIELD, KEYWORD_PLATFORM_MAP } from "@shared/schema";
+import { PLATFORM_COST_PER_LEAD, PLATFORM_EMAIL_YIELD, PLATFORM_VALID_EMAIL_RATE, KEYWORD_PLATFORM_MAP } from "@shared/schema";
 
 const ENRICHMENT_COST_PER_LEAD = 0.005;
 const MIN_LEADS_PER_PLATFORM = 10;
-const MAX_LEADS_PER_PLATFORM = 200;
+const MAX_LEADS_PER_PLATFORM = 500;
 const DISCOVERY_BUDGET_RATIO = 0.65;
 const ENRICHMENT_BUDGET_RATIO = 0.35;
 const PODCAST_MIN_BUDGET = 3;
 
 const ACTIVE_PLATFORMS: SourceId[] = ["patreon", "facebook", "podcast", "substack"];
+
+export interface PlatformStats {
+  platform: string;
+  totalLeads: number;
+  withEmail: number;
+  validEmails: number;
+  validRate: number;
+}
+
+function getValidEmailRate(platform: string, historicalStats?: PlatformStats[]): number {
+  if (historicalStats && historicalStats.length > 0) {
+    const stat = historicalStats.find(s => s.platform === platform);
+    if (stat && stat.withEmail >= 10) {
+      return stat.validRate;
+    }
+  }
+  return PLATFORM_VALID_EMAIL_RATE[platform] || 0.25;
+}
+
+function getEmailYield(platform: string): number {
+  return PLATFORM_EMAIL_YIELD[platform] || 0.2;
+}
 
 export function selectPlatformsForKeywords(keywords: string[], podcastEnabled: boolean = true): SourceId[] {
   const allowedPlatforms = podcastEnabled
@@ -50,6 +72,7 @@ export function allocateBudget(
   keywords: string[],
   budgetUsd: number,
   podcastEnabled: boolean = true,
+  historicalStats?: PlatformStats[],
 ): BudgetAllocation {
   const effectivePodcast = podcastEnabled && budgetUsd >= PODCAST_MIN_BUDGET;
   const platforms = selectPlatformsForKeywords(keywords, effectivePodcast);
@@ -60,12 +83,20 @@ export function allocateBudget(
   const platformAllocations: PlatformAllocation[] = [];
   let remainingDiscovery = discoveryBudget;
 
-  const emailYieldScored = platforms.map(p => ({
-    platform: p,
-    yield: PLATFORM_EMAIL_YIELD[p] || 0.2,
-    cost: PLATFORM_COST_PER_LEAD[p] || 0.02,
-    efficiency: (PLATFORM_EMAIL_YIELD[p] || 0.2) / (PLATFORM_COST_PER_LEAD[p] || 0.02),
-  })).sort((a, b) => b.efficiency - a.efficiency);
+  const emailYieldScored = platforms.map(p => {
+    const emailYield = getEmailYield(p);
+    const validRate = getValidEmailRate(p, historicalStats);
+    const validEmailYield = emailYield * validRate;
+    const cost = PLATFORM_COST_PER_LEAD[p] || 0.02;
+    return {
+      platform: p,
+      yield: emailYield,
+      validRate,
+      validEmailYield,
+      cost,
+      efficiency: validEmailYield / cost,
+    };
+  }).sort((a, b) => b.efficiency - a.efficiency);
 
   const totalEfficiency = emailYieldScored.reduce((s, p) => s + p.efficiency, 0);
 
@@ -91,12 +122,21 @@ export function allocateBudget(
   const estimatedTotalLeads = platformAllocations.reduce((s, p) => s + p.maxLeads, 0);
 
   const weightedEmailRate = platformAllocations.reduce((s, p) => {
-    const yield_ = PLATFORM_EMAIL_YIELD[p.platform] || 0.2;
+    const yield_ = getEmailYield(p.platform);
     return s + yield_ * p.maxLeads;
   }, 0) / Math.max(1, estimatedTotalLeads);
 
   const enrichedRate = Math.min(0.85, weightedEmailRate + 0.25);
   const estimatedEmails = Math.round(estimatedTotalLeads * enrichedRate);
+
+  const weightedValidRate = platformAllocations.reduce((s, p) => {
+    const validRate = getValidEmailRate(p.platform, historicalStats);
+    const emailYield = getEmailYield(p.platform);
+    return s + validRate * emailYield * p.maxLeads;
+  }, 0) / Math.max(1, estimatedTotalLeads);
+
+  const enrichedValidRate = Math.min(0.60, (weightedValidRate + 0.25 * 0.3));
+  const estimatedValidEmails = Math.round(estimatedTotalLeads * enrichedValidRate);
 
   return {
     totalBudgetUsd: budgetUsd,
@@ -106,6 +146,8 @@ export function allocateBudget(
     estimatedTotalLeads,
     estimatedEmailRate: Math.round(enrichedRate * 100) / 100,
     estimatedEmails,
+    estimatedValidEmails,
+    estimatedValidEmailRate: Math.round(enrichedValidRate * 100) / 100,
   };
 }
 
@@ -113,15 +155,16 @@ export function estimateBudgetForEmailTarget(
   keywords: string[],
   emailTarget: number,
   podcastEnabled: boolean = true,
+  historicalStats?: PlatformStats[],
 ): BudgetAllocation {
   let low = 0.5;
-  let high = 25;
-  let bestAllocation = allocateBudget(keywords, high, podcastEnabled);
+  let high = 30;
+  let bestAllocation = allocateBudget(keywords, high, podcastEnabled, historicalStats);
 
   for (let i = 0; i < 15; i++) {
     const mid = (low + high) / 2;
-    const alloc = allocateBudget(keywords, mid, podcastEnabled);
-    if (alloc.estimatedEmails >= emailTarget) {
+    const alloc = allocateBudget(keywords, mid, podcastEnabled, historicalStats);
+    if (alloc.estimatedValidEmails >= emailTarget) {
       bestAllocation = alloc;
       high = mid;
     } else {
@@ -130,7 +173,7 @@ export function estimateBudgetForEmailTarget(
   }
 
   const finalBudget = Math.ceil(high * 2) / 2;
-  return allocateBudget(keywords, Math.min(20, finalBudget), podcastEnabled);
+  return allocateBudget(keywords, Math.min(25, finalBudget), podcastEnabled, historicalStats);
 }
 
 export function canAffordStep(

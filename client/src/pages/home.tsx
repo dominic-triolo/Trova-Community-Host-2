@@ -389,7 +389,10 @@ export default function Home() {
                           : <span> of ${Number(autoBudget).toFixed(2)} max</span>
                       ) : null}
                       {" / "}
-                      ~{previewAllocation.estimatedEmails} emails at {Math.round(previewAllocation.estimatedEmailRate * 100)}% rate
+                      ~{previewAllocation.estimatedValidEmails ?? previewAllocation.estimatedEmails} valid emails
+                      {previewAllocation.estimatedEmails > 0 && (
+                        <span className="text-muted-foreground"> ({previewAllocation.estimatedEmails} raw, {Math.round((previewAllocation.estimatedValidEmailRate ?? previewAllocation.estimatedEmailRate) * 100)}% valid rate)</span>
+                      )}
                     </span>
                   </div>
                 </>

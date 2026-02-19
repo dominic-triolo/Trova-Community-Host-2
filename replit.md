@@ -60,8 +60,10 @@ shared/
 4. **Create & Score** - ICP scoring (0-100) with 6 pillars + audience size bonus + contact info bonus
 5. **Apollo.io Enrichment** - Contact lookup by name + domain + LinkedIn URL (toggleable, uncapped, min score 15, deduped across runs via apolloEnrichedAt, skips pseudonyms via isValidApolloCandidate)
 6. **Leads Finder Enrichment** - Apify `code_crafter~leads-finder` actor as fallback for leads still missing email after Apollo (uncapped, batched by domain)
-7. **Scoring** - Final scoring pass (no qualification threshold; scores only)
-8. **Export** - CSV download for all leads with scores (global or per-run)
+7. **Email Validation** - MillionVerifier validates all discovered emails as valid/invalid/catch-all/unknown
+8. **Scoring** - Final scoring pass (no qualification threshold; scores only)
+9. **Expansion Loop** (autonomous mode only) - If valid emails < target and budget remains, up to 2 rounds of re-enrichment: finds leads without emails, runs Leads Finder by domain, validates new emails via MillionVerifier, updates counts. Exits when target reached, budget exhausted, or lead pool exhausted.
+10. **Export** - CSV download for all leads with scores (global or per-run)
 
 ## Enrichment Methods (User-Toggleable)
 Users can enable/disable enrichment methods per run via the "Enrichment Methods" card:
@@ -97,8 +99,12 @@ The discovery form uses platform-specific tabs. Patreon, Facebook Groups, Podcas
 - `code_crafter~leads-finder` - Email enrichment fallback ($1.50/1k leads, verified emails by domain)
 
 ## Autonomous Mode
-- Users provide keywords + dollar budget ($1-$20) OR email target (1-500), system auto-selects platforms and optimizes enrichment
-- Bidirectional estimation: fill budget → estimate emails, fill email target → auto-calculate cost
+- Users provide keywords + email target (1-500) as primary goal + max budget ($1-$25) as spending cap
+- Email target = valid emails (verified by MillionVerifier), not raw emails
+- Historical platform stats: queries actual valid-email yield rates per platform across completed runs (min 5 leads), falls back to hardcoded defaults
+- Budget engine over-allocates discovery to compensate for validation loss (raw → valid conversion)
+- Runs table tracks `leadsWithValidEmail` separately from `leadsWithEmail` (raw)
+- Bidirectional estimation: fill budget → estimate valid emails, fill email target → auto-calculate cost
 - Podcast toggle: on/off switch, requires $3+ budget to include (high yield 55% but expensive $0.03/lead)
 - Budget engine (`server/budget-engine.ts`) maps keywords to platforms, allocates budget 65/35 discovery/enrichment
 - Platform cost estimates: Patreon $0.03, Facebook $0.01, Podcast $0.03, Substack $0.01 per lead

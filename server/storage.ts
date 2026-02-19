@@ -39,6 +39,8 @@ export interface IStorage {
   listLeadsByStatus(status: string): Promise<Lead[]>;
   countLeadsByRunAndStatus(runId: number, status: string): Promise<number>;
   countLeadsByRunWithEmail(runId: number): Promise<number>;
+  countLeadsByRunWithValidEmail(runId: number): Promise<number>;
+  getPlatformValidEmailStats(): Promise<{ platform: string; totalLeads: number; withEmail: number; validEmails: number; validRate: number }[]>;
   deleteLeadsByRun(runId: number): Promise<void>;
   deleteSourceUrlsByRun(runId: number): Promise<void>;
 }
@@ -173,6 +175,35 @@ export class DatabaseStorage implements IStorage {
       and(eq(leads.runId, runId), sql`${leads.email} IS NOT NULL AND ${leads.email} != ''`)
     );
     return result?.count || 0;
+  }
+
+  async countLeadsByRunWithValidEmail(runId: number): Promise<number> {
+    const [result] = await db.select({ count: sql<number>`count(*)::int` }).from(leads).where(
+      and(eq(leads.runId, runId), sql`${leads.emailValidation} = 'valid'`)
+    );
+    return result?.count || 0;
+  }
+
+  async getPlatformValidEmailStats(): Promise<{ platform: string; totalLeads: number; withEmail: number; validEmails: number; validRate: number }[]> {
+    const results = await db.execute(sql`
+      SELECT 
+        l.source as platform,
+        COUNT(*)::int as total_leads,
+        COUNT(CASE WHEN l.email IS NOT NULL AND l.email != '' THEN 1 END)::int as with_email,
+        COUNT(CASE WHEN l.email_validation = 'valid' THEN 1 END)::int as valid_emails
+      FROM leads l
+      JOIN runs r ON l.run_id = r.id
+      WHERE r.status = 'succeeded' AND l.source IS NOT NULL AND l.source != ''
+      GROUP BY l.source
+      HAVING COUNT(*) >= 5
+    `);
+    return (results.rows as any[]).map(row => ({
+      platform: row.platform,
+      totalLeads: Number(row.total_leads),
+      withEmail: Number(row.with_email),
+      validEmails: Number(row.valid_emails),
+      validRate: Number(row.with_email) > 0 ? Number(row.valid_emails) / Number(row.with_email) : 0,
+    }));
   }
 
   async deleteLeadsByRun(runId: number): Promise<void> {

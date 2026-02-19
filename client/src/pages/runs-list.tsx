@@ -97,7 +97,7 @@ export default function RunsList() {
                     <div className="flex items-center gap-4">
                       <div className="text-right text-xs text-muted-foreground space-y-0.5">
                         <p>{run.leadsExtracted || 0} leads</p>
-                        <p>{(run as any).leadsWithEmail || 0} with email</p>
+                        <p>{(run as any).leadsWithEmail || 0} emails{(run as any).leadsWithValidEmail > 0 && ` (${(run as any).leadsWithValidEmail} valid)`}</p>
                         {((run as any).apifySpendUsd > 0) && (
                           <p>${((run as any).apifySpendUsd || 0).toFixed(2)} Apify</p>
                         )}

@@ -34,6 +34,13 @@ async function isEmailTargetReached(runId: number): Promise<boolean> {
   return currentEmails >= run.emailTarget;
 }
 
+async function isValidEmailTargetReached(runId: number): Promise<boolean> {
+  const run = await storage.getRun(runId);
+  if (!run || !run.emailTarget || run.emailTarget <= 0) return false;
+  const validEmails = run.leadsWithValidEmail || 0;
+  return validEmails >= run.emailTarget;
+}
+
 async function markStepComplete(runId: number, step: PipelineStep): Promise<void> {
   await storage.updateRun(runId, { lastCompletedStep: step });
 }
@@ -4129,9 +4136,11 @@ export async function runPipeline(runId: number): Promise<void> {
     await appendAndSave("Finalizing...", 92, "Step 11: Finalizing");
 
     const emailCount = await storage.countLeadsByRunWithEmail(runId);
+    const validEmailCount = await storage.countLeadsByRunWithValidEmail(runId);
 
     await storage.updateRun(runId, {
       leadsWithEmail: emailCount,
+      leadsWithValidEmail: validEmailCount,
     });
 
     const sourcesUsed = (params.enabledSources || []).map((s: string) => {
@@ -4140,18 +4149,167 @@ export async function runPipeline(runId: number): Promise<void> {
     });
 
     await appendAndSave(
-      `Scoring complete: ${createdCount} leads, ${emailCount} with email`,
+      `Scoring complete: ${createdCount} leads, ${emailCount} with email (${validEmailCount} valid)`,
       96,
       "Step 11: Finalizing"
     );
 
     await markStepComplete(runId, PIPELINE_STEPS.SCORING);
 
+    if (isAutonomousRun && globalEmailTarget > 0 && validEmailCount < globalEmailTarget) {
+      let expansionRound = 0;
+      const MAX_EXPANSION_ROUNDS = 2;
+
+      while (expansionRound < MAX_EXPANSION_ROUNDS) {
+        if (cancelledRunIds.has(runId)) throw new RunCancelledError(runId);
+
+        const budgetInfo = await getRunBudgetInfo(runId);
+        const remainingBudget = budgetUsd - budgetInfo.spentUsd;
+        const currentValidCount = await storage.countLeadsByRunWithValidEmail(runId);
+        await storage.updateRun(runId, { leadsWithValidEmail: currentValidCount });
+        const deficit = globalEmailTarget - currentValidCount;
+
+        if (await isValidEmailTargetReached(runId)) {
+          await appendAndSave(`Target reached: ${currentValidCount}/${globalEmailTarget} valid emails.`);
+          break;
+        }
+        if (remainingBudget <= 0.50) {
+          await appendAndSave(`Budget exhausted: ${currentValidCount}/${globalEmailTarget} valid emails. $${budgetInfo.spentUsd.toFixed(2)}/$${budgetUsd.toFixed(2)} spent.`);
+          break;
+        }
+        if (deficit <= 3) {
+          await appendAndSave(`Near target: ${currentValidCount}/${globalEmailTarget} valid emails. Deficit too small for expansion.`);
+          break;
+        }
+
+        expansionRound++;
+        await appendAndSave(
+          `Expansion round ${expansionRound}: ${currentValidCount}/${globalEmailTarget} valid emails (${deficit} short). $${remainingBudget.toFixed(2)} remaining. Re-enriching leads without emails...`,
+          93,
+          `Expansion round ${expansionRound}: re-enrichment`
+        );
+
+        const allLeads = await storage.listLeadsByRun(runId);
+        const leadsWithoutEmail = allLeads.filter(l => !l.email || l.emailStatus === "invalid");
+
+        if (leadsWithoutEmail.length === 0) {
+          await appendAndSave(`Expansion: all ${allLeads.length} leads already have emails. Lead pool exhausted — no more leads to enrich.`);
+          break;
+        }
+
+        await appendAndSave(`Expansion: ${leadsWithoutEmail.length} leads without valid email (of ${allLeads.length} total). Running Leads Finder fallback...`);
+
+        const leadsWithWebsite = leadsWithoutEmail.filter(l => l.website);
+        if (leadsWithWebsite.length > 0) {
+          const domainBatches = new Map<string, typeof leadsWithWebsite>();
+          for (const lead of leadsWithWebsite) {
+            try {
+              const domain = new URL(lead.website!).hostname.replace(/^www\./, "");
+              if (!domainBatches.has(domain)) domainBatches.set(domain, []);
+              domainBatches.get(domain)!.push(lead);
+            } catch {}
+          }
+
+          let enrichedCount = 0;
+          const maxBatches = Math.min(domainBatches.size, 20);
+          const domainEntries = Array.from(domainBatches.entries()).slice(0, maxBatches);
+
+          for (const [domain, domainLeads] of domainEntries) {
+            if (cancelledRunIds.has(runId)) throw new RunCancelledError(runId);
+            const checkBudget = await getRunBudgetInfo(runId);
+            if (budgetUsd - checkBudget.spentUsd <= 0.25) {
+              await appendAndSave(`Expansion: budget limit reached during re-enrichment.`);
+              break;
+            }
+
+            try {
+              const results = await runActorAndGetResults(
+                "code_crafter~leads-finder",
+                { domain, maxResults: Math.min(domainLeads.length, 10) },
+                runId,
+              );
+
+              if (results && Array.isArray(results)) {
+                for (const result of results) {
+                  const email = result.email || result.Email;
+                  if (!email) continue;
+                  const matchingLead = domainLeads.find(l =>
+                    !l.email || l.emailStatus === "invalid"
+                  );
+                  if (matchingLead) {
+                    await storage.updateLead(matchingLead.id, {
+                      email,
+                      emailSource: "leads-finder-expansion",
+                    });
+                    enrichedCount++;
+                  }
+                }
+              }
+            } catch {}
+          }
+
+          await appendAndSave(`Expansion: Leads Finder enriched ${enrichedCount} leads with new emails.`);
+        }
+
+        const leadsStillNoStatus = (await storage.listLeadsByRun(runId))
+          .filter(l => l.email && !l.emailStatus);
+
+        if (leadsStillNoStatus.length > 0 && process.env.MILLIONVERIFIER_API_KEY) {
+          await appendAndSave(`Expansion: validating ${leadsStillNoStatus.length} newly found emails...`);
+          let validatedCount = 0;
+
+          for (const lead of leadsStillNoStatus) {
+            if (cancelledRunIds.has(runId)) throw new RunCancelledError(runId);
+            try {
+              const mvUrl = `https://api.millionverifier.com/api/v3/?api=${process.env.MILLIONVERIFIER_API_KEY}&email=${encodeURIComponent(lead.email!)}`;
+              const resp = await fetch(mvUrl);
+              if (resp.ok) {
+                const data = await resp.json() as any;
+                const status = (data.result || data.quality || "unknown").toLowerCase();
+                const isValid = status === "ok" || status === "valid" || status === "catch_all";
+                await storage.updateLead(lead.id, {
+                  emailStatus: isValid ? "valid" : status === "catch_all" ? "catch-all" : "invalid",
+                });
+                if (isValid) validatedCount++;
+              }
+            } catch {}
+          }
+          await appendAndSave(`Expansion: ${validatedCount} new emails validated.`);
+        }
+
+        const postExpansionValid = await storage.countLeadsByRunWithValidEmail(runId);
+        const postExpansionEmail = await storage.countLeadsByRunWithEmail(runId);
+        await storage.updateRun(runId, {
+          leadsWithEmail: postExpansionEmail,
+          leadsWithValidEmail: postExpansionValid,
+        });
+
+        await appendAndSave(
+          `Expansion round ${expansionRound} complete: ${postExpansionValid}/${globalEmailTarget} valid emails (${postExpansionEmail} total).`,
+          95
+        );
+
+        if (await isValidEmailTargetReached(runId)) {
+          await appendAndSave(`Target reached after expansion: ${postExpansionValid}/${globalEmailTarget} valid emails.`);
+          break;
+        }
+      }
+    }
+
+    const finalEmailCount = await storage.countLeadsByRunWithEmail(runId);
+    const finalValidCount = await storage.countLeadsByRunWithValidEmail(runId);
+    await storage.updateRun(runId, {
+      leadsWithEmail: finalEmailCount,
+      leadsWithValidEmail: finalValidCount,
+    });
+
     let budgetSummary = "";
     if (isAutonomousRun && budgetUsd > 0) {
       const finalBudget = await getRunBudgetInfo(runId);
       budgetSummary = ` Budget: $${finalBudget.spentUsd.toFixed(2)}/$${budgetUsd.toFixed(2)} spent.`;
     }
+
+    const validSummary = finalValidCount > 0 ? ` (${finalValidCount} valid)` : "";
 
     await storage.updateRun(runId, {
       status: "succeeded",
@@ -4160,7 +4318,7 @@ export async function runPipeline(runId: number): Promise<void> {
       finishedAt: new Date(),
       logs: appendLog(
         currentLogs,
-        `Pipeline complete! ${createdCount} leads discovered, ${emailCount} with email.${budgetSummary} Sources: ${sourcesUsed.join(", ")}.`
+        `Pipeline complete! ${createdCount} leads discovered, ${finalEmailCount} with email${validSummary}.${budgetSummary} Sources: ${sourcesUsed.join(", ")}.`
       ),
     });
 
@@ -4534,13 +4692,15 @@ export async function reEnrichRun(runId: number): Promise<void> {
     }
 
     const emailCount = await storage.countLeadsByRunWithEmail(runId);
+    const validEmailCount = await storage.countLeadsByRunWithValidEmail(runId);
 
     await storage.updateRun(runId, {
       leadsWithEmail: emailCount,
+      leadsWithValidEmail: validEmailCount,
     });
 
     await appendAndSave(
-      `Re-enrichment complete! ${reScored} leads re-scored, ${emailCount} have emails`,
+      `Re-enrichment complete! ${reScored} leads re-scored, ${emailCount} have emails (${validEmailCount} valid)`,
       100,
       "Re-enrichment complete"
     );
@@ -4644,6 +4804,7 @@ export async function restartRun(runId: number): Promise<void> {
     urlsDiscovered: 0,
     leadsExtracted: 0,
     leadsWithEmail: 0,
+    leadsWithValidEmail: 0,
     apifySpendUsd: 0,
   });
 
@@ -4971,7 +5132,8 @@ export async function resumeRun(runId: number): Promise<void> {
       }
 
       const emailCount = await storage.countLeadsByRunWithEmail(runId);
-      await storage.updateRun(runId, { leadsWithEmail: emailCount });
+      const validEmailCount = await storage.countLeadsByRunWithValidEmail(runId);
+      await storage.updateRun(runId, { leadsWithEmail: emailCount, leadsWithValidEmail: validEmailCount });
 
       await markStepComplete(runId, PIPELINE_STEPS.SCORING);
 
