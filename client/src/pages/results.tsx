@@ -21,6 +21,7 @@ const SOURCE_LABELS: Record<string, string> = {
   patreon: "Patreon",
   facebook: "Facebook Groups",
   podcast: "Podcast",
+  substack: "Substack",
   meetup: "Meetup",
   youtube: "YouTube",
   reddit: "Reddit",

@@ -80,7 +80,7 @@ The pipeline collects cross-platform profile links (YouTube, Instagram, Twitter,
 - Display linked platforms in results UI with platform-specific icons
 
 ## Platform Tabs
-The discovery form uses platform-specific tabs. Patreon and Facebook Groups are active; LinkedIn tab is visible but disabled (coming soon). Each platform tab has its own keyword/filter configuration. Facebook Groups tab includes a Google Bridge enrichment step that searches Google for group leader/organizer websites, LinkedIn profiles, and org contact pages. Facebook tab defaults to min 100 members filter.
+The discovery form uses platform-specific tabs. Patreon, Facebook Groups, Podcasters, and Substack are active; LinkedIn tab is visible but disabled (coming soon). Each platform tab has its own keyword/filter configuration. Facebook Groups tab includes a Google Bridge enrichment step that searches Google for group leader/organizer websites, LinkedIn profiles, and org contact pages. Facebook tab defaults to min 100 members filter. Substack tab uses Google Search (`site:substack.com`) + Cheerio about-page scraping for email/social extraction.
 
 ## Apify Actors Used
 - `apify~google-search-scraper` - Google Search discovery

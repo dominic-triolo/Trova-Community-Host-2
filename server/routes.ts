@@ -196,6 +196,7 @@ export async function registerRoutes(
         patreon: "Patreon",
         facebook: "Facebook Groups",
         podcast: "Podcast",
+        substack: "Substack",
         meetup: "Meetup",
         youtube: "YouTube",
         reddit: "Reddit",

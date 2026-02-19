@@ -95,10 +95,11 @@ export const AVAILABLE_SOURCES = [
   { id: "facebook", label: "Facebook Groups", description: "Public groups with member counts" },
   { id: "patreon", label: "Patreon Creators", description: "Creators with patron counts & tiers" },
   { id: "podcast", label: "Podcasters", description: "Podcast hosts with episode counts & RSS emails" },
+  { id: "substack", label: "Substack Writers", description: "Newsletter writers with subscriber bases & public emails" },
   { id: "google", label: "Google Search + Websites", description: "Generic website discovery" },
 ] as const;
 
-export type SourceId = "meetup" | "youtube" | "reddit" | "eventbrite" | "facebook" | "patreon" | "podcast" | "google";
+export type SourceId = "meetup" | "youtube" | "reddit" | "eventbrite" | "facebook" | "patreon" | "podcast" | "substack" | "google";
 export const DEFAULT_ENABLED_SOURCES: SourceId[] = ["patreon"];
 
 export const TEMPORARILY_DISABLED_SOURCES: SourceId[] = ["meetup", "youtube", "reddit", "eventbrite", "google"];
@@ -114,7 +115,7 @@ export const runParamsSchema = z.object({
   seedGeos: z.array(z.string()).default([]),
   maxDiscoveredUrls: z.number().min(1).max(500).default(200),
   maxGoogleResultsPerQuery: z.number().min(1).max(100).default(10),
-  enabledSources: z.array(z.enum(["meetup", "youtube", "reddit", "eventbrite", "facebook", "patreon", "podcast", "google"])).min(1, "At least one source must be selected").default(DEFAULT_ENABLED_SOURCES),
+  enabledSources: z.array(z.enum(["meetup", "youtube", "reddit", "eventbrite", "facebook", "patreon", "podcast", "substack", "google"])).min(1, "At least one source must be selected").default(DEFAULT_ENABLED_SOURCES),
   minMemberCount: z.number().min(0).default(0),
   maxMemberCount: z.number().min(0).default(0),
   minPostCount: z.number().min(0).default(0),
@@ -208,6 +209,24 @@ export const PODCAST_RECOMMENDED_KEYWORDS = [
   { label: "Camping & van life", keywords: ["camping podcast", "van life podcast", "road trip"] },
   { label: "Nature & wildlife", keywords: ["nature podcast", "wildlife podcast", "birdwatching"] },
   { label: "Book clubs", keywords: ["book club podcast", "reading podcast", "literary podcast"] },
+] as const;
+
+export const SUBSTACK_RECOMMENDED_KEYWORDS = [
+  { label: "Travel & adventure", keywords: ["travel", "adventure travel", "group travel"] },
+  { label: "Hiking & outdoors", keywords: ["hiking", "outdoor adventure", "trails"] },
+  { label: "Yoga & wellness", keywords: ["yoga", "wellness", "mindfulness retreat"] },
+  { label: "Fitness coaching", keywords: ["fitness", "personal training", "workout"] },
+  { label: "Women's community", keywords: ["women community", "sisterhood", "women empowerment"] },
+  { label: "Running & endurance", keywords: ["running", "marathon", "trail running"] },
+  { label: "Cycling", keywords: ["cycling", "bike touring", "gravel cycling"] },
+  { label: "Food & wine", keywords: ["food travel", "wine", "culinary"] },
+  { label: "Photography", keywords: ["photography", "travel photography", "photo tours"] },
+  { label: "Spiritual & faith", keywords: ["spiritual", "faith", "ministry"] },
+  { label: "Book clubs", keywords: ["book club", "reading", "literary"] },
+  { label: "Solo travel", keywords: ["solo travel", "backpacking", "nomad"] },
+  { label: "Nature & wildlife", keywords: ["nature", "wildlife", "birdwatching"] },
+  { label: "Surf & water sports", keywords: ["surfing", "diving", "water sports"] },
+  { label: "Art & creativity", keywords: ["art", "creative writing", "painting"] },
 ] as const;
 
 export const DEFAULT_RUN_PARAMS: RunParams = {

@@ -1641,6 +1641,236 @@ async function enrichFromRssFeeds(
   }
 }
 
+async function scrapeSubstackWriters(
+  runId: number,
+  keywords: string[],
+  maxItems: number,
+  appendAndSave: (msg: string) => Promise<void>,
+): Promise<PlatformLead[]> {
+  const leads: PlatformLead[] = [];
+  const seenUrls = new Set<string>();
+
+  const googleQueries = keywords.flatMap(kw => [
+    `site:substack.com "${kw}"`,
+    `site:substack.com ${kw} newsletter`,
+  ]);
+  const batchSize = 5;
+
+  for (let i = 0; i < googleQueries.length; i += batchSize) {
+    if (leads.length >= maxItems) break;
+    const batch = googleQueries.slice(i, i + batchSize);
+
+    try {
+      await appendAndSave(`Substack (via Google): batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(googleQueries.length / batchSize)} (${leads.length}/${maxItems} found)...`);
+      const { items, costUsd: actorCost } = await runActorAndGetResults("apify~google-search-scraper", {
+        queries: batch.join("\n"),
+        maxPagesPerQuery: 3,
+        resultsPerPage: 20,
+        countryCode: "us",
+        languageCode: "en",
+        mobileResults: false,
+      }, 120000);
+      await storage.incrementApifySpend(runId, actorCost);
+
+      for (const item of items) {
+        if (leads.length >= maxItems) break;
+        const organicResults = item.organicResults || [];
+        for (const result of organicResults) {
+          if (leads.length >= maxItems) break;
+
+          const rawUrl = result.url || result.link || "";
+          if (!rawUrl.includes("substack.com")) continue;
+
+          const urlMatch = rawUrl.match(/https?:\/\/([a-zA-Z0-9-]+)\.substack\.com/);
+          if (!urlMatch) continue;
+          const substackSlug = urlMatch[1];
+          if (["support", "www", "open", "blog", "help", "on", "app", "reader"].includes(substackSlug)) continue;
+
+          const substackUrl = `https://${substackSlug}.substack.com`;
+          if (seenUrls.has(substackUrl)) continue;
+          seenUrls.add(substackUrl);
+
+          const title = result.title || "";
+          const snippet = result.description || result.snippet || "";
+          const fullText = `${title} ${snippet}`;
+
+          const writerName = title
+            .replace(/\s*\|\s*Substack$/i, "")
+            .replace(/\s*[-–—]\s*Substack$/i, "")
+            .replace(/\s*Substack\s*$/i, "")
+            .replace(/\s*by\s+.*$/i, "")
+            .trim();
+
+          const channels: Record<string, string> = { substack: substackUrl };
+          const descUrls = extractUrlsFromText(snippet);
+          const socialFromDesc = extractSocialChannelsFromUrls(descUrls);
+          Object.assign(channels, socialFromDesc);
+
+          const descEmails = extractEmailsFromText(snippet);
+
+          leads.push({
+            source: "substack",
+            communityName: writerName || substackSlug,
+            communityType: detectCommunityType(fullText),
+            description: snippet.substring(0, 2000),
+            location: "",
+            website: substackUrl,
+            email: descEmails[0] || "",
+            phone: "",
+            leaderName: extractRealNameFromAbout(fullText, writerName) || writerName,
+            memberCount: 0,
+            subscriberCount: 0,
+            ownedChannels: channels,
+            monetizationSignals: { ...detectMonetization(snippet), newsletter: true, subscriber_base: true },
+            engagementSignals: detectEngagement(snippet),
+            tripFitSignals: detectTripFit(fullText),
+            raw: result,
+          });
+        }
+      }
+
+      await appendAndSave(`Substack: found ${leads.length} unique publications so far`);
+    } catch (err: any) {
+      if (err.costUsd) {
+        await storage.incrementApifySpend(runId, err.costUsd);
+      }
+      await appendAndSave(`[WARN] Substack Google search batch failed: ${err.message}`);
+    }
+  }
+
+  if (leads.length > 0) {
+    await appendAndSave(`Substack: scraping ${leads.length} publication pages for contact info...`);
+    const SUB_BATCH = 20;
+    let enrichedCount = 0;
+
+    for (let i = 0; i < leads.length; i += SUB_BATCH) {
+      const subBatch = leads.slice(i, i + SUB_BATCH);
+      const aboutUrls = subBatch.map(l => ({ url: `${l.website}/about` }));
+
+      try {
+        const { items: pageResults, costUsd: scrapeCost } = await runActorAndGetResults("apify~cheerio-scraper", {
+          startUrls: aboutUrls,
+          maxCrawlPages: subBatch.length,
+          maxConcurrency: 10,
+          requestTimeoutSecs: 30,
+          pageFunction: `async function pageFunction(context) {
+  const { $, request } = context;
+  var emails = [];
+  var socialLinks = [];
+  var authorName = '';
+  var subscriberCount = '';
+  var description = '';
+  var websiteUrl = '';
+
+  var text = $('body').text() || '';
+  var emailPattern = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}/g;
+  var found = text.match(emailPattern) || [];
+  found.forEach(function(e) {
+    if (e && !e.match(/\\.png|\\.jpg|\\.gif|substack\\.com|sentry\\.io|example\\.com/i)) {
+      emails.push(e.toLowerCase().trim());
+    }
+  });
+
+  $('a[href]').each(function() {
+    var href = $(this).attr('href') || '';
+    if (href.match(/twitter\\.com|x\\.com|instagram\\.com|youtube\\.com|linkedin\\.com|facebook\\.com|tiktok\\.com|linktr\\.ee|beacons\\.ai/i)) {
+      socialLinks.push(href);
+    }
+    if (href.match(/^https?:\\/\\//) && !href.match(/substack\\.com|twitter\\.com|x\\.com|instagram\\.com|youtube\\.com|linkedin\\.com|facebook\\.com|tiktok\\.com|apple\\.com|spotify\\.com|google\\.com/i)) {
+      if (!websiteUrl) websiteUrl = href;
+    }
+  });
+
+  var nameEl = $('.pencraft.pc-display-flex .pub-name, .publication-name, h1.heading');
+  if (nameEl.length) authorName = nameEl.first().text().trim();
+
+  var subEl = $('.pencraft .pub-subscribers, .subscribers-count, [class*="subscriber"]');
+  if (subEl.length) subscriberCount = subEl.first().text().trim();
+
+  var descEl = $('meta[name="description"]');
+  if (descEl.length) description = descEl.attr('content') || '';
+
+  return {
+    url: request.url,
+    emails: [...new Set(emails)],
+    socialLinks: [...new Set(socialLinks)],
+    authorName: authorName,
+    subscriberCount: subscriberCount,
+    description: description,
+    websiteUrl: websiteUrl,
+  };
+}`,
+        }, 120000);
+        await storage.incrementApifySpend(runId, scrapeCost);
+
+        for (const pageData of pageResults) {
+          const pageUrl = pageData.url || "";
+          const aboutSlugMatch = pageUrl.match(/https?:\/\/([a-zA-Z0-9-]+)\.substack\.com/);
+          if (!aboutSlugMatch) continue;
+          const slug = aboutSlugMatch[1];
+
+          const lead = subBatch.find(l => l.website === `https://${slug}.substack.com`);
+          if (!lead) continue;
+
+          if (pageData.emails?.length > 0) {
+            const validEmail = pageData.emails.find((e: string) => !isBlockedEmail(e));
+            if (validEmail && !lead.email) {
+              lead.email = cleanEmail(validEmail);
+              enrichedCount++;
+            }
+          }
+
+          if (pageData.authorName && !lead.leaderName) {
+            lead.leaderName = pageData.authorName;
+          }
+
+          if (pageData.subscriberCount) {
+            const subMatch = pageData.subscriberCount.match(/[\d,]+/);
+            if (subMatch) {
+              lead.subscriberCount = parseInt(subMatch[0].replace(/,/g, "")) || 0;
+              lead.engagementSignals = {
+                ...lead.engagementSignals,
+                subscriber_count: lead.subscriberCount,
+              };
+            }
+          }
+
+          if (pageData.description && (!lead.description || lead.description.length < 50)) {
+            lead.description = pageData.description.substring(0, 2000);
+          }
+
+          if (pageData.websiteUrl) {
+            lead.ownedChannels = lead.ownedChannels || {};
+            if (!lead.ownedChannels.website) {
+              lead.ownedChannels.website = pageData.websiteUrl;
+              lead.website = pageData.websiteUrl;
+            }
+          }
+
+          const socialLinks = pageData.socialLinks || [];
+          const socialChannels = extractSocialChannelsFromUrls(socialLinks);
+          lead.ownedChannels = { ...lead.ownedChannels, ...socialChannels };
+
+          const linkAggUrls = extractLinkAggregatorUrls(socialLinks.join(" "), lead.ownedChannels);
+          if (linkAggUrls.length > 0 && !lead.ownedChannels.linktree) {
+            lead.ownedChannels.linktree = linkAggUrls[0];
+          }
+        }
+      } catch (err: any) {
+        if (err.costUsd) {
+          await storage.incrementApifySpend(runId, err.costUsd);
+        }
+        await appendAndSave(`[WARN] Substack page scrape batch failed: ${err.message}`);
+      }
+    }
+
+    await appendAndSave(`Substack page scrape: enriched ${enrichedCount} leads with emails, scraped ${leads.length} about pages`);
+  }
+
+  await appendAndSave(`Substack discovery complete: ${leads.length} publications found`);
+  return leads;
+}
+
 const GOOGLE_ENRICHMENT_MAX = Infinity;
 const GOOGLE_ENRICHMENT_SOCIAL_HOSTS = ["youtube.com", "youtu.be", "instagram.com", "twitter.com", "x.com", "discord.gg", "discord.com", "facebook.com", "tiktok.com", "twitch.tv", "linkedin.com", "patreon.com", "google.com", "apple.com", "spotify.com", "amazon.com", "reddit.com", "tumblr.com", "pinterest.com", "github.com", "medium.com", "wordpress.com", "linktr.ee", "beacons.ai", "ko-fi.com", "buymeacoffee.com", "gumroad.com", "substack.com", "bit.ly", "apify.com", "meetup.com", "eventbrite.com", "yelp.com", "tripadvisor.com", "bbb.org"];
 
@@ -2583,6 +2813,9 @@ export async function runPipeline(runId: number): Promise<void> {
         minEpisodeCount: params.minEpisodeCount || 0,
         podcastCountry: params.podcastCountry || "US",
       }) });
+    }
+    if (enabledSources.includes("substack")) {
+      platformTasks.push({ name: "Substack", promise: scrapeSubstackWriters(runId, keywords, maxPerPlatform, (msg) => appendAndSave(msg)) });
     }
 
     if (platformTasks.length === 0) {
