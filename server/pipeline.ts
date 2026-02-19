@@ -173,12 +173,51 @@ function buildGoogleQueries(params: RunParams): string[] {
   return unique.slice(0, 200);
 }
 
+function cleanExtractedEmail(raw: string): string | null {
+  let e = raw.trim();
+  const atIdx = e.indexOf("@");
+  if (atIdx < 1) return null;
+  let local = e.substring(0, atIdx);
+  let domain = e.substring(atIdx + 1);
+  local = local.replace(/^[^a-zA-Z]+/, "");
+  if (!local || !domain || !domain.includes(".")) return null;
+  domain = domain.replace(/\.*$/, "");
+  domain = domain.replace(/\.([A-Z][a-zA-Z]*)$/, "");
+  const lastDotIdx = domain.lastIndexOf(".");
+  if (lastDotIdx >= 0) {
+    const afterLastDot = domain.substring(lastDotIdx + 1);
+    const camelMatch = afterLastDot.match(/^([a-z]{2,10})([A-Z][a-zA-Z]*)$/);
+    if (camelMatch) {
+      domain = domain.substring(0, lastDotIdx + 1) + camelMatch[1];
+    }
+  }
+  const dotParts = domain.split(".");
+  const tld = dotParts[dotParts.length - 1].toLowerCase();
+  if (tld.length > 10) {
+    const truncated = tld.match(/^([a-z]{2,6})/);
+    if (truncated) {
+      dotParts[dotParts.length - 1] = truncated[1];
+      domain = dotParts.join(".");
+    } else {
+      return null;
+    }
+  }
+  const result = `${local}@${domain}`.toLowerCase();
+  const badExtensions = [".png", ".jpg", ".gif", ".jpeg", ".svg", ".webp", ".css", ".js", ".php", ".html", ".htm", ".xml", ".json", ".pdf", ".doc", ".zip"];
+  if (badExtensions.some(ext => result.endsWith(ext))) return null;
+  if (!/^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,10}$/.test(result)) return null;
+  return result;
+}
+
 function extractEmailsFromText(text: string): string[] {
   const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
   const matches = text.match(emailRegex) || [];
-  return Array.from(new Set(matches)).filter(
-    (e) => !e.endsWith(".png") && !e.endsWith(".jpg") && !e.endsWith(".gif")
-  );
+  const cleaned: string[] = [];
+  for (const raw of matches) {
+    const clean = cleanExtractedEmail(raw);
+    if (clean) cleaned.push(clean);
+  }
+  return Array.from(new Set(cleaned));
 }
 
 function extractObfuscatedEmails(text: string): string[] {
