@@ -2216,7 +2216,7 @@ async function googleSearchEnrichCreators(
   }
 
   const batchSize = 10;
-  const concurrentSearchBatches = 3;
+  const concurrentSearchBatches = 10;
   const enrichedLeadIndices = new Set<number>();
 
   const allSearchBatches: { queries: { term: string; leadIdx: number }[]; batchNum: number }[] = [];
@@ -2368,7 +2368,7 @@ async function googleBridgeEnrichFacebookGroups(
   }
 
   const batchSize = 10;
-  const concurrentBridgeBatches = 3;
+  const concurrentBridgeBatches = 10;
   const enrichedLeadIndices = new Set<number>();
 
   const allBridgeBatches: { queries: typeof queries; batchNum: number }[] = [];
@@ -2995,7 +2995,7 @@ async function crawlCreatorWebsitesForEmails(
   await appendAndSave(`Website crawl: found ${websiteEntries.length} unique personal websites to crawl`);
 
   const batchSize = 5;
-  const concurrentBatches = 5;
+  const concurrentBatches = 10;
   const allBatches: { entries: [string, string][]; batchNum: number }[] = [];
   const totalBatches = Math.ceil(websiteEntries.length / batchSize);
 
