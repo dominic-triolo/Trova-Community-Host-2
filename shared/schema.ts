@@ -3,6 +3,50 @@ import { pgTable, text, varchar, integer, timestamp, jsonb, serial, real } from 
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
+export const PIPELINE_STEPS = {
+  DISCOVERY: "discovery",
+  FB_GOOGLE_BRIDGE: "fb_google_bridge",
+  RSS_FEEDS: "rss_feeds",
+  LINK_AGGREGATORS_1: "link_aggregators_1",
+  YOUTUBE_ABOUT: "youtube_about",
+  INSTAGRAM_BIOS: "instagram_bios",
+  TWITTER_BIOS: "twitter_bios",
+  LINK_AGGREGATORS_2: "link_aggregators_2",
+  GOOGLE_CONTACT_SEARCH: "google_contact_search",
+  SLUG_DOMAIN_PROBE: "slug_domain_probe",
+  WEBSITE_CRAWL: "website_crawl",
+  GOOGLE_URL_DISCOVERY: "google_url_discovery",
+  WEBSITE_EXTRACTION: "website_extraction",
+  LEAD_CREATION: "lead_creation",
+  APOLLO: "apollo",
+  LEADS_FINDER: "leads_finder",
+  EMAIL_VALIDATION: "email_validation",
+  SCORING: "scoring",
+} as const;
+
+export type PipelineStep = typeof PIPELINE_STEPS[keyof typeof PIPELINE_STEPS];
+
+export const PIPELINE_STEP_LABELS: Record<PipelineStep, string> = {
+  [PIPELINE_STEPS.DISCOVERY]: "Platform Discovery",
+  [PIPELINE_STEPS.FB_GOOGLE_BRIDGE]: "Facebook Google Bridge",
+  [PIPELINE_STEPS.RSS_FEEDS]: "RSS Feed Extraction",
+  [PIPELINE_STEPS.LINK_AGGREGATORS_1]: "Link Aggregator Scrape",
+  [PIPELINE_STEPS.YOUTUBE_ABOUT]: "YouTube About Pages",
+  [PIPELINE_STEPS.INSTAGRAM_BIOS]: "Instagram Bio Scrape",
+  [PIPELINE_STEPS.TWITTER_BIOS]: "Twitter Bio Scrape",
+  [PIPELINE_STEPS.LINK_AGGREGATORS_2]: "Link Aggregator Scrape (Pass 2)",
+  [PIPELINE_STEPS.GOOGLE_CONTACT_SEARCH]: "Google Contact Search",
+  [PIPELINE_STEPS.SLUG_DOMAIN_PROBE]: "Slug Domain Probe",
+  [PIPELINE_STEPS.WEBSITE_CRAWL]: "Website Contact Crawl",
+  [PIPELINE_STEPS.GOOGLE_URL_DISCOVERY]: "Google URL Discovery",
+  [PIPELINE_STEPS.WEBSITE_EXTRACTION]: "Website Data Extraction",
+  [PIPELINE_STEPS.LEAD_CREATION]: "Lead Creation",
+  [PIPELINE_STEPS.APOLLO]: "Apollo Enrichment",
+  [PIPELINE_STEPS.LEADS_FINDER]: "Leads Finder Enrichment",
+  [PIPELINE_STEPS.EMAIL_VALIDATION]: "Email Validation",
+  [PIPELINE_STEPS.SCORING]: "Scoring",
+};
+
 export const runs = pgTable("runs", {
   id: serial("id").primaryKey(),
   status: text("status").notNull().default("queued"),
@@ -10,6 +54,7 @@ export const runs = pgTable("runs", {
   step: text("step").default(""),
   logs: text("logs").default(""),
   params: jsonb("params").$type<RunParams>(),
+  lastCompletedStep: text("last_completed_step").default(""),
   startedAt: timestamp("started_at"),
   finishedAt: timestamp("finished_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
