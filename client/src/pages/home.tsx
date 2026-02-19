@@ -42,6 +42,7 @@ import {
   Wrench,
   Target,
   Mic,
+  Globe,
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { SiPatreon, SiFacebook, SiLinkedin, SiApplepodcasts, SiSubstack } from "react-icons/si";
@@ -118,7 +119,8 @@ export default function Home() {
   const [mode, setMode] = useState<"manual" | "autonomous">("manual");
   const [autoBudget, setAutoBudget] = useState<number | "">(10);
   const [autoEmailTarget, setAutoEmailTarget] = useState<number | "">(50);
-  const [autoPodcastEnabled, setAutoPodcastEnabled] = useState(true);
+  const [autoEnabledPlatforms, setAutoEnabledPlatforms] = useState<string[]>(["patreon", "facebook", "podcast", "substack"]);
+  const autoPodcastEnabled = autoEnabledPlatforms.includes("podcast");
   const [autoKeywords, setAutoKeywords] = useState<string[]>([]);
   const [autoCustomKeyword, setAutoCustomKeyword] = useState("");
   const [previewAllocation, setPreviewAllocation] = useState<BudgetAllocation | null>(null);
@@ -147,6 +149,20 @@ export default function Home() {
     return Array.from(all);
   }, [runs]);
 
+  interface PlatformStat {
+    platform: string;
+    totalLeads: number;
+    withEmail: number;
+    validEmails: number;
+    validRatePerLead: number;
+    costPerValidEmail: number;
+    isHistorical: boolean;
+  }
+
+  const { data: platformStats } = useQuery<PlatformStat[]>({
+    queryKey: ["/api/stats/platforms"],
+  });
+
   const runMutation = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", "/api/runs", params);
@@ -169,7 +185,7 @@ export default function Home() {
     }
     setPreviewLoading(true);
     try {
-      const body: any = { keywords: autoKeywords, podcastEnabled: autoPodcastEnabled };
+      const body: any = { keywords: autoKeywords, podcastEnabled: autoPodcastEnabled, enabledPlatforms: autoEnabledPlatforms };
       if (autoEmailTarget && Number(autoEmailTarget) > 0) {
         body.emailTarget = Number(autoEmailTarget);
       } else if (autoBudget && Number(autoBudget) > 0) {
@@ -182,7 +198,7 @@ export default function Home() {
       setPreviewAllocation(null);
     }
     setPreviewLoading(false);
-  }, [autoKeywords, autoBudget, autoEmailTarget, autoPodcastEnabled]);
+  }, [autoKeywords, autoBudget, autoEmailTarget, autoPodcastEnabled, autoEnabledPlatforms]);
 
   useEffect(() => {
     const timer = setTimeout(fetchPreview, 400);
@@ -191,7 +207,7 @@ export default function Home() {
 
   const autoRunMutation = useMutation({
     mutationFn: async () => {
-      const body: any = { keywords: autoKeywords, podcastEnabled: autoPodcastEnabled };
+      const body: any = { keywords: autoKeywords, podcastEnabled: autoPodcastEnabled, enabledPlatforms: autoEnabledPlatforms };
       if (autoEmailTarget && Number(autoEmailTarget) > 0) {
         body.emailTarget = Number(autoEmailTarget);
       }
@@ -404,22 +420,61 @@ export default function Home() {
             </Card>
 
             <Card className="p-4 space-y-3">
-              <div className="flex items-center justify-between gap-2 flex-wrap">
-                <div className="flex items-center gap-2">
-                  <Mic className="w-4 h-4 text-muted-foreground" />
-                  <Label className="text-sm font-medium">Include Podcasts</Label>
-                </div>
-                <Switch
-                  checked={autoPodcastEnabled}
-                  onCheckedChange={setAutoPodcastEnabled}
-                  data-testid="switch-podcast-toggle"
-                />
+              <div className="flex items-center gap-2">
+                <Globe className="w-4 h-4 text-muted-foreground" />
+                <Label className="text-sm font-medium">Platform Sources</Label>
               </div>
-              <p className="text-[11px] text-muted-foreground">
-                {autoPodcastEnabled
-                  ? "Podcasts have the highest email yield (55%) but cost ~$0.03/lead. Requires $3+ budget."
-                  : "Podcasts disabled. Using cheaper platforms (Facebook, Substack, Patreon) only."}
-              </p>
+              <div className="space-y-1">
+                {([
+                  { id: "patreon", label: "Patreon", icon: SiPatreon },
+                  { id: "facebook", label: "Facebook Groups", icon: SiFacebook },
+                  { id: "podcast", label: "Podcasts", icon: SiApplepodcasts },
+                  { id: "substack", label: "Substack", icon: SiSubstack },
+                ] as const).map(({ id, label, icon: Icon }) => {
+                  const isEnabled = autoEnabledPlatforms.includes(id);
+                  const isLastEnabled = isEnabled && autoEnabledPlatforms.length === 1;
+                  const stat = platformStats?.find(s => s.platform === id);
+                  return (
+                    <div
+                      key={id}
+                      className="flex items-center justify-between gap-3 py-1.5"
+                      data-testid={`platform-row-${id}`}
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <Icon className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                        <span className={`text-sm ${isEnabled ? "text-foreground" : "text-muted-foreground"}`}>{label}</span>
+                      </div>
+                      <div className="flex items-center gap-3 shrink-0">
+                        {stat && (
+                          <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                            <span title="Valid email conversion rate per lead discovered">
+                              {stat.validRatePerLead}% valid{stat.isHistorical ? "" : "*"}
+                            </span>
+                            <span className="text-muted-foreground/40">|</span>
+                            <span title="Estimated cost per valid email">
+                              ${stat.costPerValidEmail.toFixed(2)}/email
+                            </span>
+                          </div>
+                        )}
+                        <Switch
+                          checked={isEnabled}
+                          disabled={isLastEnabled}
+                          onCheckedChange={(checked) => {
+                            setAutoEnabledPlatforms(prev => {
+                              if (checked) return [...prev, id];
+                              return prev.filter(p => p !== id);
+                            });
+                          }}
+                          data-testid={`switch-platform-${id}`}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              {platformStats && !platformStats.every(s => s.isHistorical) && (
+                <p className="text-[10px] text-muted-foreground">* Estimated rates (not enough historical data yet)</p>
+              )}
             </Card>
 
 

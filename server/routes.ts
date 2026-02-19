@@ -2,7 +2,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { runPipeline, reEnrichRun, resumeRun, restartRun, activeRunIds, cancelledRunIds } from "./pipeline";
-import { runParamsSchema, DEFAULT_RUN_PARAMS } from "@shared/schema";
+import { runParamsSchema, DEFAULT_RUN_PARAMS, PLATFORM_COST_PER_LEAD, PLATFORM_EMAIL_YIELD, PLATFORM_VALID_EMAIL_RATE, type SourceId } from "@shared/schema";
 import { fromError } from "zod-validation-error";
 import { log } from "./index";
 import { allocateBudget, estimateBudgetForEmailTarget } from "./budget-engine";
@@ -79,21 +79,61 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/stats/platforms", async (_req, res) => {
+    try {
+      const historicalStats = await storage.getPlatformValidEmailStats();
+      const allPlatforms: SourceId[] = ["patreon", "facebook", "podcast", "substack"];
+      const stats = allPlatforms.map(p => {
+        const hist = historicalStats.find(s => s.platform === p);
+        const costPerLead = PLATFORM_COST_PER_LEAD[p] || 0.02;
+        const emailYield = PLATFORM_EMAIL_YIELD[p] || 0.20;
+        const defaultValidRate = PLATFORM_VALID_EMAIL_RATE[p] || 0.25;
+
+        const totalLeads = hist?.totalLeads || 0;
+        const withEmail = hist?.withEmail || 0;
+        const validEmails = hist?.validEmails || 0;
+        const hasHistory = totalLeads >= 5;
+
+        const validRatePerLead = hasHistory && totalLeads > 0
+          ? validEmails / totalLeads
+          : emailYield * defaultValidRate;
+
+        const costPerValidEmail = validRatePerLead > 0
+          ? costPerLead / validRatePerLead
+          : costPerLead / (emailYield * defaultValidRate);
+
+        return {
+          platform: p,
+          totalLeads,
+          withEmail,
+          validEmails,
+          validRatePerLead: Math.round(validRatePerLead * 1000) / 10,
+          costPerValidEmail: Math.round(costPerValidEmail * 100) / 100,
+          isHistorical: hasHistory,
+        };
+      });
+      res.json(stats);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
   app.post("/api/runs/autonomous/preview", async (req, res) => {
     try {
-      const { keywords, budgetUsd, emailTarget, podcastEnabled } = req.body;
+      const { keywords, budgetUsd, emailTarget, podcastEnabled, enabledPlatforms } = req.body;
       if (!keywords || !Array.isArray(keywords) || keywords.length === 0) {
         return res.status(400).json({ message: "Keywords are required" });
       }
       const podcast = podcastEnabled !== false;
       const historicalStats = await storage.getPlatformValidEmailStats();
+      const platforms = Array.isArray(enabledPlatforms) && enabledPlatforms.length > 0 ? enabledPlatforms : undefined;
 
       if (emailTarget && Number(emailTarget) > 0) {
-        const allocation = estimateBudgetForEmailTarget(keywords, Number(emailTarget), podcast, historicalStats);
+        const allocation = estimateBudgetForEmailTarget(keywords, Number(emailTarget), podcast, historicalStats, platforms);
         return res.json({ allocation, derivedFrom: "emailTarget" });
       }
       const budget = Number(budgetUsd) || 5;
-      const allocation = allocateBudget(keywords, Math.max(1, Math.min(20, budget)), podcast, historicalStats);
+      const allocation = allocateBudget(keywords, Math.max(1, Math.min(20, budget)), podcast, historicalStats, platforms);
       return res.json({ allocation, derivedFrom: "budget" });
     } catch (err: any) {
       res.status(500).json({ message: err.message });
@@ -102,19 +142,20 @@ export async function registerRoutes(
 
   app.post("/api/runs/autonomous", async (req, res) => {
     try {
-      const { keywords, budgetUsd, emailTarget, podcastEnabled } = req.body;
+      const { keywords, budgetUsd, emailTarget, podcastEnabled, enabledPlatforms } = req.body;
       if (!keywords || !Array.isArray(keywords) || keywords.length === 0) {
         return res.status(400).json({ message: "Keywords are required" });
       }
       const podcast = podcastEnabled !== false;
       const historicalStats = await storage.getPlatformValidEmailStats();
+      const platforms = Array.isArray(enabledPlatforms) && enabledPlatforms.length > 0 ? enabledPlatforms : undefined;
 
       let allocation;
       let budget: number;
       let finalEmailTarget: number;
 
       if (emailTarget && Number(emailTarget) > 0) {
-        allocation = estimateBudgetForEmailTarget(keywords, Number(emailTarget), podcast, historicalStats);
+        allocation = estimateBudgetForEmailTarget(keywords, Number(emailTarget), podcast, historicalStats, platforms);
         budget = budgetUsd && Number(budgetUsd) > 0 ? Number(budgetUsd) : allocation.totalBudgetUsd;
         finalEmailTarget = Number(emailTarget);
       } else {
@@ -122,7 +163,7 @@ export async function registerRoutes(
         if (!budget || budget < 1 || budget > 20) {
           return res.status(400).json({ message: "Budget must be between $1 and $20" });
         }
-        allocation = allocateBudget(keywords, budget, podcast, historicalStats);
+        allocation = allocateBudget(keywords, budget, podcast, historicalStats, platforms);
         finalEmailTarget = allocation.estimatedEmails;
       }
 

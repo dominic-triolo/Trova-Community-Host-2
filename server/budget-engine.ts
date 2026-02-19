@@ -32,10 +32,18 @@ function getEmailYield(platform: string): number {
   return PLATFORM_EMAIL_YIELD[platform] || 0.2;
 }
 
-export function selectPlatformsForKeywords(keywords: string[], podcastEnabled: boolean = true): SourceId[] {
-  const allowedPlatforms = podcastEnabled
-    ? ACTIVE_PLATFORMS
-    : ACTIVE_PLATFORMS.filter(p => p !== "podcast");
+export function selectPlatformsForKeywords(
+  keywords: string[],
+  podcastEnabled: boolean = true,
+  enabledPlatforms?: SourceId[],
+): SourceId[] {
+  const allowedPlatforms = enabledPlatforms && enabledPlatforms.length > 0
+    ? ACTIVE_PLATFORMS.filter(p => enabledPlatforms.includes(p))
+    : podcastEnabled
+      ? ACTIVE_PLATFORMS
+      : ACTIVE_PLATFORMS.filter(p => p !== "podcast");
+
+  if (allowedPlatforms.length === 0) return [...ACTIVE_PLATFORMS];
 
   const platformScores = new Map<SourceId, number>();
 
@@ -73,9 +81,10 @@ export function allocateBudget(
   budgetUsd: number,
   podcastEnabled: boolean = true,
   historicalStats?: PlatformStats[],
+  enabledPlatforms?: SourceId[],
 ): BudgetAllocation {
   const effectivePodcast = podcastEnabled && budgetUsd >= PODCAST_MIN_BUDGET;
-  const platforms = selectPlatformsForKeywords(keywords, effectivePodcast);
+  const platforms = selectPlatformsForKeywords(keywords, effectivePodcast, enabledPlatforms);
 
   const discoveryBudget = budgetUsd * DISCOVERY_BUDGET_RATIO;
   const enrichmentBudget = budgetUsd * ENRICHMENT_BUDGET_RATIO;
@@ -156,14 +165,15 @@ export function estimateBudgetForEmailTarget(
   emailTarget: number,
   podcastEnabled: boolean = true,
   historicalStats?: PlatformStats[],
+  enabledPlatforms?: SourceId[],
 ): BudgetAllocation {
   let low = 0.5;
   let high = 30;
-  let bestAllocation = allocateBudget(keywords, high, podcastEnabled, historicalStats);
+  let bestAllocation = allocateBudget(keywords, high, podcastEnabled, historicalStats, enabledPlatforms);
 
   for (let i = 0; i < 15; i++) {
     const mid = (low + high) / 2;
-    const alloc = allocateBudget(keywords, mid, podcastEnabled, historicalStats);
+    const alloc = allocateBudget(keywords, mid, podcastEnabled, historicalStats, enabledPlatforms);
     if (alloc.estimatedValidEmails >= emailTarget) {
       bestAllocation = alloc;
       high = mid;
@@ -173,7 +183,7 @@ export function estimateBudgetForEmailTarget(
   }
 
   const finalBudget = Math.ceil(high * 2) / 2;
-  return allocateBudget(keywords, Math.min(25, finalBudget), podcastEnabled, historicalStats);
+  return allocateBudget(keywords, Math.min(25, finalBudget), podcastEnabled, historicalStats, enabledPlatforms);
 }
 
 export function canAffordStep(
