@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { runPipeline, reEnrichRun, activeRunIds, cancelledRunIds } from "./pipeline";
+import { runPipeline, reEnrichRun, resumeRun, activeRunIds, cancelledRunIds } from "./pipeline";
 import { runParamsSchema, DEFAULT_RUN_PARAMS } from "@shared/schema";
 import { fromError } from "zod-validation-error";
 import { log } from "./index";
@@ -16,7 +16,7 @@ async function recoverStuckRuns() {
         status: "interrupted",
         step: "Interrupted (server restart)",
         finishedAt: new Date(),
-        logs: (run.logs || "") + `\n[${new Date().toLocaleTimeString("en-US", { hour12: false })}] Run interrupted by server restart. Use Re-enrich to continue enrichment.\n`,
+        logs: (run.logs || "") + `\n[${new Date().toLocaleTimeString("en-US", { hour12: false })}] Run interrupted by server restart. Use Resume to continue from where it left off, or Re-enrich to run Apollo/Leads Finder only.\n`,
       });
     }
     if (stuckRuns.length > 0) {
@@ -140,6 +140,25 @@ export async function registerRoutes(
 
       reEnrichRun(id).catch((err) => console.error("Re-enrich error:", err));
       res.json({ message: "Re-enrichment started", runId: id });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.post("/api/runs/:id/resume", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ message: "Invalid run id" });
+
+      const run = await storage.getRun(id);
+      if (!run) return res.status(404).json({ message: "Run not found" });
+      if (run.status === "running") return res.status(409).json({ message: "Run is already in progress" });
+      if (run.status !== "interrupted" && run.status !== "failed") {
+        return res.status(400).json({ message: "Only interrupted or failed runs can be resumed" });
+      }
+
+      resumeRun(id).catch((err) => console.error("Resume error:", err));
+      res.json({ message: "Resume started", runId: id });
     } catch (err: any) {
       res.status(500).json({ message: err.message });
     }

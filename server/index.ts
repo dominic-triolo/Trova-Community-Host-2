@@ -114,7 +114,7 @@ app.use((req, res, next) => {
             status: "interrupted",
             step: "Interrupted (server restart)",
             finishedAt: new Date(),
-            logs: (run.logs || "") + `\n[${new Date().toLocaleTimeString("en-US", { hour12: false })}] Run interrupted by server shutdown (${signal}). Use Re-enrich to continue enrichment.\n`,
+            logs: (run.logs || "") + `\n[${new Date().toLocaleTimeString("en-US", { hour12: false })}] Run interrupted by server shutdown (${signal}). Use Resume to continue from where it left off, or Re-enrich to run Apollo/Leads Finder only.\n`,
           });
           log(`Marked run ${id} as interrupted`, "shutdown");
         }

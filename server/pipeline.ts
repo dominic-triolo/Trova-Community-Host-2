@@ -5,10 +5,15 @@ import { apolloPersonMatch, isApolloAvailable, extractDomainFromUrl as apolloExt
 import { extractDomainFromUrl, isEnrichableDomain } from "./hunter";
 import { verifyEmailBatch, mapResultToValidation } from "./millionverifier";
 import { log } from "./index";
-import type { RunParams, InsertSourceUrl, InsertLead, InsertLeader } from "@shared/schema";
+import type { RunParams, InsertSourceUrl, InsertLead, InsertLeader, PipelineStep } from "@shared/schema";
+import { PIPELINE_STEPS } from "@shared/schema";
 
 export const activeRunIds = new Set<number>();
 export const cancelledRunIds = new Set<number>();
+
+async function markStepComplete(runId: number, step: PipelineStep): Promise<void> {
+  await storage.updateRun(runId, { lastCompletedStep: step });
+}
 
 class RunCancelledError extends Error {
   constructor(runId: number) {
@@ -3122,6 +3127,7 @@ export async function runPipeline(runId: number): Promise<void> {
       await appendAndSave("Website crawl: no leads with personal websites needing email");
     }
 
+    await markStepComplete(runId, PIPELINE_STEPS.DISCOVERY);
     await appendAndSave(`Platform discovery complete: ${allPlatformLeads.length} results`, 40, "Step 4: Discovery summary");
 
     const emailsAfterDiscovery = allPlatformLeads.filter((l) => l.email).length;
@@ -3615,6 +3621,7 @@ export async function runPipeline(runId: number): Promise<void> {
     await storage.updateRun(runId, { leadsExtracted: createdCount });
 
     await appendAndSave(`Created ${createdCount} total leads`, 80, "Step 8: Contact enrichment");
+    await markStepComplete(runId, PIPELINE_STEPS.LEAD_CREATION);
 
     const runLeads = await storage.listLeadsByRun(runId);
     const APOLLO_MIN_SCORE = 15;
@@ -3755,6 +3762,7 @@ export async function runPipeline(runId: number): Promise<void> {
     } else {
       await appendAndSave("Apollo enrichment skipped (disabled by user)");
     }
+    await markStepComplete(runId, PIPELINE_STEPS.APOLLO);
 
     const LEADS_FINDER_MAX_PER_RUN = Infinity;
     const refreshedLeads = await storage.listLeadsByRun(runId);
@@ -3857,6 +3865,8 @@ export async function runPipeline(runId: number): Promise<void> {
       }
     }
 
+    await markStepComplete(runId, PIPELINE_STEPS.LEADS_FINDER);
+
     if (process.env.MILLIONVERIFIER_API_KEY) {
       await appendAndSave("Validating emails...", 90, "Step 10: Email validation");
       if (cancelledRunIds.has(runId)) throw new RunCancelledError(runId);
@@ -3898,6 +3908,8 @@ export async function runPipeline(runId: number): Promise<void> {
       }
     }
 
+    await markStepComplete(runId, PIPELINE_STEPS.EMAIL_VALIDATION);
+
     await appendAndSave("Finalizing...", 92, "Step 11: Finalizing");
 
     const emailCount = await storage.countLeadsByRunWithEmail(runId);
@@ -3916,6 +3928,8 @@ export async function runPipeline(runId: number): Promise<void> {
       96,
       "Step 11: Finalizing"
     );
+
+    await markStepComplete(runId, PIPELINE_STEPS.SCORING);
 
     await storage.updateRun(runId, {
       status: "succeeded",
@@ -4333,6 +4347,409 @@ export async function reEnrichRun(runId: number): Promise<void> {
         status: "failed",
         step: "Re-enrichment failed",
         logs: appendLog(currentLogs, `[ERROR] Re-enrichment failed: ${err.message}`),
+        finishedAt: new Date(),
+      });
+    }
+  } finally {
+    activeRunIds.delete(runId);
+    cancelledRunIds.delete(runId);
+  }
+}
+
+const STEP_ORDER: PipelineStep[] = [
+  PIPELINE_STEPS.DISCOVERY,
+  PIPELINE_STEPS.LEAD_CREATION,
+  PIPELINE_STEPS.APOLLO,
+  PIPELINE_STEPS.LEADS_FINDER,
+  PIPELINE_STEPS.EMAIL_VALIDATION,
+  PIPELINE_STEPS.SCORING,
+];
+
+function shouldRunStep(lastCompleted: string, target: PipelineStep): boolean {
+  if (!lastCompleted) return true;
+  const lastIdx = STEP_ORDER.indexOf(lastCompleted as PipelineStep);
+  const targetIdx = STEP_ORDER.indexOf(target);
+  if (lastIdx === -1) return true;
+  return targetIdx > lastIdx;
+}
+
+function isResumable(lastCompleted: string): boolean {
+  if (!lastCompleted) return false;
+  const idx = STEP_ORDER.indexOf(lastCompleted as PipelineStep);
+  if (idx === -1) return false;
+  const leadCreationIdx = STEP_ORDER.indexOf(PIPELINE_STEPS.LEAD_CREATION);
+  return idx >= leadCreationIdx;
+}
+
+function dbLeadsToPlatformLeads(leads: any[]): (PlatformLead & { dbId: number })[] {
+  return leads.map((lead) => ({
+    dbId: lead.id,
+    source: lead.source || "patreon",
+    communityName: lead.communityName || "",
+    communityType: lead.communityType || "",
+    description: "",
+    location: lead.location || "",
+    website: lead.website || "",
+    email: lead.email || "",
+    phone: lead.phone || "",
+    leaderName: lead.leaderName || "",
+    memberCount: (lead.engagementSignals as any)?.member_count || 0,
+    subscriberCount: (lead.engagementSignals as any)?.subscriber_count || 0,
+    ownedChannels: (lead.ownedChannels as Record<string, string>) || {},
+    monetizationSignals: (lead.monetizationSignals as Record<string, any>) || {},
+    engagementSignals: (lead.engagementSignals as Record<string, any>) || {},
+    tripFitSignals: (lead.tripFitSignals as Record<string, any>) || {},
+    raw: (lead.raw as Record<string, any>) || {},
+  }));
+}
+
+export async function resumeRun(runId: number): Promise<void> {
+  const run = await storage.getRun(runId);
+  if (!run) throw new Error(`Run ${runId} not found`);
+
+  const params = run.params as RunParams;
+  const lastCompleted = run.lastCompletedStep || "";
+  let currentLogs = "";
+
+  const appendAndSave = async (msg: string, progress?: number, step?: string) => {
+    if (cancelledRunIds.has(runId)) throw new RunCancelledError(runId);
+    currentLogs = appendLog(currentLogs, msg);
+    log(msg, "pipeline");
+    const update: Record<string, any> = { logs: currentLogs };
+    if (progress !== undefined) update.progress = progress;
+    if (step) update.step = step;
+    await storage.updateRun(runId, update);
+  };
+
+  try {
+    activeRunIds.add(runId);
+
+    if (!isResumable(lastCompleted)) {
+      const msg = `Resume aborted: pipeline was interrupted before lead creation completed (last step: ${lastCompleted || "none"}). Please start a new run instead.`;
+      log(msg, "pipeline");
+      await storage.updateRun(runId, {
+        status: "interrupted",
+        step: "Resume aborted (pre-lead-creation)",
+        finishedAt: new Date(),
+        logs: appendLog(run.logs || "", msg),
+      });
+      activeRunIds.delete(runId);
+      return;
+    }
+
+    const leads = await storage.listLeadsByRun(runId);
+
+    if (leads.length === 0) {
+      const msg = `Resume aborted: no leads found for run ${runId}. Please start a new run instead.`;
+      log(msg, "pipeline");
+      await storage.updateRun(runId, {
+        status: "interrupted",
+        step: "Resume aborted (no leads)",
+        finishedAt: new Date(),
+        logs: appendLog(run.logs || "", msg),
+      });
+      activeRunIds.delete(runId);
+      return;
+    }
+
+    currentLogs = appendLog(run.logs || "", `--- Resume started (from after ${lastCompleted || "start"}) ---`);
+    await storage.updateRun(runId, {
+      status: "running",
+      progress: 50,
+      step: "Resuming pipeline",
+      finishedAt: null,
+      logs: currentLogs,
+    });
+
+    await appendAndSave(`Loaded ${leads.length} leads from run ${runId}`, 55, "Resume: Running enrichment chain");
+
+    if (shouldRunStep(lastCompleted, PIPELINE_STEPS.APOLLO)) {
+      if (params.enableApollo !== false) {
+        const runLeads = await storage.listLeadsByRun(runId);
+        const APOLLO_MIN_SCORE = 15;
+        const leadsToEnrich = runLeads
+          .filter((l) => !l.email && (l.score || 0) >= APOLLO_MIN_SCORE)
+          .sort((a, b) => (b.score || 0) - (a.score || 0));
+
+        if (isApolloAvailable() && leadsToEnrich.length > 0) {
+          const totalWithoutEmail = runLeads.filter((l) => !l.email).length;
+          const skippedLowScore = totalWithoutEmail - leadsToEnrich.length;
+          await appendAndSave(`Apollo.io: enriching ${leadsToEnrich.length} of ${totalWithoutEmail} leads without email (${skippedLowScore} below score ${APOLLO_MIN_SCORE})...`, 60, "Resume: Apollo enrichment");
+
+          let enrichedCount = 0;
+          let apolloSkipped = 0;
+          let apolloCalls = 0;
+          let apolloDeduped = 0;
+          for (const lead of leadsToEnrich) {
+            try {
+              const currentHash = computeApolloInputHash(lead);
+              if (lead.apolloEnrichedAt && lead.apolloInputHash === currentHash) {
+                apolloDeduped++;
+                continue;
+              }
+
+              const leaderName = lead.leaderName || lead.communityName || "";
+              if (!leaderName) continue;
+
+              if (!isValidApolloCandidate(leaderName)) {
+                apolloSkipped++;
+                continue;
+              }
+
+              const nameParts = leaderName.trim().split(/\s+/);
+              const firstName = nameParts[0] || "";
+              const lastName = nameParts.length > 1 ? nameParts.slice(1).join(" ") : "";
+              const hasRealName = nameParts.length >= 2 && firstName.length > 1 && lastName.length > 1;
+
+              const channels = (lead.ownedChannels as Record<string, string>) || {};
+              let domain = apolloExtractDomain(lead.website || "");
+              if (!domain || !apolloIsEnrichable(domain)) {
+                if (channels.website) {
+                  domain = apolloExtractDomain(channels.website);
+                }
+              }
+              const enrichableDomain = domain && apolloIsEnrichable(domain) ? domain : undefined;
+              const linkedinUrl = channels.linkedin && channels.linkedin.startsWith("http") ? channels.linkedin : undefined;
+
+              apolloCalls++;
+              let result = await apolloPersonMatch({
+                name: leaderName,
+                firstName: hasRealName ? firstName : undefined,
+                lastName: hasRealName ? lastName : undefined,
+                domain: enrichableDomain,
+                organizationName: lead.communityName !== leaderName ? lead.communityName || undefined : undefined,
+                linkedinUrl,
+              });
+
+              if (!result && hasRealName && !linkedinUrl) {
+                apolloCalls++;
+                result = await apolloPersonMatch({ firstName, lastName, domain: enrichableDomain });
+                await new Promise((r) => setTimeout(r, 300));
+              }
+
+              if (!result) {
+                await storage.updateLead(lead.id, { apolloEnrichedAt: new Date(), apolloInputHash: currentHash });
+                continue;
+              }
+
+              const updateData: Record<string, any> = { apolloEnrichedAt: new Date(), apolloInputHash: currentHash };
+              if (result.email) updateData.email = result.email;
+              if (result.phone && !lead.phone) updateData.phone = result.phone;
+              if (result.linkedin && !lead.linkedin) updateData.linkedin = result.linkedin;
+              if (result.location && !lead.location) updateData.location = result.location;
+              if (!lead.leaderName && result.fullName) updateData.leaderName = result.fullName;
+
+              const existingChannels = (lead.ownedChannels as Record<string, string>) || {};
+              const updatedChannels = { ...existingChannels };
+              if (result.twitter && !existingChannels.twitter) updatedChannels.twitter = result.twitter;
+              if (result.facebook && !existingChannels.facebook) updatedChannels.facebook = result.facebook;
+              if (result.linkedin && !existingChannels.linkedin) updatedChannels.linkedin = result.linkedin;
+              if (Object.keys(updatedChannels).length > Object.keys(existingChannels).length) {
+                updateData.ownedChannels = updatedChannels;
+              }
+
+              if (Object.keys(updateData).length > 2) {
+                await storage.updateLead(lead.id, updateData);
+                enrichedCount++;
+              } else {
+                await storage.updateLead(lead.id, { apolloEnrichedAt: new Date(), apolloInputHash: currentHash });
+              }
+
+              await new Promise((r) => setTimeout(r, 300));
+            } catch (err: any) {
+              await appendAndSave(`[WARN] Apollo enrichment failed for lead ${lead.id}: ${err.message}`);
+            }
+          }
+          await appendAndSave(`Apollo.io: enriched ${enrichedCount} of ${leadsToEnrich.length} leads (${apolloSkipped} skipped, ${apolloDeduped} deduped, ${apolloCalls} API calls)`);
+        } else {
+          await appendAndSave("Apollo enrichment: skipped (no API key or no eligible leads)");
+        }
+      } else {
+        await appendAndSave("Apollo enrichment skipped (disabled by user)");
+      }
+      await markStepComplete(runId, PIPELINE_STEPS.APOLLO);
+    } else {
+      await appendAndSave("Apollo enrichment: already completed, skipping");
+    }
+
+    if (shouldRunStep(lastCompleted, PIPELINE_STEPS.LEADS_FINDER)) {
+      const refreshedLeads = await storage.listLeadsByRun(runId);
+      const leadsForFinder = refreshedLeads
+        .filter((l) => !l.email)
+        .filter((l) => {
+          const channels = (l.ownedChannels as Record<string, string>) || {};
+          const websiteUrl = channels.website || l.website || "";
+          const domain = extractDomainFromUrl(websiteUrl);
+          return domain && isEnrichableDomain(domain);
+        })
+        .sort((a, b) => (b.score || 0) - (a.score || 0));
+
+      if (leadsForFinder.length > 0) {
+        await appendAndSave(`Leads Finder: enriching ${leadsForFinder.length} leads by domain...`, 72, "Resume: Leads Finder enrichment");
+
+        const domains = Array.from(new Set(
+          leadsForFinder.map((l) => {
+            const ch = (l.ownedChannels as Record<string, string>) || {};
+            return extractDomainFromUrl(ch.website || l.website || "");
+          }).filter((d) => d && isEnrichableDomain(d))
+        ));
+
+        if (domains.length > 0) {
+          try {
+            const { items: finderResults, costUsd: actorCost } = await runActorAndGetResults("code_crafter~leads-finder", {
+              company_domain: domains,
+              email_status: ["validated"],
+              fetch_count: Math.min(domains.length * 5, 200),
+            }, 120000, 0.0015);
+            await storage.incrementApifySpend(runId, actorCost);
+
+            const emailByDomain = new Map<string, any>();
+            for (const r of finderResults) {
+              const email = r.email || r.work_email || r.personal_email || "";
+              if (!email || isBlockedEmail(email)) continue;
+              const domain = r.company_domain || r.domain || "";
+              if (domain && !emailByDomain.has(domain.toLowerCase())) {
+                emailByDomain.set(domain.toLowerCase(), r);
+              }
+            }
+
+            let finderEnriched = 0;
+            for (const lead of leadsForFinder) {
+              const ch = (lead.ownedChannels as Record<string, string>) || {};
+              const websiteUrl = ch.website || lead.website || "";
+              const domain = extractDomainFromUrl(websiteUrl);
+              if (!domain) continue;
+              const result = emailByDomain.get(domain.toLowerCase());
+              if (!result) continue;
+              const foundEmail = result.email || result.work_email || result.personal_email || "";
+              if (!foundEmail || isBlockedEmail(foundEmail)) continue;
+              const cleaned = cleanEmail(foundEmail);
+              if (!cleaned) continue;
+
+              const updateData: Record<string, any> = { email: cleaned };
+              if (result.first_name && result.last_name && !lead.leaderName) {
+                updateData.leaderName = `${result.first_name} ${result.last_name}`.trim();
+              }
+              await storage.updateLead(lead.id, updateData);
+              finderEnriched++;
+            }
+            await appendAndSave(`Leads Finder: enriched ${finderEnriched} leads from ${domains.length} domains`);
+          } catch (err: any) {
+            if (err.costUsd) await storage.incrementApifySpend(runId, err.costUsd);
+            await appendAndSave(`[WARN] Leads Finder failed: ${err.message}`);
+          }
+        }
+      } else {
+        await appendAndSave("Leads Finder: no eligible leads to enrich");
+      }
+      await markStepComplete(runId, PIPELINE_STEPS.LEADS_FINDER);
+    } else {
+      await appendAndSave("Leads Finder: already completed, skipping");
+    }
+
+    if (shouldRunStep(lastCompleted, PIPELINE_STEPS.EMAIL_VALIDATION)) {
+      if (process.env.MILLIONVERIFIER_API_KEY) {
+        await appendAndSave("Validating emails...", 80, "Resume: Email validation");
+
+        const allLeadsForValidation = await storage.listLeadsByRun(runId);
+        const leadsWithEmail = allLeadsForValidation.filter(l => l.email && !l.emailValidation);
+
+        if (leadsWithEmail.length > 0) {
+          await appendAndSave(`Email validation: verifying ${leadsWithEmail.length} emails via MillionVerifier...`);
+          const emailsToVerify = leadsWithEmail.map(l => ({ email: l.email!, leadId: l.id }));
+
+          try {
+            const results = await verifyEmailBatch(emailsToVerify, async (verified, total) => {
+              if (verified % 20 === 0 || verified === total) {
+                await appendAndSave(`Email validation: ${verified}/${total} verified...`);
+              }
+            });
+
+            let validCount = 0, invalidCount = 0, catchAllCount = 0, unknownCount = 0;
+            for (const [leadId, result] of Array.from(results.entries())) {
+              const validation = mapResultToValidation(result.result);
+              await storage.updateLead(leadId, { emailValidation: validation });
+              if (validation === "valid") validCount++;
+              else if (validation === "invalid") invalidCount++;
+              else if (validation === "catch-all") catchAllCount++;
+              else unknownCount++;
+            }
+            await appendAndSave(`Email validation: ${validCount} valid, ${invalidCount} invalid, ${catchAllCount} catch-all, ${unknownCount} unknown`);
+          } catch (err: any) {
+            await appendAndSave(`[WARN] Email validation failed: ${err.message}`);
+          }
+        } else {
+          await appendAndSave("Email validation: no new emails to verify");
+        }
+      }
+      await markStepComplete(runId, PIPELINE_STEPS.EMAIL_VALIDATION);
+    } else {
+      await appendAndSave("Email validation: already completed, skipping");
+    }
+
+    if (shouldRunStep(lastCompleted, PIPELINE_STEPS.SCORING)) {
+      await appendAndSave("Re-scoring all leads...", 90, "Resume: Scoring");
+      const finalLeads = await storage.listLeadsByRun(runId);
+      let reScored = 0;
+      for (const lead of finalLeads) {
+        const breakdown = scoreLead({
+          name: lead.communityName || "",
+          description: "",
+          type: lead.communityType || "",
+          location: lead.location || "",
+          website: lead.website || "",
+          email: lead.email || "",
+          phone: lead.phone || "",
+          linkedin: lead.linkedin || "",
+          ownedChannels: (lead.ownedChannels as Record<string, string>) || {},
+          monetizationSignals: (lead.monetizationSignals as Record<string, any>) || {},
+          engagementSignals: (lead.engagementSignals as Record<string, any>) || {},
+          tripFitSignals: (lead.tripFitSignals as Record<string, any>) || {},
+          leaderName: lead.leaderName || "",
+          memberCount: (lead.engagementSignals as any)?.member_count || 0,
+          subscriberCount: (lead.engagementSignals as any)?.subscriber_count || 0,
+          raw: (lead.raw as Record<string, any>) || {},
+          emailValidation: lead.emailValidation || "",
+        });
+
+        await storage.updateLead(lead.id, {
+          score: breakdown.total,
+          scoreBreakdown: breakdown,
+          lastSeenAt: new Date(),
+        });
+        reScored++;
+      }
+
+      const emailCount = await storage.countLeadsByRunWithEmail(runId);
+      await storage.updateRun(runId, { leadsWithEmail: emailCount });
+
+      await markStepComplete(runId, PIPELINE_STEPS.SCORING);
+
+      await storage.updateRun(runId, {
+        status: "succeeded",
+        progress: 100,
+        step: "Complete",
+        finishedAt: new Date(),
+        logs: appendLog(currentLogs, `Resume complete! ${reScored} leads re-scored, ${emailCount} with email.`),
+      });
+
+      log(`Resume of run ${runId} completed successfully`, "pipeline");
+    }
+  } catch (err: any) {
+    if (err instanceof RunCancelledError || cancelledRunIds.has(runId)) {
+      log(`Resume of run ${runId} cancelled by user`, "pipeline");
+      await storage.updateRun(runId, {
+        status: "failed",
+        step: "Cancelled by user",
+        logs: appendLog(currentLogs, `Run cancelled by user`),
+        finishedAt: new Date(),
+      });
+    } else {
+      log(`Resume of run ${runId} failed: ${err.message}`, "pipeline");
+      await storage.updateRun(runId, {
+        status: "failed",
+        step: "Resume failed",
+        logs: appendLog(currentLogs, `[ERROR] Resume failed: ${err.message}`),
         finishedAt: new Date(),
       });
     }

@@ -1,6 +1,8 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useParams, Link } from "wouter";
 import type { Run } from "@shared/schema";
+import { PIPELINE_STEP_LABELS } from "@shared/schema";
+import type { PipelineStep } from "@shared/schema";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -24,6 +26,7 @@ import {
   StopCircle,
   DollarSign,
   AlertTriangle,
+  Play,
 } from "lucide-react";
 
 function StatusBadge({ status }: { status: string }) {
@@ -92,10 +95,24 @@ export default function RunStatus() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/runs", id] });
-      toast({ title: "Re-enrichment started", description: "Crawling profiles and enriching contacts..." });
+      toast({ title: "Re-enrichment started", description: "Running Apollo + Leads Finder enrichment..." });
     },
     onError: (err: Error) => {
       toast({ title: "Failed to start re-enrichment", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const resumeMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/runs/${id}/resume`);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/runs", id] });
+      toast({ title: "Resume started", description: "Continuing pipeline from where it left off..." });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Failed to resume run", description: err.message, variant: "destructive" });
     },
   });
 
@@ -158,6 +175,17 @@ export default function RunStatus() {
               >
                 <StopCircle className={`w-4 h-4 mr-1 ${cancelMutation.isPending ? "animate-spin" : ""}`} />
                 Stop Run
+              </Button>
+            )}
+            {(run.status === "interrupted" || run.status === "failed") && (run as any).lastCompletedStep && (
+              <Button
+                size="sm"
+                onClick={() => resumeMutation.mutate()}
+                disabled={resumeMutation.isPending}
+                data-testid="button-resume"
+              >
+                <Play className={`w-4 h-4 mr-1 ${resumeMutation.isPending ? "animate-spin" : ""}`} />
+                Resume (from {PIPELINE_STEP_LABELS[(run as any).lastCompletedStep as PipelineStep] || (run as any).lastCompletedStep})
               </Button>
             )}
             {(run.status === "succeeded" || run.status === "failed" || run.status === "interrupted") && (
