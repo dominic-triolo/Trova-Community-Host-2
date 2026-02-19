@@ -1,6 +1,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { useQuery } from "@tanstack/react-query";
 import {
   Search,
   Podcast,
@@ -17,6 +18,33 @@ import {
   ArrowRight,
 } from "lucide-react";
 import { SiFacebook, SiPatreon, SiSubstack } from "react-icons/si";
+
+interface PlatformStat {
+  platform: string;
+  totalLeads: number;
+  withEmail: number;
+  validEmails: number;
+  validRatePerLead: number;
+  costPerValidEmail: number;
+  isHistorical: boolean;
+}
+
+function YieldBadge({ platform, stats }: { platform: string; stats?: PlatformStat[] }) {
+  const stat = stats?.find(s => s.platform === platform);
+  if (!stat) return null;
+  return (
+    <div className="flex items-center gap-2" data-testid={`yield-${platform}`}>
+      <CheckCircle className="w-3.5 h-3.5 text-green-500" />
+      <span className="text-sm">
+        {stat.isHistorical ? (
+          <>Email yield rate: <strong>{stat.validRatePerLead}%</strong> of leads end up with a valid email <Badge variant="outline" className="ml-1 text-[10px]">based on {stat.totalLeads} leads</Badge></>
+        ) : (
+          <>Email yield rate: ~{stat.validRatePerLead}% <Badge variant="secondary" className="ml-1 text-[10px]">estimated — not enough data yet</Badge></>
+        )}
+      </span>
+    </div>
+  );
+}
 
 function SectionHeading({ icon: Icon, title, id }: { icon: any; title: string; id?: string }) {
   return (
@@ -64,6 +92,10 @@ function StepCard({ step, title, description, actor, cost, details }: {
 }
 
 export default function Documentation() {
+  const { data: platformStats } = useQuery<PlatformStat[]>({
+    queryKey: ["/api/stats/platforms"],
+  });
+
   return (
     <div className="flex-1 overflow-auto">
       <div className="max-w-4xl mx-auto p-6 space-y-8">
@@ -155,10 +187,7 @@ export default function Documentation() {
                   <li>Parses brand names to extract real names (e.g., "Jenne Sluder Yoga" becomes "Jenne Sluder")</li>
                 </ul>
               </div>
-              <div className="flex items-center gap-2">
-                <CheckCircle className="w-3.5 h-3.5 text-green-500" />
-                <span className="text-sm">Email yield rate: ~35% of leads end up with a valid email</span>
-              </div>
+              <YieldBadge platform="patreon" stats={platformStats} />
             </CardContent>
           </Card>
 
@@ -182,10 +211,7 @@ export default function Documentation() {
               <div className="flex items-center gap-2">
                 <span className="text-sm text-muted-foreground">Default filter: minimum 100 members</span>
               </div>
-              <div className="flex items-center gap-2">
-                <CheckCircle className="w-3.5 h-3.5 text-green-500" />
-                <span className="text-sm">Email yield rate: ~15% of leads end up with a valid email</span>
-              </div>
+              <YieldBadge platform="facebook" stats={platformStats} />
             </CardContent>
           </Card>
 
@@ -209,10 +235,7 @@ export default function Documentation() {
               <p className="text-sm text-muted-foreground">
                 <strong>Budget note:</strong> Requires at least $3 budget in autonomous mode due to higher per-lead cost.
               </p>
-              <div className="flex items-center gap-2">
-                <CheckCircle className="w-3.5 h-3.5 text-green-500" />
-                <span className="text-sm">Email yield rate: ~55% of leads end up with a valid email (highest of all platforms)</span>
-              </div>
+              <YieldBadge platform="podcast" stats={platformStats} />
             </CardContent>
           </Card>
 
@@ -227,10 +250,7 @@ export default function Documentation() {
               <p className="text-sm text-muted-foreground">
                 Searches Google for <code className="bg-muted px-1 rounded text-xs">site:substack.com "[keyword]"</code> to find Substack publications. Then uses a Cheerio scraper to visit each Substack's about page and extract the author's email, social links, and bio information.
               </p>
-              <div className="flex items-center gap-2">
-                <CheckCircle className="w-3.5 h-3.5 text-green-500" />
-                <span className="text-sm">Email yield rate: ~40% of leads end up with a valid email</span>
-              </div>
+              <YieldBadge platform="substack" stats={platformStats} />
             </CardContent>
           </Card>
         </section>
@@ -455,7 +475,7 @@ export default function Documentation() {
                   <li>Uses historical valid-email yield rates per platform (requires 5+ leads from past runs for accuracy)</li>
                   <li>Over-allocates discovery to compensate for validation loss (raw emails that turn out invalid)</li>
                   <li>Bidirectional estimation: fill budget to see estimated emails, or fill email target to auto-calculate cost</li>
-                  <li>Podcast toggle requires $3+ budget (high yield at 55% but expensive at $0.03/lead)</li>
+                  <li>Podcast toggle requires $3+ budget (high yield but expensive at $0.03/lead)</li>
                 </ul>
               </div>
               <div className="space-y-1.5">
