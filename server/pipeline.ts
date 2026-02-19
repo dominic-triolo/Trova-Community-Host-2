@@ -2088,15 +2088,22 @@ async function googleSearchEnrichCreators(
     }
   }
 
-  const batchSize = 5;
+  const batchSize = 10;
+  const concurrentSearchBatches = 2;
   const enrichedLeadIndices = new Set<number>();
 
+  const allSearchBatches: { queries: { term: string; leadIdx: number }[]; batchNum: number }[] = [];
+  const totalBatches = Math.ceil(queries.length / batchSize);
   for (let i = 0; i < queries.length; i += batchSize) {
-    const batch = queries.slice(i, i + batchSize);
-    const batchNum = Math.floor(i / batchSize) + 1;
-    const totalBatches = Math.ceil(queries.length / batchSize);
+    allSearchBatches.push({
+      queries: queries.slice(i, i + batchSize),
+      batchNum: Math.floor(i / batchSize) + 1,
+    });
+  }
 
-    await appendAndSave(`Google enrichment: batch ${batchNum}/${totalBatches} (${batch.length} searches)...`);
+  async function processSearchBatch(batchInfo: { queries: { term: string; leadIdx: number }[]; batchNum: number }): Promise<void> {
+    const batch = batchInfo.queries;
+    await appendAndSave(`Google enrichment: batch ${batchInfo.batchNum}/${totalBatches} (${batch.length} searches)...`);
 
     try {
       const searchQueries = batch.map(q => ({ term: q.term, countryCode: "us", languageCode: "en", maxPagesPerQuery: 1, resultsPerPage: 5 }));
@@ -2193,10 +2200,13 @@ async function googleSearchEnrichCreators(
       if (err.costUsd) {
         await storage.incrementApifySpend(runId, err.costUsd);
       }
-      await appendAndSave(`[WARN] Google enrichment batch ${batchNum} failed: ${err.message}`);
+      await appendAndSave(`[WARN] Google enrichment batch ${batchInfo.batchNum} failed: ${err.message}`);
     }
+  }
 
-    await new Promise(r => setTimeout(r, 1000));
+  for (let i = 0; i < allSearchBatches.length; i += concurrentSearchBatches) {
+    const concurrentSlice = allSearchBatches.slice(i, i + concurrentSearchBatches);
+    await Promise.allSettled(concurrentSlice.map(b => processSearchBatch(b)));
   }
 
   await appendAndSave(`Google enrichment: found new data for ${enrichedLeadIndices.size}/${leadsToSearch.length} creators`);
@@ -2230,15 +2240,22 @@ async function googleBridgeEnrichFacebookGroups(
     }
   }
 
-  const batchSize = 5;
+  const batchSize = 10;
+  const concurrentBridgeBatches = 2;
   const enrichedLeadIndices = new Set<number>();
 
+  const allBridgeBatches: { queries: typeof queries; batchNum: number }[] = [];
+  const totalBatches = Math.ceil(queries.length / batchSize);
   for (let i = 0; i < queries.length; i += batchSize) {
-    const batch = queries.slice(i, i + batchSize);
-    const batchNum = Math.floor(i / batchSize) + 1;
-    const totalBatches = Math.ceil(queries.length / batchSize);
+    allBridgeBatches.push({
+      queries: queries.slice(i, i + batchSize),
+      batchNum: Math.floor(i / batchSize) + 1,
+    });
+  }
 
-    await appendAndSave(`Google Bridge: batch ${batchNum}/${totalBatches} (${batch.length} searches)...`);
+  async function processBridgeBatch(batchInfo: { queries: typeof queries; batchNum: number }): Promise<void> {
+    const batch = batchInfo.queries;
+    await appendAndSave(`Google Bridge: batch ${batchInfo.batchNum}/${totalBatches} (${batch.length} searches)...`);
 
     try {
       const { items: results, costUsd: actorCost } = await runActorAndGetResults("apify~google-search-scraper", {
@@ -2340,10 +2357,13 @@ async function googleBridgeEnrichFacebookGroups(
       if (err.costUsd) {
         await storage.incrementApifySpend(runId, err.costUsd);
       }
-      await appendAndSave(`[WARN] Google Bridge batch ${batchNum} failed: ${err.message}`);
+      await appendAndSave(`[WARN] Google Bridge batch ${batchInfo.batchNum} failed: ${err.message}`);
     }
+  }
 
-    await new Promise(r => setTimeout(r, 1000));
+  for (let i = 0; i < allBridgeBatches.length; i += concurrentBridgeBatches) {
+    const concurrentSlice = allBridgeBatches.slice(i, i + concurrentBridgeBatches);
+    await Promise.allSettled(concurrentSlice.map(b => processBridgeBatch(b)));
   }
 
   await appendAndSave(`Google Bridge: found new data for ${enrichedLeadIndices.size}/${fbLeads.length} Facebook groups`);
@@ -2848,17 +2868,24 @@ async function crawlCreatorWebsitesForEmails(
   await appendAndSave(`Website crawl: found ${websiteEntries.length} unique personal websites to crawl`);
 
   const batchSize = 5;
-  for (let i = 0; i < websiteEntries.length; i += batchSize) {
-    const batch = websiteEntries.slice(i, i + batchSize);
-    const batchNum = Math.floor(i / batchSize) + 1;
-    const totalBatches = Math.ceil(websiteEntries.length / batchSize);
+  const concurrentBatches = 3;
+  const allBatches: { entries: [string, string][]; batchNum: number }[] = [];
+  const totalBatches = Math.ceil(websiteEntries.length / batchSize);
 
-    await appendAndSave(`Website crawl: processing batch ${batchNum}/${totalBatches} (${batch.length} sites)...`);
+  for (let i = 0; i < websiteEntries.length; i += batchSize) {
+    allBatches.push({
+      entries: websiteEntries.slice(i, i + batchSize),
+      batchNum: Math.floor(i / batchSize) + 1,
+    });
+  }
+
+  async function processCrawlBatch(batch: { entries: [string, string][]; batchNum: number }): Promise<void> {
+    await appendAndSave(`Website crawl: processing batch ${batch.batchNum}/${totalBatches} (${batch.entries.length} sites)...`);
 
     const startUrls: { url: string }[] = [];
     const globs: { glob: string }[] = [];
 
-    for (const [domain, url] of batch) {
+    for (const [domain, url] of batch.entries) {
       const baseUrl = url.replace(/\/+$/, "");
       startUrls.push({ url: baseUrl });
       const subpages = ["/contact", "/about", "/about-us", "/contact-us", "/team"];
@@ -2875,7 +2902,7 @@ async function crawlCreatorWebsitesForEmails(
       const { items: results, costUsd: actorCost } = await runActorAndGetResults("apify~cheerio-scraper", {
         startUrls,
         globs,
-        maxCrawlPages: 5 * batch.length,
+        maxCrawlPages: 5 * batch.entries.length,
         maxConcurrency: 3,
         pageFunction: `async function pageFunction(context) {
   const { $, request } = context;
@@ -2911,13 +2938,18 @@ async function crawlCreatorWebsitesForEmails(
         }
       }
 
-      await appendAndSave(`Website crawl batch ${batchNum}: found ${emailMap.size} total emails so far`);
+      await appendAndSave(`Website crawl batch ${batch.batchNum}: found ${emailMap.size} total emails so far`);
     } catch (err: any) {
       if (err.costUsd) {
         await storage.incrementApifySpend(runId, err.costUsd);
       }
-      await appendAndSave(`[WARN] Website crawl batch ${batchNum} failed: ${err.message}`);
+      await appendAndSave(`[WARN] Website crawl batch ${batch.batchNum} failed: ${err.message}`);
     }
+  }
+
+  for (let i = 0; i < allBatches.length; i += concurrentBatches) {
+    const concurrentSlice = allBatches.slice(i, i + concurrentBatches);
+    await Promise.allSettled(concurrentSlice.map(b => processCrawlBatch(b)));
   }
 
   await appendAndSave(`Website crawl complete: found ${emailMap.size} emails from ${websiteEntries.length} websites`);
@@ -3015,14 +3047,14 @@ export async function runPipeline(runId: number): Promise<void> {
       await appendAndSave(`Real name extraction: found real names for ${realNameCount}/${allPlatformLeads.length} leads from about text`);
     }
 
+    const enrichGroup1: { name: string; promise: Promise<void> }[] = [];
+
     const hasFacebookLeads = allPlatformLeads.some(l => l.source === "facebook");
     if (hasFacebookLeads) {
       const fbLeadsNeedingEnrich = allPlatformLeads.filter(l => l.source === "facebook" && !l.email && !l.ownedChannels?.website && !l.ownedChannels?.linkedin);
       if (fbLeadsNeedingEnrich.length > 0) {
-        await appendAndSave(`Google Bridge: ${fbLeadsNeedingEnrich.length} Facebook groups need leader/org lookup`, 29, "Step 1b: Google Bridge for Facebook groups");
-        await googleBridgeEnrichFacebookGroups(runId, allPlatformLeads, appendAndSave);
-      } else {
-        await appendAndSave("Google Bridge: skipped (all Facebook leads already have contact paths)");
+        await appendAndSave(`Google Bridge: ${fbLeadsNeedingEnrich.length} Facebook groups need leader/org lookup`, 29, "Step 1b: Parallel enrichment group 1");
+        enrichGroup1.push({ name: "Google Bridge", promise: googleBridgeEnrichFacebookGroups(runId, allPlatformLeads, appendAndSave) });
       }
     }
 
@@ -3035,32 +3067,44 @@ export async function runPipeline(runId: number): Promise<void> {
 
     const nonPodcastLeadsWithRss = allPlatformLeads.filter(l => l.source !== "podcast" && l.ownedChannels?.rss && l.ownedChannels.rss.startsWith("http") && !l.email);
     if (nonPodcastLeadsWithRss.length > 0) {
-      await appendAndSave(`RSS feed scrape: ${nonPodcastLeadsWithRss.length} non-podcast leads have RSS feeds for email extraction`, 29, "Step 1c: RSS feed email extraction");
-      await enrichFromRssFeeds(runId, allPlatformLeads.filter(l => l.source !== "podcast"), appendAndSave);
+      await appendAndSave(`RSS feed scrape: ${nonPodcastLeadsWithRss.length} non-podcast leads have RSS feeds`);
+      enrichGroup1.push({ name: "RSS feeds", promise: enrichFromRssFeeds(runId, allPlatformLeads.filter(l => l.source !== "podcast"), appendAndSave) });
     }
 
     const leadsWithLinktreeInitial = allPlatformLeads.filter(l =>
       !l.email && l.ownedChannels?.linktree && l.ownedChannels.linktree.startsWith("http")
     );
     if (leadsWithLinktreeInitial.length > 0) {
-      await appendAndSave(`Link aggregator scrape: ${leadsWithLinktreeInitial.length} leads have Linktree/Beacons pages`, 28, "Step 1b: Link aggregator scrape");
-      await enrichFromLinkAggregators(runId, allPlatformLeads, appendAndSave);
+      await appendAndSave(`Link aggregator scrape: ${leadsWithLinktreeInitial.length} leads have Linktree/Beacons pages`);
+      enrichGroup1.push({ name: "Link aggregators (pass 1)", promise: enrichFromLinkAggregators(runId, allPlatformLeads, appendAndSave) });
     }
+
+    if (enrichGroup1.length > 0) {
+      await appendAndSave(`Running ${enrichGroup1.length} enrichment tasks in parallel: ${enrichGroup1.map(t => t.name).join(", ")}`);
+      const g1Results = await Promise.allSettled(enrichGroup1.map(t => t.promise));
+      for (let i = 0; i < g1Results.length; i++) {
+        if (g1Results[i].status === "rejected") {
+          await appendAndSave(`[WARN] ${enrichGroup1[i].name} failed: ${(g1Results[i] as PromiseRejectedResult).reason?.message || "Unknown error"}`);
+        }
+      }
+    }
+
+    const enrichGroup2: { name: string; promise: Promise<void> }[] = [];
 
     const leadsWithYouTube = allPlatformLeads.filter(l =>
       l.ownedChannels?.youtube && l.ownedChannels.youtube.startsWith("http")
     );
     if (leadsWithYouTube.length > 0) {
-      await appendAndSave(`YouTube about pages: ${leadsWithYouTube.length} leads have YouTube channels`, 30, "Step 2a: YouTube about page scrape");
-      await enrichFromYouTubeAboutPages(runId, allPlatformLeads, appendAndSave);
+      await appendAndSave(`YouTube about pages: ${leadsWithYouTube.length} leads have YouTube channels`, 30, "Step 2: Parallel enrichment group 2");
+      enrichGroup2.push({ name: "YouTube about pages", promise: enrichFromYouTubeAboutPages(runId, allPlatformLeads, appendAndSave) });
     }
 
     const leadsWithInstagram = allPlatformLeads.filter(l =>
       l.ownedChannels?.instagram && l.ownedChannels.instagram.startsWith("http")
     );
     if (leadsWithInstagram.length > 0) {
-      await appendAndSave(`Instagram bios: ${leadsWithInstagram.length} leads have Instagram profiles`, 31, "Step 2b: Instagram bio scrape");
-      await enrichFromInstagramBios(runId, allPlatformLeads, appendAndSave);
+      await appendAndSave(`Instagram bios: ${leadsWithInstagram.length} leads have Instagram profiles`);
+      enrichGroup2.push({ name: "Instagram bios", promise: enrichFromInstagramBios(runId, allPlatformLeads, appendAndSave) });
     }
 
     const leadsWithTwitter = allPlatformLeads.filter(l => {
@@ -3068,25 +3112,47 @@ export async function runPipeline(runId: number): Promise<void> {
       return tw && (tw.startsWith("http") || tw.startsWith("@"));
     });
     if (leadsWithTwitter.length > 0) {
-      await appendAndSave(`Twitter bios: ${leadsWithTwitter.length} leads have Twitter/X profiles`, 32, "Step 2c: Twitter/X bio scrape");
-      await enrichFromTwitterBios(runId, allPlatformLeads, appendAndSave);
+      await appendAndSave(`Twitter bios: ${leadsWithTwitter.length} leads have Twitter/X profiles`);
+      enrichGroup2.push({ name: "Twitter/X bios", promise: enrichFromTwitterBios(runId, allPlatformLeads, appendAndSave) });
     }
+
+    if (enrichGroup2.length > 0) {
+      await appendAndSave(`Running ${enrichGroup2.length} social scrape tasks in parallel: ${enrichGroup2.map(t => t.name).join(", ")}`);
+      const g2Results = await Promise.allSettled(enrichGroup2.map(t => t.promise));
+      for (let i = 0; i < g2Results.length; i++) {
+        if (g2Results[i].status === "rejected") {
+          await appendAndSave(`[WARN] ${enrichGroup2[i].name} failed: ${(g2Results[i] as PromiseRejectedResult).reason?.message || "Unknown error"}`);
+        }
+      }
+    }
+
+    const enrichGroup3: { name: string; promise: Promise<void> }[] = [];
 
     const newLinktreeLeads = allPlatformLeads.filter(l =>
       !l.email && l.ownedChannels?.linktree && l.ownedChannels.linktree.startsWith("http") &&
       !leadsWithLinktreeInitial.includes(l)
     );
     if (newLinktreeLeads.length > 0) {
-      await appendAndSave(`Link aggregator scrape (pass 2): ${newLinktreeLeads.length} new aggregator URLs from YouTube/IG/Twitter`, 33, "Step 2d: Link aggregator scrape (new)");
-      await enrichFromLinkAggregators(runId, allPlatformLeads, appendAndSave);
+      await appendAndSave(`Link aggregator scrape (pass 2): ${newLinktreeLeads.length} new aggregator URLs from YouTube/IG/Twitter`, 33, "Step 2d: Post-social enrichment");
+      enrichGroup3.push({ name: "Link aggregators (pass 2)", promise: enrichFromLinkAggregators(runId, allPlatformLeads, appendAndSave) });
     }
 
     const leadsWithoutContactInfo = allPlatformLeads.filter(l => !l.email && !l.ownedChannels?.website && !l.ownedChannels?.linkedin);
     if (leadsWithoutContactInfo.length > 0) {
-      await appendAndSave(`Google enrichment: ${leadsWithoutContactInfo.length} leads need website/LinkedIn lookup`, 35, "Step 2e: Google contact search");
-      await googleSearchEnrichCreators(runId, allPlatformLeads, appendAndSave);
+      await appendAndSave(`Google enrichment: ${leadsWithoutContactInfo.length} leads need website/LinkedIn lookup`);
+      enrichGroup3.push({ name: "Google contact search", promise: googleSearchEnrichCreators(runId, allPlatformLeads, appendAndSave) });
     } else {
       await appendAndSave("Google enrichment: skipped (all leads already have contact info)");
+    }
+
+    if (enrichGroup3.length > 0) {
+      await appendAndSave(`Running ${enrichGroup3.length} post-social tasks in parallel: ${enrichGroup3.map(t => t.name).join(", ")}`);
+      const g3Results = await Promise.allSettled(enrichGroup3.map(t => t.promise));
+      for (let i = 0; i < g3Results.length; i++) {
+        if (g3Results[i].status === "rejected") {
+          await appendAndSave(`[WARN] ${enrichGroup3[i].name} failed: ${(g3Results[i] as PromiseRejectedResult).reason?.message || "Unknown error"}`);
+        }
+      }
     }
 
     let slugDomainsProbed = 0;
