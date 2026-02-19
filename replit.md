@@ -97,13 +97,17 @@ The discovery form uses platform-specific tabs. Patreon, Facebook Groups, Podcas
 - `code_crafter~leads-finder` - Email enrichment fallback ($1.50/1k leads, verified emails by domain)
 
 ## Autonomous Mode
-- Users provide keywords + dollar budget ($1-$20), system auto-selects platforms and optimizes enrichment
+- Users provide keywords + dollar budget ($1-$20) OR email target (1-500), system auto-selects platforms and optimizes enrichment
+- Bidirectional estimation: fill budget → estimate emails, fill email target → auto-calculate cost
+- Podcast toggle: on/off switch, requires $3+ budget to include (high yield 55% but expensive $0.03/lead)
 - Budget engine (`server/budget-engine.ts`) maps keywords to platforms, allocates budget 65/35 discovery/enrichment
 - Platform cost estimates: Patreon $0.03, Facebook $0.01, Podcast $0.03, Substack $0.01 per lead
 - Email yield rates: Podcast 55%, Substack 40%, Patreon 35%, Facebook 15%
-- Pipeline checks budget at key expensive steps (social scraping, Google search, website crawl, Leads Finder) and skips when exhausted
-- Schema fields: `isAutonomous`, `budgetUsd`, `budgetAllocation` on runs table
-- Frontend: Mode toggle (Autonomous/Manual) on home page, budget display on run status page
+- Dual stopping condition: discovery stops when either email target OR budget is exhausted, whichever first
+- Only social scraping (Instagram/Twitter/YouTube actors) is budget-gated; enrichment (website crawl, Google search, Leads Finder) always runs
+- Schema fields: `isAutonomous`, `budgetUsd`, `budgetAllocation`, `emailTarget` on runs table
+- Frontend: Mode toggle (Autonomous/Manual) on home page, budget + email target display on run status page
+- Preview endpoint: `POST /api/runs/autonomous/preview` returns estimated allocation for given budget/emailTarget/podcastEnabled
 
 ## API Endpoints
 - `POST /api/runs` - Start a new manual pipeline run

@@ -65,6 +65,8 @@ export const runs = pgTable("runs", {
   isAutonomous: boolean("is_autonomous").default(false),
   budgetUsd: real("budget_usd").default(0),
   budgetAllocation: jsonb("budget_allocation").$type<BudgetAllocation>(),
+  emailTarget: integer("email_target").default(0),
+  podcastEnabled: boolean("podcast_enabled").default(true),
 });
 
 export const sourceUrls = pgTable("source_urls", {
@@ -188,6 +190,7 @@ export interface BudgetAllocation {
   platforms: PlatformAllocation[];
   estimatedTotalLeads: number;
   estimatedEmailRate: number;
+  estimatedEmails: number;
 }
 
 export const PLATFORM_COST_PER_LEAD: Record<string, number> = {
@@ -224,7 +227,9 @@ export const KEYWORD_PLATFORM_MAP: Record<string, SourceId[]> = {
 
 export const autonomousParamsSchema = z.object({
   seedKeywords: z.array(z.string()).min(1, "At least one keyword is required"),
-  budgetUsd: z.number().min(1).max(20),
+  budgetUsd: z.number().min(0.5).max(20).optional(),
+  emailTarget: z.number().min(1).max(500).optional(),
+  podcastEnabled: z.boolean().default(true),
   seedGeos: z.array(z.string()).default(["United States"]),
 });
 

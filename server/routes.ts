@@ -5,7 +5,7 @@ import { runPipeline, reEnrichRun, resumeRun, activeRunIds, cancelledRunIds } fr
 import { runParamsSchema, DEFAULT_RUN_PARAMS } from "@shared/schema";
 import { fromError } from "zod-validation-error";
 import { log } from "./index";
-import { allocateBudget } from "./budget-engine";
+import { allocateBudget, estimateBudgetForEmailTarget } from "./budget-engine";
 
 async function recoverStuckRuns() {
   try {
@@ -79,18 +79,50 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/runs/autonomous", async (req, res) => {
+  app.post("/api/runs/autonomous/preview", async (req, res) => {
     try {
-      const { keywords, budgetUsd } = req.body;
+      const { keywords, budgetUsd, emailTarget, podcastEnabled } = req.body;
       if (!keywords || !Array.isArray(keywords) || keywords.length === 0) {
         return res.status(400).json({ message: "Keywords are required" });
       }
-      const budget = Number(budgetUsd);
-      if (!budget || budget < 1 || budget > 20) {
-        return res.status(400).json({ message: "Budget must be between $1 and $20" });
-      }
+      const podcast = podcastEnabled !== false;
 
-      const allocation = allocateBudget(keywords, budget);
+      if (emailTarget && Number(emailTarget) > 0) {
+        const allocation = estimateBudgetForEmailTarget(keywords, Number(emailTarget), podcast);
+        return res.json({ allocation, derivedFrom: "emailTarget" });
+      }
+      const budget = Number(budgetUsd) || 5;
+      const allocation = allocateBudget(keywords, Math.max(1, Math.min(20, budget)), podcast);
+      return res.json({ allocation, derivedFrom: "budget" });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.post("/api/runs/autonomous", async (req, res) => {
+    try {
+      const { keywords, budgetUsd, emailTarget, podcastEnabled } = req.body;
+      if (!keywords || !Array.isArray(keywords) || keywords.length === 0) {
+        return res.status(400).json({ message: "Keywords are required" });
+      }
+      const podcast = podcastEnabled !== false;
+
+      let allocation;
+      let budget: number;
+      let finalEmailTarget: number;
+
+      if (emailTarget && Number(emailTarget) > 0) {
+        allocation = estimateBudgetForEmailTarget(keywords, Number(emailTarget), podcast);
+        budget = budgetUsd && Number(budgetUsd) > 0 ? Number(budgetUsd) : allocation.totalBudgetUsd;
+        finalEmailTarget = Number(emailTarget);
+      } else {
+        budget = Number(budgetUsd);
+        if (!budget || budget < 1 || budget > 20) {
+          return res.status(400).json({ message: "Budget must be between $1 and $20" });
+        }
+        allocation = allocateBudget(keywords, budget, podcast);
+        finalEmailTarget = allocation.estimatedEmails;
+      }
 
       const enabledSources = allocation.platforms.map(p => p.platform);
       const totalLeads = allocation.platforms.reduce((s, p) => s + p.maxLeads, 0);
@@ -114,6 +146,8 @@ export async function registerRoutes(
         isAutonomous: true,
         budgetUsd: budget,
         budgetAllocation: allocation,
+        emailTarget: finalEmailTarget,
+        podcastEnabled: podcast,
       });
 
       setTimeout(() => {

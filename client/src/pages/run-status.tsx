@@ -245,10 +245,13 @@ export default function RunStatus() {
           <Card className="p-3 space-y-1">
             <div className="flex items-center gap-1.5 text-muted-foreground">
               <Mail className="w-3.5 h-3.5" />
-              <span className="text-xs">With Email</span>
+              <span className="text-xs">{(run as any).emailTarget > 0 ? "Emails / Target" : "With Email"}</span>
             </div>
             <p className="text-lg font-semibold text-chart-3" data-testid="text-with-email">
               {(run as any).leadsWithEmail || 0}
+              {(run as any).emailTarget > 0 && (
+                <span className="text-sm font-normal text-muted-foreground"> / {(run as any).emailTarget}</span>
+              )}
             </p>
           </Card>
           <Card className="p-3 space-y-1">

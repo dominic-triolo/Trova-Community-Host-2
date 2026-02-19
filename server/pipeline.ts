@@ -27,6 +27,13 @@ async function isBudgetExhausted(runId: number, estimatedNextCost: number = 0): 
   return (spentUsd + estimatedNextCost) > budgetUsd * 1.05;
 }
 
+async function isEmailTargetReached(runId: number): Promise<boolean> {
+  const run = await storage.getRun(runId);
+  if (!run || !run.emailTarget || run.emailTarget <= 0) return false;
+  const currentEmails = run.leadsWithEmail || 0;
+  return currentEmails >= run.emailTarget;
+}
+
 async function markStepComplete(runId: number, step: PipelineStep): Promise<void> {
   await storage.updateRun(runId, { lastCompletedStep: step });
 }
@@ -3092,9 +3099,11 @@ export async function runPipeline(runId: number): Promise<void> {
 
     const isAutonomousRun = run.isAutonomous || false;
     const budgetUsd = run.budgetUsd || 0;
+    const globalEmailTarget = run.emailTarget || 0;
 
     if (isAutonomousRun && budgetUsd > 0) {
-      await appendAndSave(`Autonomous mode: $${budgetUsd.toFixed(2)} budget`, 2, "Step 1: Platform-specific discovery");
+      const targetNote = globalEmailTarget > 0 ? `, target: ${globalEmailTarget} emails` : "";
+      await appendAndSave(`Autonomous mode: $${budgetUsd.toFixed(2)} budget${targetNote}`, 2, "Step 1: Platform-specific discovery");
     } else {
       await appendAndSave("Pipeline started", 2, "Step 1: Platform-specific discovery");
     }
@@ -3221,8 +3230,10 @@ export async function runPipeline(runId: number): Promise<void> {
     const enrichGroup2: { name: string; promise: Promise<void> }[] = [];
 
     const budgetExhaustedBeforeG2 = await isBudgetExhausted(runId, 0.05);
-    if (budgetExhaustedBeforeG2) {
-      await appendAndSave(`Budget limit reached ($${(await getRunBudgetInfo(runId)).spentUsd.toFixed(2)} spent) — skipping social scraping to preserve budget for enrichment`);
+    const emailTargetReachedBeforeG2 = await isEmailTargetReached(runId);
+    if (budgetExhaustedBeforeG2 || emailTargetReachedBeforeG2) {
+      const reason = emailTargetReachedBeforeG2 ? "Email target reached" : `Budget limit reached ($${(await getRunBudgetInfo(runId)).spentUsd.toFixed(2)} spent)`;
+      await appendAndSave(`${reason} — skipping social scraping`);
     } else {
       const leadsWithYouTube = allPlatformLeads.filter(l =>
         l.ownedChannels?.youtube && l.ownedChannels.youtube.startsWith("http")

@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import { useLocation } from "wouter";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -12,6 +12,7 @@ import {
   AVAILABLE_ENRICHMENTS,
   type RunParams,
   type Run,
+  type BudgetAllocation,
 } from "@shared/schema";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -39,7 +40,10 @@ import {
   Zap,
   DollarSign,
   Wrench,
+  Target,
+  Mic,
 } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
 import { SiPatreon, SiFacebook, SiLinkedin, SiApplepodcasts, SiSubstack } from "react-icons/si";
 
 function UsedKeywordsSuggestions({
@@ -112,9 +116,14 @@ export default function Home() {
   const { toast } = useToast();
 
   const [mode, setMode] = useState<"manual" | "autonomous">("manual");
-  const [autoBudget, setAutoBudget] = useState(5);
+  const [autoBudget, setAutoBudget] = useState<number | "">(5);
+  const [autoEmailTarget, setAutoEmailTarget] = useState<number | "">("");
+  const [autoPodcastEnabled, setAutoPodcastEnabled] = useState(true);
   const [autoKeywords, setAutoKeywords] = useState<string[]>([]);
   const [autoCustomKeyword, setAutoCustomKeyword] = useState("");
+  const [autoInputMode, setAutoInputMode] = useState<"budget" | "emailTarget">("budget");
+  const [previewAllocation, setPreviewAllocation] = useState<BudgetAllocation | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
 
   const [params, setParams] = useState<RunParams>({
     ...DEFAULT_RUN_PARAMS,
@@ -154,17 +163,55 @@ export default function Home() {
     },
   });
 
+  const fetchPreview = useCallback(async () => {
+    if (autoKeywords.length === 0) {
+      setPreviewAllocation(null);
+      return;
+    }
+    setPreviewLoading(true);
+    try {
+      const body: any = { keywords: autoKeywords, podcastEnabled: autoPodcastEnabled };
+      if (autoInputMode === "emailTarget" && autoEmailTarget && Number(autoEmailTarget) > 0) {
+        body.emailTarget = Number(autoEmailTarget);
+      } else if (autoBudget && Number(autoBudget) > 0) {
+        body.budgetUsd = Number(autoBudget);
+      }
+      const res = await apiRequest("POST", "/api/runs/autonomous/preview", body);
+      const data = await res.json();
+      setPreviewAllocation(data.allocation);
+      if (data.derivedFrom === "emailTarget" && data.allocation) {
+        setAutoBudget(data.allocation.totalBudgetUsd);
+      } else if (data.derivedFrom === "budget" && data.allocation) {
+        setAutoEmailTarget(data.allocation.estimatedEmails);
+      }
+    } catch {
+      setPreviewAllocation(null);
+    }
+    setPreviewLoading(false);
+  }, [autoKeywords, autoBudget, autoEmailTarget, autoPodcastEnabled, autoInputMode]);
+
+  useEffect(() => {
+    const timer = setTimeout(fetchPreview, 400);
+    return () => clearTimeout(timer);
+  }, [fetchPreview]);
+
   const autoRunMutation = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/runs/autonomous", {
-        keywords: autoKeywords,
-        budgetUsd: autoBudget,
-      });
+      const body: any = { keywords: autoKeywords, podcastEnabled: autoPodcastEnabled };
+      if (autoInputMode === "emailTarget" && autoEmailTarget && Number(autoEmailTarget) > 0) {
+        body.emailTarget = Number(autoEmailTarget);
+        if (previewAllocation) {
+          body.budgetUsd = previewAllocation.totalBudgetUsd;
+        }
+      } else if (autoBudget && Number(autoBudget) > 0) {
+        body.budgetUsd = Number(autoBudget);
+      }
+      const res = await apiRequest("POST", "/api/runs/autonomous", body);
       return res.json();
     },
     onSuccess: (data: { id: number }) => {
       queryClient.invalidateQueries({ queryKey: ["/api/runs"] });
-      toast({ title: "Autonomous run started", description: `Budget: $${autoBudget.toFixed(2)}` });
+      toast({ title: "Autonomous run started", description: `Budget: $${(Number(autoBudget) || 0).toFixed(2)}` });
       navigate(`/runs/${data.id}`);
     },
     onError: (err: Error) => {
@@ -258,42 +305,148 @@ export default function Home() {
         {mode === "autonomous" && (
           <div className="space-y-4">
             <Card className="p-4 space-y-4">
-              <div className="flex items-center gap-2">
-                <DollarSign className="w-4 h-4 text-muted-foreground" />
-                <Label className="text-sm font-medium">Budget</Label>
-              </div>
-              <div className="space-y-2">
-                <div className="flex items-center gap-3">
-                  <Input
-                    type="number"
-                    min={1}
-                    max={20}
-                    step={0.5}
-                    value={autoBudget}
-                    onChange={(e) => setAutoBudget(Math.min(20, Math.max(1, parseFloat(e.target.value) || 1)))}
-                    className="w-24"
-                    data-testid="input-auto-budget"
-                  />
-                  <span className="text-sm text-muted-foreground">USD ($1 - $20)</span>
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="flex items-center gap-2">
+                  <DollarSign className="w-4 h-4 text-muted-foreground" />
+                  <Label className="text-sm font-medium">Budget</Label>
                 </div>
-                <div className="flex gap-1.5">
-                  {[2, 5, 10, 15, 20].map((v) => (
-                    <Badge
-                      key={v}
-                      variant={autoBudget === v ? "default" : "outline"}
-                      className={`cursor-pointer select-none toggle-elevate ${autoBudget === v ? "toggle-elevated" : ""}`}
-                      onClick={() => setAutoBudget(v)}
-                      data-testid={`badge-budget-${v}`}
-                    >
-                      ${v}
+                <div className="flex items-center gap-2">
+                  <Target className="w-4 h-4 text-muted-foreground" />
+                  <Label className="text-sm font-medium">Email Target</Label>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <Input
+                      type="number"
+                      min={1}
+                      max={20}
+                      step={0.5}
+                      value={autoBudget}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (val === "") {
+                          setAutoBudget("");
+                          setAutoInputMode("emailTarget");
+                        } else {
+                          setAutoBudget(Math.min(20, Math.max(0.5, parseFloat(val) || 1)));
+                          setAutoInputMode("budget");
+                        }
+                      }}
+                      className="w-full"
+                      data-testid="input-auto-budget"
+                    />
+                    <span className="text-xs text-muted-foreground whitespace-nowrap">USD</span>
+                  </div>
+                  <div className="flex gap-1.5 flex-wrap">
+                    {[2, 5, 10, 15, 20].map((v) => (
+                      <Badge
+                        key={v}
+                        variant={autoBudget === v ? "default" : "outline"}
+                        className={`cursor-pointer select-none toggle-elevate ${autoBudget === v ? "toggle-elevated" : ""}`}
+                        onClick={() => { setAutoBudget(v); setAutoInputMode("budget"); }}
+                        data-testid={`badge-budget-${v}`}
+                      >
+                        ${v}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <Input
+                      type="number"
+                      min={1}
+                      max={500}
+                      step={1}
+                      value={autoEmailTarget}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (val === "") {
+                          setAutoEmailTarget("");
+                          setAutoInputMode("budget");
+                        } else {
+                          setAutoEmailTarget(Math.min(500, Math.max(1, parseInt(val) || 1)));
+                          setAutoInputMode("emailTarget");
+                        }
+                      }}
+                      className="w-full"
+                      data-testid="input-auto-email-target"
+                    />
+                    <span className="text-xs text-muted-foreground whitespace-nowrap">emails</span>
+                  </div>
+                  <div className="flex gap-1.5 flex-wrap">
+                    {[10, 25, 50, 100, 200].map((v) => (
+                      <Badge
+                        key={v}
+                        variant={autoEmailTarget === v ? "default" : "outline"}
+                        className={`cursor-pointer select-none toggle-elevate ${autoEmailTarget === v ? "toggle-elevated" : ""}`}
+                        onClick={() => { setAutoEmailTarget(v); setAutoInputMode("emailTarget"); }}
+                        data-testid={`badge-email-target-${v}`}
+                      >
+                        {v}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                {autoInputMode === "budget"
+                  ? "Set your budget and the system estimates how many emails it can find. Or type an email target to auto-calculate the cost."
+                  : "Set your email target and the system estimates the cost. Or type a budget to see how many emails it can find."}
+              </p>
+            </Card>
+
+            <Card className="p-4 space-y-3">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="flex items-center gap-2">
+                  <Mic className="w-4 h-4 text-muted-foreground" />
+                  <Label className="text-sm font-medium">Include Podcasts</Label>
+                </div>
+                <Switch
+                  checked={autoPodcastEnabled}
+                  onCheckedChange={setAutoPodcastEnabled}
+                  data-testid="switch-podcast-toggle"
+                />
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                {autoPodcastEnabled
+                  ? "Podcasts have the highest email yield (55%) but cost ~$0.03/lead. Requires $3+ budget."
+                  : "Podcasts disabled. Using cheaper platforms (Facebook, Substack, Patreon) only."}
+              </p>
+            </Card>
+
+            {previewAllocation && autoKeywords.length > 0 && (
+              <Card className="p-4 space-y-3">
+                <div className="flex items-center gap-2">
+                  <Settings2 className="w-4 h-4 text-muted-foreground" />
+                  <Label className="text-sm font-medium">Estimated Plan</Label>
+                  {previewLoading && <Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />}
+                </div>
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="space-y-0.5">
+                    <p className="text-xs text-muted-foreground">Est. Leads</p>
+                    <p className="text-sm font-semibold" data-testid="text-est-leads">{previewAllocation.estimatedTotalLeads}</p>
+                  </div>
+                  <div className="space-y-0.5">
+                    <p className="text-xs text-muted-foreground">Est. Emails</p>
+                    <p className="text-sm font-semibold text-chart-3" data-testid="text-est-emails">{previewAllocation.estimatedEmails}</p>
+                  </div>
+                  <div className="space-y-0.5">
+                    <p className="text-xs text-muted-foreground">Email Rate</p>
+                    <p className="text-sm font-semibold" data-testid="text-est-rate">{Math.round(previewAllocation.estimatedEmailRate * 100)}%</p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {previewAllocation.platforms.map((p) => (
+                    <Badge key={p.platform} variant="outline" data-testid={`badge-preview-platform-${p.platform}`}>
+                      {p.platform} ({p.maxLeads} leads, ${p.estimatedCostUsd.toFixed(2)})
                     </Badge>
                   ))}
                 </div>
-                <p className="text-[11px] text-muted-foreground">
-                  The system auto-selects platforms and optimizes enrichment to maximize leads with valid emails within your budget.
-                </p>
-              </div>
-            </Card>
+              </Card>
+            )}
 
             <Card className="p-4 space-y-4">
               <div className="flex items-center gap-2">
@@ -331,9 +484,9 @@ export default function Home() {
                         className={`cursor-pointer select-none toggle-elevate ${isActive ? "toggle-elevated" : ""}`}
                         onClick={() => {
                           if (isActive) {
-                            setAutoKeywords((prev) => prev.filter((kw) => !rec.keywords.includes(kw)));
+                            setAutoKeywords((prev) => prev.filter((kw) => !(rec.keywords as readonly string[]).includes(kw)));
                           } else {
-                            setAutoKeywords((prev) => [...new Set([...prev, ...rec.keywords])]);
+                            setAutoKeywords((prev) => Array.from(new Set([...prev, ...rec.keywords])));
                           }
                         }}
                         data-testid={`badge-auto-rec-${rec.label.replace(/\s+/g, "-")}`}
@@ -369,12 +522,14 @@ export default function Home() {
 
             <div className="flex items-center justify-between gap-4 flex-wrap">
               <p className="text-sm text-muted-foreground">
-                {autoKeywords.length} keyword{autoKeywords.length !== 1 ? "s" : ""} / ${autoBudget.toFixed(2)} budget
+                {autoKeywords.length} keyword{autoKeywords.length !== 1 ? "s" : ""}
+                {autoBudget ? ` / $${Number(autoBudget).toFixed(2)} budget` : ""}
+                {autoEmailTarget ? ` / ${autoEmailTarget} email target` : ""}
               </p>
               <Button
                 size="lg"
                 onClick={() => autoRunMutation.mutate()}
-                disabled={autoRunMutation.isPending || autoKeywords.length === 0}
+                disabled={autoRunMutation.isPending || autoKeywords.length === 0 || (!autoBudget && !autoEmailTarget)}
                 data-testid="button-run-autonomous"
                 className="gap-2 min-w-[180px]"
               >
