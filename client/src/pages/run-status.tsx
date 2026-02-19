@@ -27,6 +27,7 @@ import {
   DollarSign,
   AlertTriangle,
   Play,
+  RotateCcw,
 } from "lucide-react";
 
 function StatusBadge({ status }: { status: string }) {
@@ -116,6 +117,20 @@ export default function RunStatus() {
     },
   });
 
+  const restartMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/runs/${id}/restart`);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/runs", id] });
+      toast({ title: "Restart started", description: "Re-running pipeline from the beginning..." });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Failed to restart run", description: err.message, variant: "destructive" });
+    },
+  });
+
   if (isLoading) {
     return (
       <div className="flex-1 overflow-auto p-6 max-w-4xl mx-auto space-y-4">
@@ -181,11 +196,23 @@ export default function RunStatus() {
               <Button
                 size="sm"
                 onClick={() => resumeMutation.mutate()}
-                disabled={resumeMutation.isPending}
+                disabled={resumeMutation.isPending || restartMutation.isPending}
                 data-testid="button-resume"
               >
                 <Play className={`w-4 h-4 mr-1 ${resumeMutation.isPending ? "animate-spin" : ""}`} />
                 Resume (from {PIPELINE_STEP_LABELS[(run as any).lastCompletedStep as PipelineStep] || (run as any).lastCompletedStep})
+              </Button>
+            )}
+            {(run.status === "interrupted" || run.status === "failed") && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => restartMutation.mutate()}
+                disabled={restartMutation.isPending || resumeMutation.isPending}
+                data-testid="button-restart"
+              >
+                <RotateCcw className={`w-4 h-4 mr-1 ${restartMutation.isPending ? "animate-spin" : ""}`} />
+                Restart from beginning
               </Button>
             )}
             {(run.status === "succeeded" || run.status === "failed" || run.status === "interrupted") && (

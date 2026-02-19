@@ -39,6 +39,8 @@ export interface IStorage {
   listLeadsByStatus(status: string): Promise<Lead[]>;
   countLeadsByRunAndStatus(runId: number, status: string): Promise<number>;
   countLeadsByRunWithEmail(runId: number): Promise<number>;
+  deleteLeadsByRun(runId: number): Promise<void>;
+  deleteSourceUrlsByRun(runId: number): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -171,6 +173,14 @@ export class DatabaseStorage implements IStorage {
       and(eq(leads.runId, runId), sql`${leads.email} IS NOT NULL AND ${leads.email} != ''`)
     );
     return result?.count || 0;
+  }
+
+  async deleteLeadsByRun(runId: number): Promise<void> {
+    await db.delete(leads).where(eq(leads.runId, runId));
+  }
+
+  async deleteSourceUrlsByRun(runId: number): Promise<void> {
+    await db.delete(sourceUrls).where(eq(sourceUrls.runId, runId));
   }
 }
 

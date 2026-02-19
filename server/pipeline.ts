@@ -3177,6 +3177,8 @@ export async function runPipeline(runId: number): Promise<void> {
       }
     }
 
+    await markStepComplete(runId, PIPELINE_STEPS.DISCOVERY);
+
     const realNameCount = allPlatformLeads.filter(l => {
       const aboutText = l.raw?.about || "";
       return extractRealNameFromAbout(aboutText, l.communityName || "") !== null;
@@ -3226,6 +3228,7 @@ export async function runPipeline(runId: number): Promise<void> {
         }
       }
     }
+    await markStepComplete(runId, PIPELINE_STEPS.FB_GOOGLE_BRIDGE);
 
     const enrichGroup2: { name: string; promise: Promise<void> }[] = [];
 
@@ -3270,6 +3273,7 @@ export async function runPipeline(runId: number): Promise<void> {
         }
       }
     }
+    await markStepComplete(runId, PIPELINE_STEPS.INSTAGRAM_BIOS);
 
     const enrichGroup3: { name: string; promise: Promise<void> }[] = [];
 
@@ -3299,6 +3303,7 @@ export async function runPipeline(runId: number): Promise<void> {
         }
       }
     }
+    await markStepComplete(runId, PIPELINE_STEPS.GOOGLE_CONTACT_SEARCH);
 
     let slugDomainsProbed = 0;
     for (const pl of allPlatformLeads) {
@@ -3337,8 +3342,8 @@ export async function runPipeline(runId: number): Promise<void> {
     } else {
       await appendAndSave("Website crawl: no leads with personal websites needing email");
     }
+    await markStepComplete(runId, PIPELINE_STEPS.WEBSITE_CRAWL);
 
-    await markStepComplete(runId, PIPELINE_STEPS.DISCOVERY);
     await appendAndSave(`Platform discovery complete: ${allPlatformLeads.length} results`, 40, "Step 4: Discovery summary");
 
     const emailsAfterDiscovery = allPlatformLeads.filter((l) => l.email).length;
@@ -4575,6 +4580,10 @@ export async function reEnrichRun(runId: number): Promise<void> {
 
 const STEP_ORDER: PipelineStep[] = [
   PIPELINE_STEPS.DISCOVERY,
+  PIPELINE_STEPS.FB_GOOGLE_BRIDGE,
+  PIPELINE_STEPS.INSTAGRAM_BIOS,
+  PIPELINE_STEPS.GOOGLE_CONTACT_SEARCH,
+  PIPELINE_STEPS.WEBSITE_CRAWL,
   PIPELINE_STEPS.LEAD_CREATION,
   PIPELINE_STEPS.APOLLO,
   PIPELINE_STEPS.LEADS_FINDER,
@@ -4618,6 +4627,30 @@ function dbLeadsToPlatformLeads(leads: any[]): (PlatformLead & { dbId: number })
     tripFitSignals: (lead.tripFitSignals as Record<string, any>) || {},
     raw: (lead.raw as Record<string, any>) || {},
   }));
+}
+
+export async function restartRun(runId: number): Promise<void> {
+  const run = await storage.getRun(runId);
+  if (!run) throw new Error(`Run ${runId} not found`);
+
+  await storage.updateRun(runId, {
+    status: "queued",
+    progress: 0,
+    step: "Restarting...",
+    logs: "",
+    lastCompletedStep: "",
+    startedAt: null,
+    finishedAt: null,
+    urlsDiscovered: 0,
+    leadsExtracted: 0,
+    leadsWithEmail: 0,
+    apifySpendUsd: 0,
+  });
+
+  await storage.deleteLeadsByRun(runId);
+  await storage.deleteSourceUrlsByRun(runId);
+
+  await runPipeline(runId);
 }
 
 export async function resumeRun(runId: number): Promise<void> {
