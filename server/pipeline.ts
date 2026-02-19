@@ -2089,7 +2089,7 @@ async function googleSearchEnrichCreators(
   }
 
   const batchSize = 10;
-  const concurrentSearchBatches = 2;
+  const concurrentSearchBatches = 3;
   const enrichedLeadIndices = new Set<number>();
 
   const allSearchBatches: { queries: { term: string; leadIdx: number }[]; batchNum: number }[] = [];
@@ -2241,7 +2241,7 @@ async function googleBridgeEnrichFacebookGroups(
   }
 
   const batchSize = 10;
-  const concurrentBridgeBatches = 2;
+  const concurrentBridgeBatches = 3;
   const enrichedLeadIndices = new Set<number>();
 
   const allBridgeBatches: { queries: typeof queries; batchNum: number }[] = [];
@@ -2288,7 +2288,7 @@ async function googleBridgeEnrichFacebookGroups(
       }
 
       const totalOrganic = Array.from(resultsByQuery.values()).reduce((sum, arr) => sum + arr.length, 0);
-      await appendAndSave(`Google Bridge: batch ${batchNum} got ${results.length} query results, ${totalOrganic} organic results`);
+      await appendAndSave(`Google Bridge: batch ${batchInfo.batchNum} got ${results.length} query results, ${totalOrganic} organic results`);
 
       for (let j = 0; j < batch.length; j++) {
         const lead = leads[batch[j].leadIdx];
@@ -2390,7 +2390,7 @@ async function enrichFromLinkAggregators(
     const { items: results, costUsd: actorCost } = await runActorAndGetResults("apify~cheerio-scraper", {
       startUrls,
       maxCrawlPages: leadsWithAggregator.length,
-      maxConcurrency: 3,
+      maxConcurrency: 10,
       pageFunction: `async function pageFunction(context) {
   const { $, request } = context;
   const text = $('body').text();
@@ -2493,7 +2493,7 @@ async function enrichFromYouTubeAboutPages(
     const { items: results, costUsd: actorCost } = await runActorAndGetResults("apify~cheerio-scraper", {
       startUrls,
       maxCrawlPages: leadsWithYouTube.length,
-      maxConcurrency: 3,
+      maxConcurrency: 10,
       pageFunction: `async function pageFunction(context) {
   const { $, request } = context;
   const text = $('body').text();
@@ -2868,7 +2868,7 @@ async function crawlCreatorWebsitesForEmails(
   await appendAndSave(`Website crawl: found ${websiteEntries.length} unique personal websites to crawl`);
 
   const batchSize = 5;
-  const concurrentBatches = 3;
+  const concurrentBatches = 5;
   const allBatches: { entries: [string, string][]; batchNum: number }[] = [];
   const totalBatches = Math.ceil(websiteEntries.length / batchSize);
 
@@ -2903,7 +2903,7 @@ async function crawlCreatorWebsitesForEmails(
         startUrls,
         globs,
         maxCrawlPages: 5 * batch.entries.length,
-        maxConcurrency: 3,
+        maxConcurrency: 5,
         pageFunction: `async function pageFunction(context) {
   const { $, request } = context;
   const text = $('body').text();
