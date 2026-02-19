@@ -1637,19 +1637,26 @@ async function googleSearchEnrichCreators(
       for (const r of results) {
         const searchQuery = r.searchQuery?.term || r.searchQuery || "";
         const matchIdx = batch.findIndex(q => q.term === searchQuery);
+        const organic = r.organicResults || [];
         if (matchIdx >= 0) {
           const existing = resultsByQuery.get(matchIdx) || [];
-          existing.push(r);
+          existing.push(...organic);
           resultsByQuery.set(matchIdx, existing);
+        } else if (organic.length > 0) {
+          const fallbackIdx = batch.findIndex(q => searchQuery.includes(q.term.substring(0, 20)));
+          if (fallbackIdx >= 0) {
+            const existing = resultsByQuery.get(fallbackIdx) || [];
+            existing.push(...organic);
+            resultsByQuery.set(fallbackIdx, existing);
+          }
         }
       }
 
+      const totalOrganic = Array.from(resultsByQuery.values()).reduce((sum, arr) => sum + arr.length, 0);
+
       for (let j = 0; j < batch.length; j++) {
         const lead = leads[batch[j].leadIdx];
-        const searchResults = resultsByQuery.get(j) || results.filter(r => {
-          const q = r.searchQuery?.term || r.searchQuery || "";
-          return q.includes(lead.communityName || lead.leaderName || "NOMATCH");
-        });
+        const searchResults = resultsByQuery.get(j) || [];
 
         let foundAnything = false;
 
@@ -1770,19 +1777,27 @@ async function googleBridgeEnrichFacebookGroups(
       for (const r of results) {
         const searchQuery = r.searchQuery?.term || r.searchQuery || "";
         const matchIdx = batch.findIndex(q => q.term === searchQuery);
+        const organic = r.organicResults || [];
         if (matchIdx >= 0) {
           const existing = resultsByQuery.get(matchIdx) || [];
-          existing.push(r);
+          existing.push(...organic);
           resultsByQuery.set(matchIdx, existing);
+        } else if (organic.length > 0) {
+          const fallbackIdx = batch.findIndex(q => searchQuery.includes(q.term.substring(0, 20)));
+          if (fallbackIdx >= 0) {
+            const existing = resultsByQuery.get(fallbackIdx) || [];
+            existing.push(...organic);
+            resultsByQuery.set(fallbackIdx, existing);
+          }
         }
       }
 
+      const totalOrganic = Array.from(resultsByQuery.values()).reduce((sum, arr) => sum + arr.length, 0);
+      await appendAndSave(`Google Bridge: batch ${batchNum} got ${results.length} query results, ${totalOrganic} organic results`);
+
       for (let j = 0; j < batch.length; j++) {
         const lead = leads[batch[j].leadIdx];
-        const searchResults = resultsByQuery.get(j) || results.filter(r => {
-          const q = r.searchQuery?.term || r.searchQuery || "";
-          return q.includes(lead.communityName || "NOMATCH");
-        });
+        const searchResults = resultsByQuery.get(j) || [];
 
         let foundAnything = false;
 
