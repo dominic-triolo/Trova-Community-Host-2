@@ -137,6 +137,9 @@ async function getDealContactsBatch(dealIds: string[]): Promise<Map<string, stri
     await new Promise(r => setTimeout(r, 110));
 
     if (!res.ok) {
+      let errorText = "";
+      try { errorText = await res.text(); } catch {}
+      log(`[ERROR] Deal-contact association batch failed (${res.status}): ${errorText.slice(0, 300)}`, "hubspot-learn");
       for (const id of batch) {
         result.set(id, []);
       }
@@ -164,7 +167,8 @@ async function getContactsBatch(contactIds: string[]): Promise<Map<string, HubSp
     batches.push(contactIds.slice(i, i + 100));
   }
 
-  for (const batch of batches) {
+  for (let i = 0; i < batches.length; i++) {
+    const batch = batches[i];
     const body = {
       inputs: batch.map(id => ({ id })),
       properties: ["email", "firstname", "lastname", "jobtitle", "company", "city", "state", "country", "website", "hs_linkedinid"],
@@ -175,7 +179,12 @@ async function getContactsBatch(contactIds: string[]): Promise<Map<string, HubSp
     });
     await new Promise(r => setTimeout(r, 110));
 
-    if (!res.ok) continue;
+    if (!res.ok) {
+      let errorText = "";
+      try { errorText = await res.text(); } catch {}
+      log(`[ERROR] Contact batch ${i + 1}/${batches.length} failed (${res.status}): ${errorText.slice(0, 300)}`, "hubspot-learn");
+      continue;
+    }
     const data = await res.json();
     for (const contact of data.results || []) {
       result.set(contact.id, contact);
@@ -277,16 +286,26 @@ export async function syncHubSpotDeals(): Promise<{
   log("Fetching contact details (batch)...", "hubspot-learn");
   const allContactIds = Array.from(contactTrips.keys());
   const contactsMap = await getContactsBatch(allContactIds);
-  log(`Retrieved ${contactsMap.size} contact records`, "hubspot-learn");
+  log(`Retrieved ${contactsMap.size} contact records out of ${allContactIds.length} requested`, "hubspot-learn");
+
+  if (contactsMap.size === 0 && allContactIds.length > 0) {
+    log(`[ERROR] No contact records were fetched! Check HubSpot token scopes (needs crm.objects.contacts.read)`, "hubspot-learn");
+    throw new Error(`Failed to fetch contact details from HubSpot (0 of ${allContactIds.length} contacts retrieved). Check that your HubSpot token has the crm.objects.contacts.read scope.`);
+  }
 
   await storage.clearHostProfiles();
 
   let matched = 0;
+  let created = 0;
+  let skippedNoContact = 0;
   const contactEntries = Array.from(contactTrips.values());
 
   for (const entry of contactEntries) {
     const contact = contactsMap.get(entry.contactId);
-    if (!contact) continue;
+    if (!contact) {
+      skippedNoContact++;
+      continue;
+    }
 
     const email = contact.properties.email || "";
     const name = [contact.properties.firstname, contact.properties.lastname].filter(Boolean).join(" ");
@@ -336,14 +355,15 @@ export async function syncHubSpotDeals(): Promise<{
       traits,
       matchedLeadId: matchedLeadId ?? null,
     });
+    created++;
   }
 
   const topHosts = contactEntries.filter(c => c.confirmedTrips >= 2).length;
-  log(`Profiles created: ${contactEntries.length}, matched to leads: ${matched}, top hosts (2+ trips): ${topHosts}`, "hubspot-learn");
+  log(`Profiles created: ${created} (skipped ${skippedNoContact} with no contact record), matched to leads: ${matched}, top hosts (2+ trips): ${topHosts}`, "hubspot-learn");
 
   return {
     dealsFound: allDeals.length,
-    profilesCreated: contactEntries.length,
+    profilesCreated: created,
     matched,
     topHosts,
     pipelineId,
