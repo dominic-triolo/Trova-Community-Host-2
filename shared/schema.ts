@@ -265,6 +265,79 @@ export interface ScoreBreakdown {
   total: number;
 }
 
+export const hostProfiles = pgTable("host_profiles", {
+  id: serial("id").primaryKey(),
+  hubspotContactId: text("hubspot_contact_id").notNull(),
+  email: text("email").default(""),
+  name: text("name").default(""),
+  confirmedTrips: integer("confirmed_trips").default(0),
+  totalDeals: integer("total_deals").default(0),
+  traits: jsonb("traits").$type<HostTraits>(),
+  matchedLeadId: integer("matched_lead_id"),
+  syncedAt: timestamp("synced_at").defaultNow().notNull(),
+});
+
+export interface HostTraits {
+  communityType?: string;
+  source?: string;
+  audienceSize?: number;
+  platformCount?: number;
+  platforms?: string[];
+  hasWebsite?: boolean;
+  hasNewsletter?: boolean;
+  hasYoutube?: boolean;
+  hasPodcast?: boolean;
+  hasInstagram?: boolean;
+  hasLinkedin?: boolean;
+  monetizationSignalCount?: number;
+  tripFitSignalCount?: number;
+  engagementSignalCount?: number;
+  score?: number;
+  nicheIdentity?: number;
+  trustLeadership?: number;
+  engagement?: number;
+  monetization?: number;
+  ownedChannels?: number;
+  tripFit?: number;
+  keywords?: string[];
+}
+
+export const scoringWeights = pgTable("scoring_weights", {
+  id: serial("id").primaryKey(),
+  weights: jsonb("weights").$type<LearnedWeights>(),
+  sampleSize: integer("sample_size").default(0),
+  topHostCount: integer("top_host_count").default(0),
+  computedAt: timestamp("computed_at").defaultNow().notNull(),
+  insights: jsonb("insights").$type<ScoringInsights>(),
+});
+
+export interface LearnedWeights {
+  nicheIdentity: number;
+  trustLeadership: number;
+  engagement: number;
+  monetization: number;
+  ownedChannels: number;
+  tripFit: number;
+}
+
+export interface ScoringInsights {
+  topTraits: { trait: string; prevalence: number }[];
+  topPlatforms: { platform: string; count: number }[];
+  topCommunityTypes: { type: string; count: number }[];
+  avgAudienceSize: number;
+  avgPlatformCount: number;
+  avgScore: number;
+  suggestedKeywords: { keyword: string; score: number }[];
+}
+
+export const insertHostProfileSchema = createInsertSchema(hostProfiles).omit({ id: true, syncedAt: true });
+export type InsertHostProfile = z.infer<typeof insertHostProfileSchema>;
+export type HostProfile = typeof hostProfiles.$inferSelect;
+
+export const insertScoringWeightsSchema = createInsertSchema(scoringWeights).omit({ id: true, computedAt: true });
+export type InsertScoringWeights = z.infer<typeof insertScoringWeightsSchema>;
+export type ScoringWeightsRow = typeof scoringWeights.$inferSelect;
+
 export const insertRunSchema = createInsertSchema(runs).omit({ id: true, createdAt: true });
 export const insertSourceUrlSchema = createInsertSchema(sourceUrls).omit({ id: true, discoveredAt: true });
 export const insertCommunitySchema = createInsertSchema(communities).omit({ id: true, createdAt: true, updatedAt: true });

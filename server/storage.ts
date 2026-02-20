@@ -2,11 +2,14 @@ import { eq, desc, and, sql } from "drizzle-orm";
 import { db } from "./db";
 import {
   runs, sourceUrls, communities, leaders, leads,
+  hostProfiles, scoringWeights,
   type Run, type InsertRun,
   type SourceUrl, type InsertSourceUrl,
   type Community, type InsertCommunity,
   type Leader, type InsertLeader,
   type Lead, type InsertLead,
+  type HostProfile, type InsertHostProfile,
+  type ScoringWeightsRow, type InsertScoringWeights,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -44,6 +47,12 @@ export interface IStorage {
   countLeadsByRunWithNetNewValidEmail(runId: number): Promise<number>;
   deleteLeadsByRun(runId: number): Promise<void>;
   deleteSourceUrlsByRun(runId: number): Promise<void>;
+
+  createHostProfile(data: InsertHostProfile): Promise<HostProfile>;
+  listHostProfiles(): Promise<HostProfile[]>;
+  clearHostProfiles(): Promise<void>;
+  saveScoringWeights(data: InsertScoringWeights): Promise<ScoringWeightsRow>;
+  getLatestScoringWeights(): Promise<ScoringWeightsRow | undefined>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -220,6 +229,29 @@ export class DatabaseStorage implements IStorage {
 
   async deleteSourceUrlsByRun(runId: number): Promise<void> {
     await db.delete(sourceUrls).where(eq(sourceUrls.runId, runId));
+  }
+
+  async createHostProfile(data: InsertHostProfile): Promise<HostProfile> {
+    const [profile] = await db.insert(hostProfiles).values(data).returning();
+    return profile;
+  }
+
+  async listHostProfiles(): Promise<HostProfile[]> {
+    return db.select().from(hostProfiles).orderBy(desc(hostProfiles.confirmedTrips));
+  }
+
+  async clearHostProfiles(): Promise<void> {
+    await db.delete(hostProfiles);
+  }
+
+  async saveScoringWeights(data: InsertScoringWeights): Promise<ScoringWeightsRow> {
+    const [row] = await db.insert(scoringWeights).values(data).returning();
+    return row;
+  }
+
+  async getLatestScoringWeights(): Promise<ScoringWeightsRow | undefined> {
+    const [row] = await db.select().from(scoringWeights).orderBy(desc(scoringWeights.computedAt)).limit(1);
+    return row;
   }
 }
 

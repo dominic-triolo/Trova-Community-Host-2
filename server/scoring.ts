@@ -1,4 +1,27 @@
-import type { ScoreBreakdown } from "@shared/schema";
+import type { ScoreBreakdown, LearnedWeights } from "@shared/schema";
+
+let cachedWeights: LearnedWeights | null = null;
+let weightsCacheTime = 0;
+const CACHE_TTL_MS = 5 * 60 * 1000;
+
+export async function loadLearnedWeights(): Promise<LearnedWeights | null> {
+  if (cachedWeights && Date.now() - weightsCacheTime < CACHE_TTL_MS) {
+    return cachedWeights;
+  }
+  try {
+    const { getLatestWeights } = await import("./hubspot-sync");
+    cachedWeights = await getLatestWeights();
+    weightsCacheTime = Date.now();
+    return cachedWeights;
+  } catch {
+    return null;
+  }
+}
+
+export function clearWeightsCache() {
+  cachedWeights = null;
+  weightsCacheTime = 0;
+}
 
 export interface ScoringInput {
   name: string;
@@ -44,6 +67,15 @@ const TRIP_KEYWORDS = [
   "getaway", "outing", "expedition",
 ];
 
+const DEFAULT_WEIGHTS: LearnedWeights = {
+  nicheIdentity: 20,
+  trustLeadership: 15,
+  engagement: 20,
+  monetization: 15,
+  ownedChannels: 20,
+  tripFit: 10,
+};
+
 function textScore(text: string, keywords: string[], maxScore: number): number {
   const lower = text.toLowerCase();
   let hits = 0;
@@ -66,10 +98,11 @@ function audienceSizeScore(memberCount: number, subscriberCount: number): number
   return 0;
 }
 
-export function scoreLead(input: ScoringInput): ScoreBreakdown {
+export function scoreLead(input: ScoringInput, learnedWeights?: LearnedWeights | null): ScoreBreakdown {
+  const w = learnedWeights || cachedWeights || DEFAULT_WEIGHTS;
   const fullText = [input.name, input.description, input.type, JSON.stringify(input.raw)].join(" ");
 
-  const nicheIdentity = textScore(fullText, NICHE_KEYWORDS, 20);
+  const nicheIdentity = textScore(fullText, NICHE_KEYWORDS, w.nicheIdentity);
 
   let trustLeadership = 0;
   if (input.leaderName) trustLeadership += 4;
@@ -79,7 +112,7 @@ export function scoreLead(input: ScoringInput): ScoreBreakdown {
   trustLeadership += textScore(fullText, TRUST_KEYWORDS, 4);
   const institutionalTypes = ["church", "nonprofit", "alumni", "professional"];
   if (institutionalTypes.includes(input.type)) trustLeadership += 2;
-  trustLeadership = Math.min(trustLeadership, 15);
+  trustLeadership = Math.min(trustLeadership, w.trustLeadership);
 
   let engagement = 0;
   const es = input.engagementSignals || {};
@@ -92,13 +125,13 @@ export function scoreLead(input: ScoringInput): ScoreBreakdown {
   const subscriberCount = input.subscriberCount || es.subscriber_count || 0;
   const sizeBonus = audienceSizeScore(memberCount, subscriberCount);
   engagement += sizeBonus;
-  engagement = Math.min(engagement, 20);
+  engagement = Math.min(engagement, w.engagement);
 
   let monetization = 0;
   const ms = input.monetizationSignals || {};
   if (Object.keys(ms).length > 0) monetization += 5;
   monetization += textScore(fullText, MONETIZATION_KEYWORDS, 10);
-  monetization = Math.min(monetization, 15);
+  monetization = Math.min(monetization, w.monetization);
 
   let ownedChannels = 0;
   const channels = input.ownedChannels || {};
@@ -106,14 +139,14 @@ export function scoreLead(input: ScoringInput): ScoreBreakdown {
   ownedChannels += Math.min(channelCount * 4, 16);
   if (channels.newsletter || channels.email_list) ownedChannels += 2;
   if (channels.youtube) ownedChannels += 2;
-  ownedChannels = Math.min(ownedChannels, 20);
+  ownedChannels = Math.min(ownedChannels, w.ownedChannels);
 
   let tripFit = textScore(fullText, TRIP_KEYWORDS, 7);
   const tf = input.tripFitSignals || {};
   if (tf.professionals) tripFit += 1;
   if (tf.alumni) tripFit += 1;
   if (tf.paid_membership) tripFit += 1;
-  tripFit = Math.min(tripFit, 10);
+  tripFit = Math.min(tripFit, w.tripFit);
 
   let penalties = 0;
   if (!input.email && !input.website && !input.phone) penalties -= 10;
@@ -139,4 +172,3 @@ export function scoreLead(input: ScoringInput): ScoreBreakdown {
     total,
   };
 }
-

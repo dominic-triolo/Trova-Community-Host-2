@@ -18,6 +18,7 @@ client/src/
   pages/
     home.tsx - Discovery configuration form (Run Finder)
     run-status.tsx - Live pipeline progress tracking
+    hubspot-learning.tsx - HubSpot Learning insights dashboard
     runs-list.tsx - List of all pipeline runs
     results.tsx - Results table with filters and lead details drawer
   components/
@@ -32,7 +33,8 @@ server/
   db.ts - Database connection
   apify.ts - Apify API helper (start/wait/fetch)
   pipeline.ts - Full pipeline runner (discover/classify/extract/enrich/score)
-  scoring.ts - ICP scoring engine (6 pillars + penalties)
+  scoring.ts - ICP scoring engine (6 pillars + penalties, supports learned weights)
+  hubspot-sync.ts - HubSpot deal sync + trait analysis + scoring weight computation
 
 shared/
   schema.ts - Drizzle schema, types, constants
@@ -43,6 +45,8 @@ shared/
 - **source_urls** - Discovered URLs with classification
 - **communities** - Extracted community organizations
 - **leaders** - Community leader contacts
+- **host_profiles** - HubSpot-synced Host profiles with trip counts and trait data
+- **scoring_weights** - Learned scoring weights computed from top Host analysis
 - **leads** - Flattened, scored, export-ready lead records
 
 ## Pipeline Steps (Social Graph Enrichment Chain)

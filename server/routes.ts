@@ -4,6 +4,8 @@ import { storage } from "./storage";
 import { runPipeline, reEnrichRun, resumeRun, restartRun, activeRunIds, cancelledRunIds } from "./pipeline";
 import { verifyEmailBatch, mapResultToValidation } from "./millionverifier";
 import { checkEmailsInHubspot, isHubspotConfigured } from "./hubspot";
+import { syncHubSpotDeals, computeScoringWeights, getLatestInsights, getLatestWeights } from "./hubspot-sync";
+import { clearWeightsCache } from "./scoring";
 import { runParamsSchema, DEFAULT_RUN_PARAMS, PLATFORM_COST_PER_LEAD, PLATFORM_EMAIL_YIELD, PLATFORM_VALID_EMAIL_RATE, type SourceId } from "@shared/schema";
 import { fromError } from "zod-validation-error";
 import { log } from "./index";
@@ -491,6 +493,63 @@ export async function registerRoutes(
       }
 
       res.json({ fixed, duped, total: fbLeads.length });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.post("/api/hubspot/sync", async (req, res) => {
+    try {
+      if (!isHubspotConfigured()) {
+        return res.status(400).json({ message: "HubSpot is not configured. Set HUBSPOT_ACCESS_TOKEN." });
+      }
+      log("Starting HubSpot deal sync...", "hubspot-learn");
+      const syncResult = await syncHubSpotDeals();
+      log(`HubSpot sync complete: ${syncResult.profilesCreated} profiles from ${syncResult.dealsFound} deals`, "hubspot-learn");
+
+      log("Computing scoring weights from host profiles...", "hubspot-learn");
+      const weightsResult = await computeScoringWeights();
+      clearWeightsCache();
+      log(`Scoring weights computed from ${weightsResult.sampleSize} profiles (${weightsResult.topHostCount} top hosts)`, "hubspot-learn");
+
+      res.json({
+        sync: syncResult,
+        weights: weightsResult.weights,
+        insights: weightsResult.insights,
+        sampleSize: weightsResult.sampleSize,
+        topHostCount: weightsResult.topHostCount,
+      });
+    } catch (err: any) {
+      log(`HubSpot sync error: ${err.message}`, "hubspot-learn");
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.get("/api/hubspot/insights", async (_req, res) => {
+    try {
+      const weights = await getLatestWeights();
+      const insights = await getLatestInsights();
+      const row = await storage.getLatestScoringWeights();
+      if (!row) {
+        return res.json({ hasData: false });
+      }
+      res.json({
+        hasData: true,
+        weights,
+        insights,
+        sampleSize: row.sampleSize,
+        topHostCount: row.topHostCount,
+        computedAt: row.computedAt,
+      });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.get("/api/hubspot/host-profiles", async (_req, res) => {
+    try {
+      const profiles = await storage.listHostProfiles();
+      res.json(profiles);
     } catch (err: any) {
       res.status(500).json({ message: err.message });
     }
