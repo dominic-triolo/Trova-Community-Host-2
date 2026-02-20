@@ -1,5 +1,5 @@
 import { storage } from "./storage";
-import { runActorAndGetResults } from "./apify";
+import { runActorAndGetResults, runActorWithWallClockTimeout } from "./apify";
 import { scoreLead } from "./scoring";
 import { apolloPersonMatch, isApolloAvailable, extractDomainFromUrl as apolloExtractDomain, isEnrichableDomain as apolloIsEnrichable } from "./apollo";
 import { extractDomainFromUrl, isEnrichableDomain } from "./hunter";
@@ -2265,14 +2265,14 @@ async function googleSearchEnrichCreators(
     try {
       const searchQueries = batch.map(q => ({ term: q.term, countryCode: "us", languageCode: "en", maxPagesPerQuery: 1, resultsPerPage: 5 }));
 
-      const { items: results, costUsd: actorCost } = await runActorAndGetResults("apify~google-search-scraper", {
+      const { items: results, costUsd: actorCost } = await runActorWithWallClockTimeout("apify~google-search-scraper", {
         queries: searchQueries.map(q => q.term).join("\n"),
         maxPagesPerQuery: 1,
         resultsPerPage: 5,
         countryCode: "us",
         languageCode: "en",
         mobileResults: false,
-      }, 120000);
+      }, 180000);
       await storage.incrementApifySpend(runId, actorCost);
 
       const resultsByQuery = new Map<number, any[]>();
@@ -2415,14 +2415,14 @@ async function googleBridgeEnrichFacebookGroups(
     await appendAndSave(`Google Bridge: batch ${batchInfo.batchNum}/${totalBatches} (${batch.length} searches)...`);
 
     try {
-      const { items: results, costUsd: actorCost } = await runActorAndGetResults("apify~google-search-scraper", {
+      const { items: results, costUsd: actorCost } = await runActorWithWallClockTimeout("apify~google-search-scraper", {
         queries: batch.map(q => q.term).join("\n"),
         maxPagesPerQuery: 1,
         resultsPerPage: 5,
         countryCode: "us",
         languageCode: "en",
         mobileResults: false,
-      }, 120000);
+      }, 180000);
       await storage.incrementApifySpend(runId, actorCost);
 
       const resultsByQuery = new Map<number, any[]>();
@@ -2544,7 +2544,7 @@ async function enrichFromLinkAggregators(
   const startUrls = leadsWithAggregator.map(l => ({ url: l.ownedChannels!.linktree! }));
 
   try {
-    const { items: results, costUsd: actorCost } = await runActorAndGetResults("apify~cheerio-scraper", {
+    const { items: results, costUsd: actorCost } = await runActorWithWallClockTimeout("apify~cheerio-scraper", {
       startUrls,
       maxCrawlPages: leadsWithAggregator.length,
       maxConcurrency: 10,
@@ -2647,7 +2647,7 @@ async function enrichFromYouTubeAboutPages(
   }
 
   try {
-    const { items: results, costUsd: actorCost } = await runActorAndGetResults("apify~cheerio-scraper", {
+    const { items: results, costUsd: actorCost } = await runActorWithWallClockTimeout("apify~cheerio-scraper", {
       startUrls,
       maxCrawlPages: leadsWithYouTube.length,
       maxConcurrency: 10,
@@ -2761,9 +2761,9 @@ async function enrichFromInstagramBios(
   if (usernames.length === 0) return;
 
   try {
-    const { items: results, costUsd: actorCost } = await runActorAndGetResults("apify~instagram-profile-scraper", {
+    const { items: results, costUsd: actorCost } = await runActorWithWallClockTimeout("apify~instagram-profile-scraper", {
       usernames,
-    }, 120000, 0.0016);
+    }, 300000, 0.0016);
     await storage.incrementApifySpend(runId, actorCost);
 
     let enrichedCount = 0;
@@ -2889,14 +2889,14 @@ async function enrichFromTwitterBios(
   }
 
   try {
-    const { items: results, costUsd: actorCost } = await runActorAndGetResults("apidojo~twitter-user-scraper", {
+    const { items: results, costUsd: actorCost } = await runActorWithWallClockTimeout("apidojo~twitter-user-scraper", {
       twitterHandles: paddedHandles,
       getFollowers: false,
       getFollowing: false,
       getRetweeters: false,
       includeUnavailableUsers: false,
       maxItems: Math.max(handles.length + 5, 10),
-    }, 120000, 0.0004);
+    }, 300000, 0.0004);
     await storage.incrementApifySpend(runId, actorCost);
 
     let enrichedCount = 0;
@@ -3056,7 +3056,7 @@ async function crawlCreatorWebsitesForEmails(
     }
 
     try {
-      const { items: results, costUsd: actorCost } = await runActorAndGetResults("apify~cheerio-scraper", {
+      const { items: results, costUsd: actorCost } = await runActorWithWallClockTimeout("apify~cheerio-scraper", {
         startUrls,
         globs,
         maxCrawlPages: 5 * batch.entries.length,
@@ -3066,7 +3066,7 @@ async function crawlCreatorWebsitesForEmails(
   const text = $('body').text();
   return { url: request.url, text: text.substring(0, 5000) };
 }`,
-      }, 180000);
+      }, 300000);
       await storage.incrementApifySpend(runId, actorCost);
 
       for (const result of results) {

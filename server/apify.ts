@@ -164,6 +164,65 @@ export async function runActorAndGetResults(actorId: string, input: Record<strin
   }
 }
 
+export class ApifyWallClockTimeoutError extends Error {
+  costUsd: number;
+  constructor(actorId: string, timeoutMs: number, apifyRunId?: string) {
+    super(`Wall-clock timeout (${Math.round(timeoutMs / 1000)}s) exceeded for actor ${actorId}${apifyRunId ? ` (run ${apifyRunId} aborted)` : ""}`);
+    this.name = "ApifyWallClockTimeoutError";
+    this.costUsd = 0;
+  }
+}
+
+export async function runActorWithWallClockTimeout(
+  actorId: string,
+  input: Record<string, any>,
+  wallClockMs: number,
+  perResultCostUsd?: number,
+): Promise<ActorRunOutput> {
+  log(`[APIFY] Starting actor ${actorId} (wall-clock limit: ${Math.round(wallClockMs / 1000)}s)`, "apify");
+  const apifyRunId = await startActorRun(actorId, input);
+  activeApifyRunIds.add(apifyRunId);
+  log(`[APIFY] Run ${apifyRunId} started, waiting...`, "apify");
+
+  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+
+  try {
+    const waitPromise = waitForRun(apifyRunId, wallClockMs);
+    waitPromise.catch(() => {});
+
+    const result = await Promise.race([
+      waitPromise,
+      new Promise<never>((_, reject) => {
+        timeoutHandle = setTimeout(() => {
+          log(`[APIFY] Wall-clock timeout (${Math.round(wallClockMs / 1000)}s) hit for run ${apifyRunId}, aborting...`, "apify");
+          abortApifyRun(apifyRunId).catch(() => {});
+          reject(new ApifyWallClockTimeoutError(actorId, wallClockMs, apifyRunId));
+        }, wallClockMs);
+      }),
+    ]);
+
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+
+    log(`[APIFY] Run ${apifyRunId} finished: ${result.status} (cost: $${result.usageTotalUsd.toFixed(4)})`, "apify");
+
+    if (result.status !== "SUCCEEDED") {
+      const err: any = new Error(`Actor run ${apifyRunId} ended with status: ${result.status}`);
+      err.costUsd = result.usageTotalUsd;
+      throw err;
+    }
+
+    const items = await getDatasetItems(apifyRunId);
+    const costUsd = perResultCostUsd ? items.length * perResultCostUsd : result.usageTotalUsd;
+    log(`[APIFY] Got ${items.length} items from run ${apifyRunId}${perResultCostUsd ? ` (pay-per-result: $${costUsd.toFixed(2)})` : ""}`, "apify");
+    return { items, costUsd };
+  } catch (err) {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+    throw err;
+  } finally {
+    activeApifyRunIds.delete(apifyRunId);
+  }
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
