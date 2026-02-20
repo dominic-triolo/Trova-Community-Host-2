@@ -6,7 +6,7 @@ import { extractDomainFromUrl, isEnrichableDomain } from "./hunter";
 import { verifyEmailBatch, mapResultToValidation } from "./millionverifier";
 import { checkEmailsInHubspot, isHubspotConfigured } from "./hubspot";
 import { log } from "./index";
-import type { RunParams, InsertSourceUrl, InsertLead, InsertLeader, PipelineStep, BudgetAllocation } from "@shared/schema";
+import type { RunParams, InsertSourceUrl, InsertLead, InsertLeader, PipelineStep, BudgetAllocation, PipelineCheckpoint } from "@shared/schema";
 import { PIPELINE_STEPS } from "@shared/schema";
 
 export const activeRunIds = new Set<number>();
@@ -44,6 +44,35 @@ async function isValidEmailTargetReached(runId: number): Promise<boolean> {
 
 async function markStepComplete(runId: number, step: PipelineStep): Promise<void> {
   await storage.updateRun(runId, { lastCompletedStep: step });
+}
+
+async function saveCheckpoint(runId: number, platformLeads: PlatformLead[], subStep: string): Promise<void> {
+  try {
+    const run = await storage.getRun(runId);
+    const existingSteps = (run?.completedSubSteps as string[]) || [];
+    const updatedSteps = existingSteps.includes(subStep) ? existingSteps : [...existingSteps, subStep];
+    const checkpoint: PipelineCheckpoint = {
+      platformLeads,
+      completedSubSteps: updatedSteps,
+      apifySpendAtCheckpoint: run?.apifySpendUsd || 0,
+    };
+    await storage.updateRun(runId, {
+      checkpoint,
+      completedSubSteps: updatedSteps,
+    });
+  } catch (err: any) {
+    log(`[WARN] Failed to save checkpoint for run ${runId} at ${subStep}: ${err.message}`, "pipeline");
+  }
+}
+
+async function loadCheckpoint(runId: number): Promise<PipelineCheckpoint | null> {
+  const run = await storage.getRun(runId);
+  if (!run?.checkpoint) return null;
+  return run.checkpoint as PipelineCheckpoint;
+}
+
+async function clearCheckpoint(runId: number): Promise<void> {
+  await storage.updateRun(runId, { checkpoint: null, completedSubSteps: [] });
 }
 
 class RunCancelledError extends Error {
@@ -3186,6 +3215,7 @@ export async function runPipeline(runId: number): Promise<void> {
     }
 
     await markStepComplete(runId, PIPELINE_STEPS.DISCOVERY);
+    await saveCheckpoint(runId, allPlatformLeads, "discovery");
 
     const realNameCount = allPlatformLeads.filter(l => {
       const aboutText = l.raw?.about || "";
@@ -3237,6 +3267,7 @@ export async function runPipeline(runId: number): Promise<void> {
       }
     }
     await markStepComplete(runId, PIPELINE_STEPS.FB_GOOGLE_BRIDGE);
+    await saveCheckpoint(runId, allPlatformLeads, "fb_google_bridge");
 
     const enrichGroup2: { name: string; promise: Promise<void> }[] = [];
 
@@ -3282,6 +3313,7 @@ export async function runPipeline(runId: number): Promise<void> {
       }
     }
     await markStepComplete(runId, PIPELINE_STEPS.INSTAGRAM_BIOS);
+    await saveCheckpoint(runId, allPlatformLeads, "social_scraping");
 
     const enrichGroup3: { name: string; promise: Promise<void> }[] = [];
 
@@ -3312,6 +3344,7 @@ export async function runPipeline(runId: number): Promise<void> {
       }
     }
     await markStepComplete(runId, PIPELINE_STEPS.GOOGLE_CONTACT_SEARCH);
+    await saveCheckpoint(runId, allPlatformLeads, "google_contact_search");
 
     let slugDomainsProbed = 0;
     for (const pl of allPlatformLeads) {
@@ -3351,6 +3384,7 @@ export async function runPipeline(runId: number): Promise<void> {
       await appendAndSave("Website crawl: no leads with personal websites needing email");
     }
     await markStepComplete(runId, PIPELINE_STEPS.WEBSITE_CRAWL);
+    await saveCheckpoint(runId, allPlatformLeads, "website_crawl");
 
     await appendAndSave(`Platform discovery complete: ${allPlatformLeads.length} results`, 40, "Step 4: Discovery summary");
 
@@ -3846,6 +3880,7 @@ export async function runPipeline(runId: number): Promise<void> {
 
     await appendAndSave(`Created ${createdCount} total leads`, 80, "Step 8: Contact enrichment");
     await markStepComplete(runId, PIPELINE_STEPS.LEAD_CREATION);
+    await clearCheckpoint(runId);
 
     const runLeads = await storage.listLeadsByRun(runId);
     const APOLLO_MIN_SCORE = 15;
@@ -5192,6 +5227,530 @@ function dbLeadsToPlatformLeads(leads: any[]): (PlatformLead & { dbId: number })
   }));
 }
 
+async function resumeFromCheckpoint(
+  runId: number,
+  allPlatformLeads: PlatformLead[],
+  completedSubs: Set<string>,
+  params: RunParams,
+  appendAndSave: (msg: string, progress?: number, step?: string) => Promise<void>,
+): Promise<void> {
+  try {
+    const enabledSources = params.enabledSources || [];
+
+    if (!completedSubs.has("fb_google_bridge")) {
+      const enrichGroup1: { name: string; promise: Promise<void> }[] = [];
+
+      const hasFacebookLeads = allPlatformLeads.some(l => l.source === "facebook");
+      if (hasFacebookLeads) {
+        const fbLeadsNeedingEnrich = allPlatformLeads.filter(l => l.source === "facebook" && !l.email && !l.ownedChannels?.website && !l.ownedChannels?.linkedin);
+        if (fbLeadsNeedingEnrich.length > 0) {
+          await appendAndSave(`Resume: Google Bridge for ${fbLeadsNeedingEnrich.length} Facebook groups`, 32, "Resume: Google Bridge + Link Aggregators");
+          enrichGroup1.push({ name: "Google Bridge", promise: googleBridgeEnrichFacebookGroups(runId, allPlatformLeads, appendAndSave) });
+        }
+      }
+
+      const leadsWithLinktree = allPlatformLeads.filter(l =>
+        !l.email && l.ownedChannels?.linktree && l.ownedChannels.linktree.startsWith("http")
+      );
+      if (leadsWithLinktree.length > 0) {
+        enrichGroup1.push({ name: "Link aggregators (pass 1)", promise: enrichFromLinkAggregators(runId, allPlatformLeads, appendAndSave) });
+      }
+
+      if (enrichGroup1.length > 0) {
+        const g1Results = await Promise.allSettled(enrichGroup1.map(t => t.promise));
+        for (let i = 0; i < g1Results.length; i++) {
+          if (g1Results[i].status === "rejected") {
+            await appendAndSave(`[WARN] ${enrichGroup1[i].name} failed: ${(g1Results[i] as PromiseRejectedResult).reason?.message || "Unknown error"}`);
+          }
+        }
+      }
+      await markStepComplete(runId, PIPELINE_STEPS.FB_GOOGLE_BRIDGE);
+      await saveCheckpoint(runId, allPlatformLeads, "fb_google_bridge");
+    } else {
+      await appendAndSave("Resume: Google Bridge already completed, skipping");
+    }
+
+    if (!completedSubs.has("social_scraping")) {
+      const enrichGroup2: { name: string; promise: Promise<void> }[] = [];
+      const budgetExhausted = await isBudgetExhausted(runId, 0.05);
+      const emailTargetReached = await isEmailTargetReached(runId);
+
+      if (!budgetExhausted && !emailTargetReached) {
+        const leadsWithYouTube = allPlatformLeads.filter(l => l.ownedChannels?.youtube?.startsWith("http"));
+        if (leadsWithYouTube.length > 0) {
+          enrichGroup2.push({ name: "YouTube about pages", promise: enrichFromYouTubeAboutPages(runId, allPlatformLeads, appendAndSave) });
+        }
+        const leadsWithInstagram = allPlatformLeads.filter(l => l.ownedChannels?.instagram?.startsWith("http"));
+        if (leadsWithInstagram.length > 0) {
+          enrichGroup2.push({ name: "Instagram bios", promise: enrichFromInstagramBios(runId, allPlatformLeads, appendAndSave) });
+        }
+        const leadsWithTwitter = allPlatformLeads.filter(l => {
+          const tw = l.ownedChannels?.twitter;
+          return tw && (tw.startsWith("http") || tw.startsWith("@"));
+        });
+        if (leadsWithTwitter.length > 0) {
+          enrichGroup2.push({ name: "Twitter/X bios", promise: enrichFromTwitterBios(runId, allPlatformLeads, appendAndSave) });
+        }
+      }
+
+      if (enrichGroup2.length > 0) {
+        await appendAndSave(`Resume: Running ${enrichGroup2.length} social scrape tasks`, 36, "Resume: Social scraping");
+        const g2Results = await Promise.allSettled(enrichGroup2.map(t => t.promise));
+        for (let i = 0; i < g2Results.length; i++) {
+          if (g2Results[i].status === "rejected") {
+            await appendAndSave(`[WARN] ${enrichGroup2[i].name} failed: ${(g2Results[i] as PromiseRejectedResult).reason?.message || "Unknown error"}`);
+          }
+        }
+      }
+      await markStepComplete(runId, PIPELINE_STEPS.INSTAGRAM_BIOS);
+      await saveCheckpoint(runId, allPlatformLeads, "social_scraping");
+    } else {
+      await appendAndSave("Resume: Social scraping already completed, skipping");
+    }
+
+    if (!completedSubs.has("google_contact_search")) {
+      const enrichGroup3: { name: string; promise: Promise<void> }[] = [];
+
+      const newLinktreeLeads = allPlatformLeads.filter(l =>
+        !l.email && l.ownedChannels?.linktree && l.ownedChannels.linktree.startsWith("http")
+      );
+      if (newLinktreeLeads.length > 0) {
+        enrichGroup3.push({ name: "Link aggregators (pass 2)", promise: enrichFromLinkAggregators(runId, allPlatformLeads, appendAndSave) });
+      }
+
+      const leadsWithoutContactInfo = allPlatformLeads.filter(l => !l.email && !l.ownedChannels?.website && !l.ownedChannels?.linkedin);
+      if (leadsWithoutContactInfo.length > 0) {
+        enrichGroup3.push({ name: "Google contact search", promise: googleSearchEnrichCreators(runId, allPlatformLeads, appendAndSave) });
+      }
+
+      if (enrichGroup3.length > 0) {
+        await appendAndSave(`Resume: Running ${enrichGroup3.length} post-social tasks`, 40, "Resume: Google contact search");
+        const g3Results = await Promise.allSettled(enrichGroup3.map(t => t.promise));
+        for (let i = 0; i < g3Results.length; i++) {
+          if (g3Results[i].status === "rejected") {
+            await appendAndSave(`[WARN] ${enrichGroup3[i].name} failed: ${(g3Results[i] as PromiseRejectedResult).reason?.message || "Unknown error"}`);
+          }
+        }
+      }
+      await markStepComplete(runId, PIPELINE_STEPS.GOOGLE_CONTACT_SEARCH);
+      await saveCheckpoint(runId, allPlatformLeads, "google_contact_search");
+    } else {
+      await appendAndSave("Resume: Google contact search already completed, skipping");
+    }
+
+    if (!completedSubs.has("website_crawl")) {
+      let slugDomainsProbed = 0;
+      for (const pl of allPlatformLeads) {
+        if (pl.ownedChannels?.website || pl.email) continue;
+        const patreonUrl = pl.website || pl.ownedChannels?.patreon || "";
+        if (!patreonUrl.includes("patreon.com/")) continue;
+        const slug = patreonUrl.split("patreon.com/")[1]?.split(/[?#/]/)[0]?.toLowerCase();
+        if (!slug || slug.length < 3 || slug.startsWith("u") && /^\d+$/.test(slug.slice(1))) continue;
+        if (/[^a-z0-9_-]/.test(slug)) continue;
+        const cleanSlug = slug.replace(/[_-]/g, "");
+        if (cleanSlug.length < 4) continue;
+        const candidateDomain = `${cleanSlug}.com`;
+        if (!pl.ownedChannels) pl.ownedChannels = {};
+        pl.ownedChannels.website = `https://${candidateDomain}`;
+        slugDomainsProbed++;
+      }
+      if (slugDomainsProbed > 0) {
+        await appendAndSave(`Resume: Slug domain probe tried ${slugDomainsProbed} Patreon slugs as .com domains`);
+      }
+
+      const leadsNeedingEmail = allPlatformLeads.filter(l => !l.email && l.ownedChannels?.website && !isPatreonCdnUrl(l.ownedChannels.website));
+      if (leadsNeedingEmail.length > 0) {
+        await appendAndSave(`Resume: Crawling ${leadsNeedingEmail.length} creator websites for contact emails...`, 45, "Resume: Website contact crawl");
+        const websiteEmailMap = await crawlCreatorWebsitesForEmails(runId, leadsNeedingEmail, appendAndSave);
+        let websiteEmailsMerged = 0;
+        for (const pl of allPlatformLeads) {
+          if (!pl.email && pl.ownedChannels?.website) {
+            const domain = extractDomain(pl.ownedChannels.website);
+            if (domain && websiteEmailMap.has(domain)) {
+              pl.email = websiteEmailMap.get(domain)!;
+              websiteEmailsMerged++;
+            }
+          }
+        }
+        await appendAndSave(`Resume: Website crawl found ${websiteEmailsMerged} emails`);
+      }
+      await markStepComplete(runId, PIPELINE_STEPS.WEBSITE_CRAWL);
+      await saveCheckpoint(runId, allPlatformLeads, "website_crawl");
+    } else {
+      await appendAndSave("Resume: Website crawl already completed, skipping");
+    }
+
+    await appendAndSave(`Resume: Creating ${allPlatformLeads.length} leads in database...`, 55, "Resume: Lead creation");
+
+    let createdCount = 0;
+    for (const pl of allPlatformLeads) {
+      try {
+        let existingLead = null;
+        if (pl.email) existingLead = await storage.findLeadByEmail(pl.email);
+        if (!existingLead && pl.website) existingLead = await storage.findLeadByWebsite(pl.website);
+        if (!existingLead && pl.communityName) {
+          existingLead = await storage.findLeadByNameAndLocation(pl.communityName, pl.location);
+        }
+
+        if (existingLead) {
+          await storage.updateLead(existingLead.id, { lastSeenAt: new Date() });
+          continue;
+        }
+
+        const community = await storage.createCommunity({
+          name: pl.communityName,
+          type: pl.communityType,
+          description: pl.description,
+          website: pl.website,
+          ownedChannels: pl.ownedChannels,
+          eventCadence: pl.engagementSignals,
+          audienceSignals: pl.tripFitSignals,
+          sourceUrls: [pl.website],
+        });
+
+        let leaderId: number | undefined;
+        if (pl.leaderName) {
+          const leader = await storage.createLeader({
+            name: pl.leaderName,
+            role: "",
+            email: pl.email,
+            phone: pl.phone,
+            sourceUrl: pl.website,
+            communityId: community.id,
+          });
+          leaderId = leader.id;
+        }
+
+        const breakdown = scoreLead({
+          name: pl.communityName,
+          description: pl.description,
+          type: pl.communityType,
+          location: pl.location,
+          website: pl.website,
+          email: pl.email,
+          phone: pl.phone,
+          linkedin: pl.ownedChannels?.linkedin || "",
+          ownedChannels: pl.ownedChannels || {},
+          monetizationSignals: pl.monetizationSignals || {},
+          engagementSignals: pl.engagementSignals || {},
+          tripFitSignals: pl.tripFitSignals || {},
+          leaderName: pl.leaderName,
+          memberCount: pl.memberCount || 0,
+          subscriberCount: pl.subscriberCount || 0,
+          raw: pl.raw || {},
+          emailValidation: "",
+        });
+
+        await storage.createLead({
+          communityName: pl.communityName,
+          communityType: pl.communityType,
+          location: pl.location,
+          website: pl.website,
+          email: pl.email,
+          phone: pl.phone,
+          leaderName: pl.leaderName,
+          source: pl.source,
+          score: breakdown.total,
+          scoreBreakdown: breakdown,
+          runId,
+          communityId: community.id,
+          leaderId,
+          ownedChannels: pl.ownedChannels || {},
+          monetizationSignals: pl.monetizationSignals || {},
+          engagementSignals: pl.engagementSignals || {},
+          tripFitSignals: pl.tripFitSignals || {},
+          raw: pl.raw || {},
+        });
+        createdCount++;
+      } catch (err: any) {
+        log(`[WARN] Failed to create lead from checkpoint: ${err.message}`, "pipeline");
+      }
+    }
+
+    await storage.updateRun(runId, { leadsExtracted: createdCount });
+    await appendAndSave(`Resume: Created ${createdCount} leads from checkpoint`, 70, "Resume: Contact enrichment");
+    await markStepComplete(runId, PIPELINE_STEPS.LEAD_CREATION);
+    await clearCheckpoint(runId);
+
+    const runLeads = await storage.listLeadsByRun(runId);
+    const APOLLO_MIN_SCORE = 15;
+
+    if (params.enableApollo !== false) {
+      const leadsToEnrich = runLeads
+        .filter((l) => !l.email && (l.score || 0) >= APOLLO_MIN_SCORE)
+        .sort((a, b) => (b.score || 0) - (a.score || 0));
+
+      if (isApolloAvailable() && leadsToEnrich.length > 0) {
+        const totalWithoutEmail = runLeads.filter((l) => !l.email).length;
+        const skippedLowScore = totalWithoutEmail - leadsToEnrich.length;
+        await appendAndSave(`Resume: Apollo.io enriching ${leadsToEnrich.length} leads (${skippedLowScore} below score ${APOLLO_MIN_SCORE})...`, 75, "Resume: Apollo enrichment");
+
+        let enrichedCount = 0, apolloSkipped = 0, apolloCalls = 0, apolloDeduped = 0;
+        for (const lead of leadsToEnrich) {
+          try {
+            if (cancelledRunIds.has(runId)) throw new RunCancelledError(runId);
+            const currentHash = computeApolloInputHash(lead);
+            if (lead.apolloEnrichedAt && lead.apolloInputHash === currentHash) { apolloDeduped++; continue; }
+
+            const leaderName = lead.leaderName || lead.communityName || "";
+            if (!leaderName) continue;
+            if (!isValidApolloCandidate(leaderName)) { apolloSkipped++; continue; }
+
+            const nameParts = leaderName.trim().split(/\s+/);
+            const firstName = nameParts[0] || "";
+            const lastName = nameParts.length > 1 ? nameParts.slice(1).join(" ") : "";
+            const hasRealName = nameParts.length >= 2 && firstName.length > 1 && lastName.length > 1;
+
+            const channels = (lead.ownedChannels as Record<string, string>) || {};
+            let domain = apolloExtractDomain(lead.website || "");
+            if (!domain || !apolloIsEnrichable(domain)) {
+              if (channels.website) domain = apolloExtractDomain(channels.website);
+            }
+            const enrichableDomain = domain && apolloIsEnrichable(domain) ? domain : undefined;
+            const linkedinUrl = channels.linkedin && channels.linkedin.startsWith("http") ? channels.linkedin : undefined;
+
+            apolloCalls++;
+            let result = await apolloPersonMatch({
+              name: leaderName,
+              firstName: hasRealName ? firstName : undefined,
+              lastName: hasRealName ? lastName : undefined,
+              domain: enrichableDomain,
+              organizationName: lead.communityName !== leaderName ? lead.communityName || undefined : undefined,
+              linkedinUrl,
+            });
+
+            if (!result && hasRealName && !linkedinUrl) {
+              apolloCalls++;
+              result = await apolloPersonMatch({ firstName, lastName, domain: enrichableDomain });
+              await new Promise((r) => setTimeout(r, 300));
+            }
+
+            if (!result) {
+              await storage.updateLead(lead.id, { apolloEnrichedAt: new Date(), apolloInputHash: currentHash });
+              continue;
+            }
+
+            const updateData: Record<string, any> = { apolloEnrichedAt: new Date(), apolloInputHash: currentHash };
+            if (result.email) updateData.email = result.email;
+            if (result.phone && !lead.phone) updateData.phone = result.phone;
+            if (result.linkedin && !lead.linkedin) updateData.linkedin = result.linkedin;
+            if (result.location && !lead.location) updateData.location = result.location;
+            if (!lead.leaderName && result.fullName) updateData.leaderName = result.fullName;
+
+            const existingChannels = (lead.ownedChannels as Record<string, string>) || {};
+            const updatedChannels = { ...existingChannels };
+            if (result.twitter && !existingChannels.twitter) updatedChannels.twitter = result.twitter;
+            if (result.facebook && !existingChannels.facebook) updatedChannels.facebook = result.facebook;
+            if (result.linkedin && !existingChannels.linkedin) updatedChannels.linkedin = result.linkedin;
+            if (Object.keys(updatedChannels).length > Object.keys(existingChannels).length) {
+              updateData.ownedChannels = updatedChannels;
+            }
+
+            if (Object.keys(updateData).length > 2) {
+              await storage.updateLead(lead.id, updateData);
+              enrichedCount++;
+            } else {
+              await storage.updateLead(lead.id, { apolloEnrichedAt: new Date(), apolloInputHash: currentHash });
+            }
+            await new Promise((r) => setTimeout(r, 300));
+          } catch (err: any) {
+            if (err instanceof RunCancelledError) throw err;
+            await appendAndSave(`[WARN] Apollo enrichment failed for lead ${lead.id}: ${err.message}`);
+          }
+        }
+        await appendAndSave(`Resume: Apollo.io enriched ${enrichedCount} of ${leadsToEnrich.length} leads (${apolloSkipped} skipped, ${apolloDeduped} deduped, ${apolloCalls} API calls)`);
+      }
+    }
+    await markStepComplete(runId, PIPELINE_STEPS.APOLLO);
+
+    {
+      const refreshedLeads = await storage.listLeadsByRun(runId);
+      const leadsForFinder = refreshedLeads
+        .filter((l) => !l.email)
+        .filter((l) => {
+          const channels = (l.ownedChannels as Record<string, string>) || {};
+          const websiteUrl = channels.website || l.website || "";
+          const domain = extractDomainFromUrl(websiteUrl);
+          return domain && isEnrichableDomain(domain);
+        });
+
+      if (leadsForFinder.length > 0) {
+        await appendAndSave(`Resume: Leads Finder enriching ${leadsForFinder.length} leads by domain...`, 80, "Resume: Leads Finder");
+        const domains = Array.from(new Set(
+          leadsForFinder.map((l) => {
+            const ch = (l.ownedChannels as Record<string, string>) || {};
+            return extractDomainFromUrl(ch.website || l.website || "");
+          }).filter((d) => d && isEnrichableDomain(d))
+        ));
+
+        if (domains.length > 0) {
+          try {
+            const { items: finderResults, costUsd: actorCost } = await runActorAndGetResults("code_crafter~leads-finder", {
+              company_domain: domains,
+              email_status: ["validated"],
+              fetch_count: Math.min(domains.length * 5, 200),
+            }, 120000, 0.0015);
+            await storage.incrementApifySpend(runId, actorCost);
+
+            const emailByDomain = new Map<string, any>();
+            for (const r of finderResults) {
+              const email = r.email || r.work_email || r.personal_email || "";
+              if (!email || isBlockedEmail(email)) continue;
+              const domain = r.company_domain || r.domain || "";
+              if (domain && !emailByDomain.has(domain.toLowerCase())) {
+                emailByDomain.set(domain.toLowerCase(), r);
+              }
+            }
+
+            let finderEnriched = 0;
+            for (const lead of leadsForFinder) {
+              const ch = (lead.ownedChannels as Record<string, string>) || {};
+              const websiteUrl = ch.website || lead.website || "";
+              const domain = extractDomainFromUrl(websiteUrl);
+              if (!domain) continue;
+              const result = emailByDomain.get(domain.toLowerCase());
+              if (!result) continue;
+              const foundEmail = result.email || result.work_email || result.personal_email || "";
+              if (!foundEmail || isBlockedEmail(foundEmail)) continue;
+              const cleaned = cleanEmail(foundEmail);
+              if (!cleaned) continue;
+
+              const updateData: Record<string, any> = { email: cleaned };
+              if (result.first_name && result.last_name && !lead.leaderName) {
+                updateData.leaderName = `${result.first_name} ${result.last_name}`.trim();
+              }
+              await storage.updateLead(lead.id, updateData);
+              finderEnriched++;
+            }
+            await appendAndSave(`Resume: Leads Finder enriched ${finderEnriched} leads from ${domains.length} domains`);
+          } catch (err: any) {
+            if (err.costUsd) await storage.incrementApifySpend(runId, err.costUsd);
+            await appendAndSave(`[WARN] Leads Finder failed: ${err.message}`);
+          }
+        }
+      }
+    }
+    await markStepComplete(runId, PIPELINE_STEPS.LEADS_FINDER);
+
+    if (process.env.MILLIONVERIFIER_API_KEY) {
+      const allLeadsForValidation = await storage.listLeadsByRun(runId);
+      const leadsWithEmail = allLeadsForValidation.filter(l => l.email && !l.emailValidation);
+
+      if (leadsWithEmail.length > 0) {
+        await appendAndSave(`Resume: Validating ${leadsWithEmail.length} emails...`, 85, "Resume: Email validation");
+        const emailsToVerify = leadsWithEmail.map(l => ({ email: l.email!, leadId: l.id }));
+        try {
+          const results = await verifyEmailBatch(emailsToVerify, async (verified, total) => {
+            if (verified % 20 === 0 || verified === total) {
+              await appendAndSave(`Email validation: ${verified}/${total} verified...`);
+            }
+          });
+          let validCount = 0, invalidCount = 0, catchAllCount = 0, unknownCount = 0;
+          for (const [leadId, result] of Array.from(results.entries())) {
+            const validation = mapResultToValidation(result.result);
+            await storage.updateLead(leadId, { emailValidation: validation });
+            if (validation === "valid") validCount++;
+            else if (validation === "invalid") invalidCount++;
+            else if (validation === "catch-all") catchAllCount++;
+            else unknownCount++;
+          }
+          await appendAndSave(`Resume: Email validation: ${validCount} valid, ${invalidCount} invalid, ${catchAllCount} catch-all, ${unknownCount} unknown`);
+        } catch (err: any) {
+          await appendAndSave(`[WARN] Email validation failed: ${err.message}`);
+        }
+      }
+    }
+    await markStepComplete(runId, PIPELINE_STEPS.EMAIL_VALIDATION);
+
+    if (isHubspotConfigured()) {
+      const hubspotLeads = await storage.listLeadsByRun(runId);
+      const leadsWithValidEmail = hubspotLeads.filter(l => l.email && l.emailValidation === "valid");
+      if (leadsWithValidEmail.length > 0) {
+        await appendAndSave(`Resume: Checking ${leadsWithValidEmail.length} emails against HubSpot...`, 88, "Resume: HubSpot CRM check");
+        try {
+          const emails = leadsWithValidEmail.map(l => l.email!);
+          const hubspotResults = await checkEmailsInHubspot(emails);
+          for (const lead of leadsWithValidEmail) {
+            const isExisting = hubspotResults.get(lead.email!) === true;
+            await storage.updateLead(lead.id, { hubspotStatus: isExisting ? "existing" : "net_new" });
+          }
+          const existingCount = Array.from(hubspotResults.values()).filter(v => v === true).length;
+          await appendAndSave(`Resume: HubSpot: ${existingCount} existing, ${leadsWithValidEmail.length - existingCount} net new`);
+        } catch (err: any) {
+          await appendAndSave(`[WARN] HubSpot check failed: ${err.message}`);
+        }
+      }
+    }
+
+    await appendAndSave("Resume: Re-scoring all leads...", 92, "Resume: Final scoring");
+    const finalLeads = await storage.listLeadsByRun(runId);
+    for (const lead of finalLeads) {
+      const breakdown = scoreLead({
+        name: lead.communityName || "",
+        description: "",
+        type: lead.communityType || "",
+        location: lead.location || "",
+        website: lead.website || "",
+        email: lead.email || "",
+        phone: lead.phone || "",
+        linkedin: lead.linkedin || "",
+        ownedChannels: (lead.ownedChannels as Record<string, string>) || {},
+        monetizationSignals: (lead.monetizationSignals as Record<string, any>) || {},
+        engagementSignals: (lead.engagementSignals as Record<string, any>) || {},
+        tripFitSignals: (lead.tripFitSignals as Record<string, any>) || {},
+        leaderName: lead.leaderName || "",
+        memberCount: (lead.engagementSignals as any)?.member_count || 0,
+        subscriberCount: (lead.engagementSignals as any)?.subscriber_count || 0,
+        raw: (lead.raw as Record<string, any>) || {},
+        emailValidation: lead.emailValidation || "",
+      });
+      await storage.updateLead(lead.id, {
+        score: breakdown.total,
+        scoreBreakdown: breakdown,
+        lastSeenAt: new Date(),
+      });
+    }
+    await markStepComplete(runId, PIPELINE_STEPS.SCORING);
+
+    const emailCount = await storage.countLeadsByRunWithEmail(runId);
+    const validEmailCount = await storage.countLeadsByRunWithValidEmail(runId);
+
+    await storage.updateRun(runId, {
+      status: "succeeded",
+      progress: 100,
+      step: "Complete",
+      finishedAt: new Date(),
+      leadsWithEmail: emailCount,
+      leadsWithValidEmail: validEmailCount,
+    });
+    await appendAndSave(`Resume complete! ${finalLeads.length} leads, ${emailCount} with email, ${validEmailCount} validated.`);
+    log(`Checkpoint resume of run ${runId} completed successfully`, "pipeline");
+  } catch (err: any) {
+    if (err instanceof RunCancelledError || cancelledRunIds.has(runId)) {
+      log(`Checkpoint resume of run ${runId} stopped by user`, "pipeline");
+      const emailCount = await storage.countLeadsByRunWithEmail(runId);
+      const validEmailCount = await storage.countLeadsByRunWithValidEmail(runId);
+      await storage.updateRun(runId, {
+        status: "stopped",
+        step: "Stopped by user",
+        leadsWithEmail: emailCount,
+        leadsWithValidEmail: validEmailCount,
+        finishedAt: new Date(),
+      });
+    } else {
+      log(`Checkpoint resume of run ${runId} failed: ${err.message}`, "pipeline");
+      await storage.updateRun(runId, {
+        status: "failed",
+        step: "Resume failed",
+        finishedAt: new Date(),
+      });
+    }
+  } finally {
+    activeRunIds.delete(runId);
+    cancelledRunIds.delete(runId);
+  }
+}
+
 export async function restartRun(runId: number): Promise<void> {
   const run = await storage.getRun(runId);
   if (!run) throw new Error(`Run ${runId} not found`);
@@ -5209,6 +5768,8 @@ export async function restartRun(runId: number): Promise<void> {
     leadsWithEmail: 0,
     leadsWithValidEmail: 0,
     apifySpendUsd: 0,
+    checkpoint: null,
+    completedSubSteps: [],
   });
 
   await storage.deleteLeadsByRun(runId);
@@ -5238,12 +5799,15 @@ export async function resumeRun(runId: number): Promise<void> {
   try {
     activeRunIds.add(runId);
 
-    if (!isResumable(lastCompleted)) {
-      const msg = `Resume aborted: pipeline was interrupted before lead creation completed (last step: ${lastCompleted || "none"}). Please start a new run instead.`;
+    const checkpoint = await loadCheckpoint(runId);
+    const hasCheckpoint = checkpoint && checkpoint.platformLeads && checkpoint.platformLeads.length > 0;
+
+    if (!isResumable(lastCompleted) && !hasCheckpoint) {
+      const msg = `Resume aborted: pipeline was interrupted before any data was saved (last step: ${lastCompleted || "none"}). Use Restart to re-run from scratch.`;
       log(msg, "pipeline");
       await storage.updateRun(runId, {
         status: "interrupted",
-        step: "Resume aborted (pre-lead-creation)",
+        step: "Resume aborted (no checkpoint)",
         finishedAt: new Date(),
         logs: appendLog(run.logs || "", msg),
       });
@@ -5251,10 +5815,29 @@ export async function resumeRun(runId: number): Promise<void> {
       return;
     }
 
+    if (!isResumable(lastCompleted) && hasCheckpoint) {
+      currentLogs = appendLog(run.logs || "", `--- Resume from checkpoint (${checkpoint!.completedSubSteps.length} sub-steps completed, ${checkpoint!.platformLeads.length} leads saved) ---`);
+      await storage.updateRun(runId, {
+        status: "running",
+        progress: Math.max(run.progress || 0, 30),
+        step: "Resuming from checkpoint",
+        finishedAt: null,
+        logs: currentLogs,
+      });
+
+      await appendAndSave(`Restored ${checkpoint!.platformLeads.length} platform leads from checkpoint (Apify spend preserved: $${(checkpoint!.apifySpendAtCheckpoint || 0).toFixed(2)})`);
+
+      const allPlatformLeads: PlatformLead[] = checkpoint!.platformLeads;
+      const completedSubs = new Set(checkpoint!.completedSubSteps);
+
+      await resumeFromCheckpoint(runId, allPlatformLeads, completedSubs, params, appendAndSave);
+      return;
+    }
+
     const leads = await storage.listLeadsByRun(runId);
 
     if (leads.length === 0) {
-      const msg = `Resume aborted: no leads found for run ${runId}. Please start a new run instead.`;
+      const msg = `Resume aborted: no leads found for run ${runId}. Use Restart to re-run from scratch.`;
       log(msg, "pipeline");
       await storage.updateRun(runId, {
         status: "interrupted",

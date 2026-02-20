@@ -4,6 +4,7 @@ import { serveStatic } from "./static";
 import { createServer } from "http";
 import { activeRunIds } from "./pipeline";
 import { storage } from "./storage";
+import { abortAllActiveRuns } from "./apify";
 
 const app = express();
 const httpServer = createServer(app);
@@ -105,6 +106,9 @@ app.use((req, res, next) => {
 
   const gracefulShutdown = async (signal: string) => {
     log(`Received ${signal}, marking active runs as interrupted...`, "shutdown");
+
+    await abortAllActiveRuns();
+
     const runIds = Array.from(activeRunIds);
     for (const id of runIds) {
       try {
@@ -114,7 +118,7 @@ app.use((req, res, next) => {
             status: "interrupted",
             step: "Interrupted (server restart)",
             finishedAt: new Date(),
-            logs: (run.logs || "") + `\n[${new Date().toLocaleTimeString("en-US", { hour12: false })}] Run interrupted by server shutdown (${signal}). Use Resume to continue from where it left off, or Re-enrich to run Apollo/Leads Finder only.\n`,
+            logs: (run.logs || "") + `\n[${new Date().toLocaleTimeString("en-US", { hour12: false })}] Run interrupted by server shutdown (${signal}). Use Resume to continue from where it left off, or Restart to re-run from scratch.\n`,
           });
           log(`Marked run ${id} as interrupted`, "shutdown");
         }

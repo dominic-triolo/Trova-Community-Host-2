@@ -2,10 +2,36 @@ import { log } from "./index";
 
 const APIFY_BASE = "https://api.apify.com/v2";
 
+export const activeApifyRunIds = new Set<string>();
+
 function getToken(): string {
   const token = process.env.APIFY_TOKEN;
   if (!token) throw new Error("APIFY_TOKEN is not set");
   return token;
+}
+
+export async function abortApifyRun(runId: string): Promise<void> {
+  try {
+    const token = getToken();
+    const res = await fetch(`${APIFY_BASE}/actor-runs/${runId}/abort?token=${token}`, {
+      method: "POST",
+    });
+    if (res.ok) {
+      log(`[APIFY] Aborted run ${runId}`, "apify");
+    } else {
+      log(`[APIFY] Failed to abort run ${runId}: ${res.status}`, "apify");
+    }
+  } catch (err: any) {
+    log(`[APIFY] Error aborting run ${runId}: ${err.message}`, "apify");
+  }
+}
+
+export async function abortAllActiveRuns(): Promise<void> {
+  const runIds = Array.from(activeApifyRunIds);
+  if (runIds.length === 0) return;
+  log(`[APIFY] Aborting ${runIds.length} active Apify runs...`, "apify");
+  await Promise.allSettled(runIds.map(id => abortApifyRun(id)));
+  activeApifyRunIds.clear();
 }
 
 export async function startActorRun(actorId: string, input: Record<string, any>): Promise<string> {
@@ -116,21 +142,26 @@ export interface ActorRunOutput {
 export async function runActorAndGetResults(actorId: string, input: Record<string, any>, timeoutMs = 300000, perResultCostUsd?: number): Promise<ActorRunOutput> {
   log(`[APIFY] Starting actor ${actorId}`, "apify");
   const runId = await startActorRun(actorId, input);
+  activeApifyRunIds.add(runId);
   log(`[APIFY] Run ${runId} started, waiting...`, "apify");
 
-  const result = await waitForRun(runId, timeoutMs);
-  log(`[APIFY] Run ${runId} finished: ${result.status} (cost: $${result.usageTotalUsd.toFixed(4)})`, "apify");
+  try {
+    const result = await waitForRun(runId, timeoutMs);
+    log(`[APIFY] Run ${runId} finished: ${result.status} (cost: $${result.usageTotalUsd.toFixed(4)})`, "apify");
 
-  if (result.status !== "SUCCEEDED") {
-    const err: any = new Error(`Actor run ${runId} ended with status: ${result.status}`);
-    err.costUsd = result.usageTotalUsd;
-    throw err;
+    if (result.status !== "SUCCEEDED") {
+      const err: any = new Error(`Actor run ${runId} ended with status: ${result.status}`);
+      err.costUsd = result.usageTotalUsd;
+      throw err;
+    }
+
+    const items = await getDatasetItems(runId);
+    const costUsd = perResultCostUsd ? items.length * perResultCostUsd : result.usageTotalUsd;
+    log(`[APIFY] Got ${items.length} items from run ${runId}${perResultCostUsd ? ` (pay-per-result: $${costUsd.toFixed(2)})` : ''}`, "apify");
+    return { items, costUsd };
+  } finally {
+    activeApifyRunIds.delete(runId);
   }
-
-  const items = await getDatasetItems(runId);
-  const costUsd = perResultCostUsd ? items.length * perResultCostUsd : result.usageTotalUsd;
-  log(`[APIFY] Got ${items.length} items from run ${runId}${perResultCostUsd ? ` (pay-per-result: $${costUsd.toFixed(2)})` : ''}`, "apify");
-  return { items, costUsd };
 }
 
 function sleep(ms: number): Promise<void> {

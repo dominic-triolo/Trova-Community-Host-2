@@ -68,6 +68,8 @@ export const runs = pgTable("runs", {
   budgetAllocation: jsonb("budget_allocation").$type<BudgetAllocation>(),
   emailTarget: integer("email_target").default(0),
   podcastEnabled: boolean("podcast_enabled").default(true),
+  checkpoint: jsonb("checkpoint").$type<PipelineCheckpoint>(),
+  completedSubSteps: text("completed_sub_steps").array().default([]),
 });
 
 export const sourceUrls = pgTable("source_urls", {
@@ -183,6 +185,12 @@ export interface PlatformAllocation {
   maxLeads: number;
   estimatedCostUsd: number;
   costPerLead: number;
+}
+
+export interface PipelineCheckpoint {
+  platformLeads: any[];
+  completedSubSteps: string[];
+  apifySpendAtCheckpoint: number;
 }
 
 export interface BudgetAllocation {
