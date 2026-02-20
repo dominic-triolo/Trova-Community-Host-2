@@ -149,7 +149,7 @@ async function getDealContactsBatch(dealIds: string[]): Promise<Map<string, stri
     const data = await res.json();
     for (const item of data.results || []) {
       const dealId = item.from?.id;
-      const contactIds = (item.to || []).map((t: any) => t.toObjectId || t.id);
+      const contactIds = (item.to || []).map((t: any) => String(t.toObjectId || t.id));
       if (dealId) result.set(dealId, contactIds);
     }
     for (const id of batch) {
@@ -187,7 +187,7 @@ async function getContactsBatch(contactIds: string[]): Promise<Map<string, HubSp
     }
     const data = await res.json();
     for (const contact of data.results || []) {
-      result.set(contact.id, contact);
+      result.set(String(contact.id), contact);
     }
   }
 
