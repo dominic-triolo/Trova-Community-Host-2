@@ -4222,9 +4222,20 @@ export async function runPipeline(runId: number): Promise<void> {
 
     if (isAutonomousRun && globalEmailTarget > 0 && validEmailCount < globalEmailTarget) {
       let expansionRound = 0;
-      const MAX_EXPANSION_ROUNDS = 2;
+      const usedExpansionKeywords = new Set<string>();
 
-      while (expansionRound < MAX_EXPANSION_ROUNDS) {
+      const EXPANSION_SUFFIX_POOLS = [
+        ["community leader", "group organizer"],
+        ["travel group", "adventure community"],
+        ["retreat host", "trip organizer"],
+        ["club founder", "meetup organizer"],
+        ["group admin", "community founder"],
+        ["event organizer", "workshop host"],
+        ["group leader near me", "community events"],
+        ["online community", "membership group"],
+      ];
+
+      while (true) {
         if (cancelledRunIds.has(runId)) throw new RunCancelledError(runId);
 
         const budgetInfo = await getRunBudgetInfo(runId);
@@ -4253,11 +4264,18 @@ export async function runPipeline(runId: number): Promise<void> {
           `Expansion round ${expansionRound}`
         );
 
-        const expandSuffixes = expansionRound === 1
-          ? ["community leader", "group organizer"]
-          : ["travel group", "adventure community", "retreat host"];
+        const suffixPoolIndex = Math.min(expansionRound - 1, EXPANSION_SUFFIX_POOLS.length - 1);
+        const expandSuffixes = EXPANSION_SUFFIX_POOLS[suffixPoolIndex];
         const expandedKws = keywords.flatMap(kw => expandSuffixes.map(s => `${kw} ${s}`));
-        const uniqueExpKws = Array.from(new Set(expandedKws)).slice(0, 8);
+        const uniqueExpKws = Array.from(new Set(expandedKws))
+          .filter(kw => !usedExpansionKeywords.has(kw))
+          .slice(0, 8);
+
+        if (uniqueExpKws.length === 0) {
+          await appendAndSave(`Expansion: all keyword variations exhausted after ${expansionRound - 1} rounds. ${currentValidCount}/${globalEmailTarget} valid emails.`);
+          break;
+        }
+        for (const kw of uniqueExpKws) usedExpansionKeywords.add(kw);
 
         let newPlatformLeads: PlatformLead[] = [];
 
@@ -4268,7 +4286,7 @@ export async function runPipeline(runId: number): Promise<void> {
             break;
           }
 
-          const maxExpLeads = Math.min(Math.ceil(deficit * 2), 100);
+          const maxExpLeads = Math.min(Math.ceil(deficit * 4), 500);
           try {
             if (platform === "patreon") {
               await appendAndSave(`Expansion: deeper Patreon search (${uniqueExpKws.length} queries)...`);
@@ -5712,6 +5730,315 @@ async function resumeFromCheckpoint(
     }
     await markStepComplete(runId, PIPELINE_STEPS.SCORING);
 
+    const run2 = await storage.getRun(runId);
+    const isAutonomousResume = run2?.isAutonomous === true;
+    const resumeEmailTarget = run2?.emailTarget || 0;
+    const resumeBudgetUsd = run2?.budgetUsd || 0;
+    const resumeKeywords = params.seedKeywords || [];
+    const resumeEnabledSources = params.enabledSources || [];
+    const resumeGeos = params.seedGeos || [];
+    let resumeValidEmailCount = await storage.countLeadsByRunWithValidEmail(runId);
+
+    if (isAutonomousResume && resumeEmailTarget > 0 && resumeValidEmailCount < resumeEmailTarget && resumeBudgetUsd > 0) {
+      let expansionRound = 0;
+      const usedExpansionKeywords = new Set<string>();
+
+      const EXPANSION_SUFFIX_POOLS = [
+        ["community leader", "group organizer"],
+        ["travel group", "adventure community"],
+        ["retreat host", "trip organizer"],
+        ["club founder", "meetup organizer"],
+        ["group admin", "community founder"],
+        ["event organizer", "workshop host"],
+        ["group leader near me", "community events"],
+        ["online community", "membership group"],
+      ];
+
+      while (true) {
+        if (cancelledRunIds.has(runId)) throw new RunCancelledError(runId);
+
+        const budgetInfo = await getRunBudgetInfo(runId);
+        const remainingBudget = resumeBudgetUsd - budgetInfo.spentUsd;
+        const currentValidCount = await storage.countLeadsByRunWithValidEmail(runId);
+        await storage.updateRun(runId, { leadsWithValidEmail: currentValidCount });
+        const deficit = resumeEmailTarget - currentValidCount;
+
+        if (await isValidEmailTargetReached(runId)) {
+          await appendAndSave(`Resume expansion: Target reached: ${currentValidCount}/${resumeEmailTarget} valid emails.`);
+          break;
+        }
+        if (remainingBudget <= 0.50) {
+          await appendAndSave(`Resume expansion: Budget exhausted: ${currentValidCount}/${resumeEmailTarget} valid emails. $${budgetInfo.spentUsd.toFixed(2)}/$${resumeBudgetUsd.toFixed(2)} spent.`);
+          break;
+        }
+        if (deficit <= 3) {
+          await appendAndSave(`Resume expansion: Near target: ${currentValidCount}/${resumeEmailTarget} valid emails. Deficit too small.`);
+          break;
+        }
+
+        expansionRound++;
+        await appendAndSave(
+          `Resume expansion round ${expansionRound}: ${currentValidCount}/${resumeEmailTarget} valid emails (${deficit} short). $${remainingBudget.toFixed(2)} remaining.`,
+          93,
+          `Resume: Expansion round ${expansionRound}`
+        );
+
+        const suffixPoolIndex = Math.min(expansionRound - 1, EXPANSION_SUFFIX_POOLS.length - 1);
+        const expandSuffixes = EXPANSION_SUFFIX_POOLS[suffixPoolIndex];
+        const expandedKws = resumeKeywords.flatMap((kw: string) => expandSuffixes.map(s => `${kw} ${s}`));
+        const uniqueExpKws = Array.from(new Set(expandedKws))
+          .filter(kw => !usedExpansionKeywords.has(kw))
+          .slice(0, 8);
+
+        if (uniqueExpKws.length === 0) {
+          await appendAndSave(`Resume expansion: all keyword variations exhausted after ${expansionRound - 1} rounds.`);
+          break;
+        }
+        for (const kw of uniqueExpKws) usedExpansionKeywords.add(kw);
+
+        let newPlatformLeads: PlatformLead[] = [];
+
+        for (const platform of resumeEnabledSources) {
+          if (cancelledRunIds.has(runId)) throw new RunCancelledError(runId);
+          if (await isBudgetExhausted(runId, 0.10)) {
+            await appendAndSave(`Resume expansion: budget limit reached, stopping discovery.`);
+            break;
+          }
+
+          const maxExpLeads = Math.min(Math.ceil(deficit * 4), 500);
+          try {
+            if (platform === "patreon") {
+              await appendAndSave(`Resume expansion: deeper Patreon search (${uniqueExpKws.length} queries)...`);
+              const results = await scrapePatreonCreators(runId, uniqueExpKws, maxExpLeads, (msg) => appendAndSave(msg), {
+                minMemberCount: params.minMemberCount || 0,
+                maxMemberCount: params.maxMemberCount || 0,
+                minPostCount: params.minPostCount || 0,
+              });
+              newPlatformLeads.push(...results);
+            } else if (platform === "facebook") {
+              await appendAndSave(`Resume expansion: deeper Facebook search (${uniqueExpKws.length} queries)...`);
+              const results = await scrapeFacebookGroups(runId, uniqueExpKws, maxExpLeads, (msg) => appendAndSave(msg), {
+                minMemberCount: params.minMemberCount || 0,
+                maxMemberCount: params.maxMemberCount || 0,
+                geos: resumeGeos,
+              });
+              newPlatformLeads.push(...results);
+            } else if (platform === "substack") {
+              await appendAndSave(`Resume expansion: deeper Substack search (${uniqueExpKws.length} queries)...`);
+              const results = await scrapeSubstackWriters(runId, uniqueExpKws, maxExpLeads, (msg) => appendAndSave(msg));
+              newPlatformLeads.push(...results);
+            } else if (platform === "podcast" && run2?.podcastEnabled !== false) {
+              await appendAndSave(`Resume expansion: deeper podcast search (${uniqueExpKws.length} queries)...`);
+              const results = await scrapeApplePodcasts(runId, uniqueExpKws, maxExpLeads, (msg) => appendAndSave(msg), {
+                minEpisodeCount: params.minEpisodeCount || 0,
+                podcastCountry: params.podcastCountry || "US",
+              });
+              newPlatformLeads.push(...results);
+            }
+          } catch (err: any) {
+            await appendAndSave(`Resume expansion: ${platform} search error: ${err.message}`);
+          }
+        }
+
+        await appendAndSave(`Resume expansion: discovered ${newPlatformLeads.length} new platform results`);
+
+        if (newPlatformLeads.length === 0) {
+          await appendAndSave(`Resume expansion: no new leads discovered, lead pool exhausted.`);
+          break;
+        }
+
+        const expFbLeads = newPlatformLeads.filter(l => l.source === "facebook" && !l.email && !l.ownedChannels?.website && !l.ownedChannels?.linkedin);
+        if (expFbLeads.length > 0 && !(await isBudgetExhausted(runId, 0.10))) {
+          try { await googleBridgeEnrichFacebookGroups(runId, newPlatformLeads, appendAndSave); } catch {}
+        }
+
+        const expRssLeads = newPlatformLeads.filter(l => l.ownedChannels?.rss && l.ownedChannels.rss.startsWith("http") && !l.email);
+        if (expRssLeads.length > 0) {
+          try { await enrichFromRssFeeds(runId, newPlatformLeads, appendAndSave); } catch {}
+        }
+
+        const expLinktreeLeads = newPlatformLeads.filter(l => !l.email && l.ownedChannels?.linktree && l.ownedChannels.linktree.startsWith("http"));
+        if (expLinktreeLeads.length > 0 && !(await isBudgetExhausted(runId, 0.10))) {
+          try { await enrichFromLinkAggregators(runId, newPlatformLeads, appendAndSave); } catch {}
+        }
+
+        if (!(await isBudgetExhausted(runId, 0.10))) {
+          const socialTasks: { name: string; promise: Promise<void> }[] = [];
+          const ytLeads = newPlatformLeads.filter(l => l.ownedChannels?.youtube?.startsWith("http"));
+          if (ytLeads.length > 0) socialTasks.push({ name: "YouTube", promise: enrichFromYouTubeAboutPages(runId, newPlatformLeads, appendAndSave) });
+          const igLeads = newPlatformLeads.filter(l => l.ownedChannels?.instagram?.startsWith("http"));
+          if (igLeads.length > 0) socialTasks.push({ name: "Instagram", promise: enrichFromInstagramBios(runId, newPlatformLeads, appendAndSave) });
+          const twLeads = newPlatformLeads.filter(l => { const tw = l.ownedChannels?.twitter; return tw && (tw.startsWith("http") || tw.startsWith("@")); });
+          if (twLeads.length > 0) socialTasks.push({ name: "Twitter", promise: enrichFromTwitterBios(runId, newPlatformLeads, appendAndSave) });
+
+          if (socialTasks.length > 0) {
+            const results = await Promise.allSettled(socialTasks.map(t => t.promise));
+            for (let i = 0; i < results.length; i++) {
+              if (results[i].status === "rejected") {
+                await appendAndSave(`[WARN] Resume expansion ${socialTasks[i].name} failed: ${(results[i] as PromiseRejectedResult).reason?.message}`);
+              }
+            }
+          }
+        }
+
+        const noContactLeads = newPlatformLeads.filter(l => !l.email && !l.ownedChannels?.website && !l.ownedChannels?.linkedin);
+        if (noContactLeads.length > 0 && !(await isBudgetExhausted(runId, 0.10))) {
+          try { await googleSearchEnrichCreators(runId, newPlatformLeads, appendAndSave); } catch {}
+        }
+
+        const websiteLeads = newPlatformLeads.filter(l => !l.email && l.ownedChannels?.website && !isPatreonCdnUrl(l.ownedChannels.website));
+        if (websiteLeads.length > 0 && !(await isBudgetExhausted(runId, 0.10))) {
+          try {
+            const websiteEmailMap = await crawlCreatorWebsitesForEmails(runId, websiteLeads, appendAndSave);
+            for (const pl of newPlatformLeads) {
+              if (!pl.email && pl.ownedChannels?.website) {
+                const domain = extractDomain(pl.ownedChannels.website);
+                if (domain && websiteEmailMap.has(domain)) pl.email = websiteEmailMap.get(domain)!;
+              }
+            }
+          } catch {}
+        }
+
+        let expansionCreated = 0;
+        for (const pl of newPlatformLeads) {
+          try {
+            let existingLead = null;
+            if (pl.email) existingLead = await storage.findLeadByEmail(pl.email);
+            if (!existingLead && pl.website) existingLead = await storage.findLeadByWebsite(pl.website);
+            if (!existingLead && pl.communityName) existingLead = await storage.findLeadByNameAndLocation(pl.communityName, pl.location);
+            if (existingLead) continue;
+
+            const community = await storage.createCommunity({
+              name: pl.communityName, type: pl.communityType, description: pl.description,
+              website: pl.website, ownedChannels: pl.ownedChannels,
+              eventCadence: pl.engagementSignals, audienceSignals: pl.tripFitSignals, sourceUrls: [pl.website],
+            });
+            let leaderId: number | undefined;
+            if (pl.leaderName) {
+              const leader = await storage.createLeader({
+                name: pl.leaderName, role: "", email: pl.email, phone: pl.phone, sourceUrl: pl.website, communityId: community.id,
+              });
+              leaderId = leader.id;
+            }
+            const breakdown = scoreLead({
+              name: pl.communityName, description: pl.description, type: pl.communityType,
+              location: pl.location, website: pl.website, email: pl.email, phone: pl.phone,
+              linkedin: pl.ownedChannels?.linkedin || "", ownedChannels: pl.ownedChannels,
+              monetizationSignals: pl.monetizationSignals, engagementSignals: pl.engagementSignals,
+              tripFitSignals: pl.tripFitSignals, leaderName: pl.leaderName,
+              memberCount: pl.memberCount, subscriberCount: pl.subscriberCount, raw: pl.raw,
+            });
+            await storage.createLead({
+              leadType: pl.leaderName ? "leader" : "community",
+              communityName: pl.communityName, communityType: pl.communityType,
+              leaderName: pl.leaderName, location: pl.location, website: pl.website,
+              email: pl.email, phone: pl.phone, ownedChannels: pl.ownedChannels,
+              monetizationSignals: pl.monetizationSignals, engagementSignals: pl.engagementSignals,
+              tripFitSignals: pl.tripFitSignals, score: breakdown.total, scoreBreakdown: breakdown,
+              status: "new", source: pl.source || "", raw: pl.raw, runId,
+              communityId: community.id, leaderId,
+            });
+            expansionCreated++;
+          } catch {}
+        }
+
+        await appendAndSave(`Resume expansion: created ${expansionCreated} new leads (deduped from ${newPlatformLeads.length})`);
+        if (expansionCreated === 0) {
+          await appendAndSave(`Resume expansion: all leads were duplicates, stopping.`);
+          break;
+        }
+
+        if (params.enableApollo !== false && isApolloAvailable() && !(await isBudgetExhausted(runId, 0.10))) {
+          const expDbLeads = await storage.listLeadsByRun(runId);
+          const expApolloLeads = expDbLeads.filter(l => !l.email && (l.score || 0) >= 15 && !l.apolloEnrichedAt).sort((a, b) => (b.score || 0) - (a.score || 0));
+          if (expApolloLeads.length > 0) {
+            await appendAndSave(`Resume expansion: Apollo enrichment for ${expApolloLeads.length} leads...`);
+            let expApolloEnriched = 0;
+            for (const lead of expApolloLeads) {
+              try {
+                if (await isBudgetExhausted(runId, 0.05)) break;
+                const currentHash = computeApolloInputHash(lead);
+                if (lead.apolloEnrichedAt && lead.apolloInputHash === currentHash) continue;
+                const leaderName = lead.leaderName || lead.communityName || "";
+                if (!leaderName || !isValidApolloCandidate(leaderName)) continue;
+                const nameParts = leaderName.trim().split(/\s+/);
+                const firstName = nameParts[0] || "";
+                const lastName = nameParts.length > 1 ? nameParts.slice(1).join(" ") : "";
+                const hasRealName = nameParts.length >= 2 && firstName.length > 1 && lastName.length > 1;
+                const channels = (lead.ownedChannels as Record<string, string>) || {};
+                let domain = apolloExtractDomain(lead.website || "");
+                if (!domain || !apolloIsEnrichable(domain)) { if (channels.website) domain = apolloExtractDomain(channels.website); }
+                const enrichableDomain = domain && apolloIsEnrichable(domain) ? domain : undefined;
+                const linkedinUrl = channels.linkedin?.startsWith("http") ? channels.linkedin : undefined;
+                let result = await apolloPersonMatch({ name: leaderName, firstName: hasRealName ? firstName : undefined, lastName: hasRealName ? lastName : undefined, domain: enrichableDomain, linkedinUrl });
+                if (!result && hasRealName && !linkedinUrl) {
+                  result = await apolloPersonMatch({ firstName, lastName, domain: enrichableDomain });
+                  await new Promise(r => setTimeout(r, 300));
+                }
+                if (!result) { await storage.updateLead(lead.id, { apolloEnrichedAt: new Date(), apolloInputHash: currentHash }); continue; }
+                const updateData: Record<string, any> = { apolloEnrichedAt: new Date(), apolloInputHash: currentHash };
+                if (result.email && !isBlockedEmail(result.email)) { updateData.email = result.email; expApolloEnriched++; }
+                if (result.phone) updateData.phone = result.phone;
+                if (result.linkedin) updateData.linkedin = result.linkedin;
+                await storage.updateLead(lead.id, updateData);
+                await new Promise(r => setTimeout(r, 300));
+              } catch {}
+            }
+            await appendAndSave(`Resume expansion: Apollo enriched ${expApolloEnriched} leads`);
+          }
+        }
+
+        const refreshedExpLeads = await storage.listLeadsByRun(runId);
+        const leadsForExpFinder = refreshedExpLeads.filter(l => !l.email && !l.emailValidation).filter(l => {
+          const ch = (l.ownedChannels as Record<string, string>) || {};
+          const domain = extractDomainFromUrl(ch.website || l.website || "");
+          return domain && isEnrichableDomain(domain);
+        });
+        if (leadsForExpFinder.length > 0 && !(await isBudgetExhausted(runId, 0.10))) {
+          const expDomains = Array.from(new Set(leadsForExpFinder.map(l => { const ch = (l.ownedChannels as Record<string, string>) || {}; return extractDomainFromUrl(ch.website || l.website || ""); }).filter((d): d is string => !!d && isEnrichableDomain(d))));
+          if (expDomains.length > 0) {
+            try {
+              const { items: finderResults, costUsd: actorCost } = await runActorAndGetResults("code_crafter~leads-finder", { company_domain: expDomains, email_status: ["validated"], fetch_count: Math.min(expDomains.length * 5, 200) }, 120000, 0.0015);
+              await storage.incrementApifySpend(runId, actorCost);
+              const emailByDomain = new Map<string, any>();
+              for (const r of finderResults) { const email = r.email || r.work_email || ""; if (!email || isBlockedEmail(email)) continue; const domain = r.company_domain || r.domain || ""; if (domain && !emailByDomain.has(domain.toLowerCase())) emailByDomain.set(domain.toLowerCase(), r); }
+              let expEnriched = 0;
+              for (const lead of leadsForExpFinder) { const ch = (lead.ownedChannels as Record<string, string>) || {}; const domain = extractDomainFromUrl(ch.website || lead.website || ""); if (!domain) continue; const match = emailByDomain.get(domain.toLowerCase()); if (!match) continue; const email = match.email || match.work_email || ""; if (!email || isBlockedEmail(email)) continue; await storage.updateLead(lead.id, { email }); expEnriched++; }
+              await appendAndSave(`Resume expansion: Leads Finder enriched ${expEnriched} leads`);
+            } catch (err: any) {
+              if (err.costUsd) await storage.incrementApifySpend(runId, err.costUsd);
+            }
+          }
+        }
+
+        const expLeadsForValidation = (await storage.listLeadsByRun(runId)).filter(l => l.email && !l.emailValidation);
+        if (expLeadsForValidation.length > 0 && process.env.MILLIONVERIFIER_API_KEY) {
+          await appendAndSave(`Resume expansion: validating ${expLeadsForValidation.length} emails...`);
+          try {
+            const emailsToVerify = expLeadsForValidation.map(l => ({ email: l.email!, leadId: l.id }));
+            const results = await verifyEmailBatch(emailsToVerify, async (verified, total) => {
+              if (verified % 20 === 0 || verified === total) await appendAndSave(`Resume expansion validation: ${verified}/${total}`);
+            });
+            for (const [leadId, result] of Array.from(results.entries())) {
+              const validation = mapResultToValidation(result.result);
+              await storage.updateLead(leadId, { emailValidation: validation });
+            }
+          } catch {}
+        }
+
+        const postExpansionValid = await storage.countLeadsByRunWithValidEmail(runId);
+        const postExpansionEmail = await storage.countLeadsByRunWithEmail(runId);
+        await storage.updateRun(runId, {
+          leadsWithEmail: postExpansionEmail,
+          leadsWithValidEmail: postExpansionValid,
+          leadsExtracted: (await storage.listLeadsByRun(runId)).length,
+        });
+        await appendAndSave(`Resume expansion round ${expansionRound} complete: ${postExpansionValid}/${resumeEmailTarget} valid emails.`, 95);
+
+        if (await isValidEmailTargetReached(runId)) break;
+      }
+    }
+
     const emailCount = await storage.countLeadsByRunWithEmail(runId);
     const validEmailCount = await storage.countLeadsByRunWithValidEmail(runId);
 
@@ -5723,7 +6050,8 @@ async function resumeFromCheckpoint(
       leadsWithEmail: emailCount,
       leadsWithValidEmail: validEmailCount,
     });
-    await appendAndSave(`Resume complete! ${finalLeads.length} leads, ${emailCount} with email, ${validEmailCount} validated.`);
+    const totalResumeLeads = (await storage.listLeadsByRun(runId)).length;
+    await appendAndSave(`Resume complete! ${totalResumeLeads} leads, ${emailCount} with email, ${validEmailCount} validated.`);
     log(`Checkpoint resume of run ${runId} completed successfully`, "pipeline");
   } catch (err: any) {
     if (err instanceof RunCancelledError || cancelledRunIds.has(runId)) {
@@ -6123,12 +6451,179 @@ export async function resumeRun(runId: number): Promise<void> {
 
       await markStepComplete(runId, PIPELINE_STEPS.SCORING);
 
+      const dbRun2 = await storage.getRun(runId);
+      const dbIsAutonomous = dbRun2?.isAutonomous === true;
+      const dbEmailTarget = dbRun2?.emailTarget || 0;
+      const dbBudgetUsd = dbRun2?.budgetUsd || 0;
+      const dbKeywords = params.seedKeywords || [];
+      const dbEnabledSources = params.enabledSources || [];
+      const dbGeos = params.seedGeos || [];
+      const latestValidCount = await storage.countLeadsByRunWithValidEmail(runId);
+
+      if (dbIsAutonomous && dbEmailTarget > 0 && latestValidCount < dbEmailTarget && dbBudgetUsd > 0) {
+        let expansionRound = 0;
+        const usedExpKws = new Set<string>();
+        const EXP_SUFFIXES = [
+          ["community leader", "group organizer"],
+          ["travel group", "adventure community"],
+          ["retreat host", "trip organizer"],
+          ["club founder", "meetup organizer"],
+          ["group admin", "community founder"],
+          ["event organizer", "workshop host"],
+          ["group leader near me", "community events"],
+          ["online community", "membership group"],
+        ];
+
+        while (true) {
+          if (cancelledRunIds.has(runId)) throw new RunCancelledError(runId);
+          const budgetInfo = await getRunBudgetInfo(runId);
+          const remainingBudget = dbBudgetUsd - budgetInfo.spentUsd;
+          const curValid = await storage.countLeadsByRunWithValidEmail(runId);
+          await storage.updateRun(runId, { leadsWithValidEmail: curValid });
+          const deficit = dbEmailTarget - curValid;
+
+          if (await isValidEmailTargetReached(runId)) { await appendAndSave(`DB resume expansion: Target reached: ${curValid}/${dbEmailTarget} valid emails.`); break; }
+          if (remainingBudget <= 0.50) { await appendAndSave(`DB resume expansion: Budget exhausted. ${curValid}/${dbEmailTarget} valid emails.`); break; }
+          if (deficit <= 3) { await appendAndSave(`DB resume expansion: Near target. ${curValid}/${dbEmailTarget} valid emails.`); break; }
+
+          expansionRound++;
+          await appendAndSave(`DB resume expansion round ${expansionRound}: ${curValid}/${dbEmailTarget} valid emails (${deficit} short). $${remainingBudget.toFixed(2)} remaining.`, 93, `Resume: Expansion round ${expansionRound}`);
+
+          const suffixIdx = Math.min(expansionRound - 1, EXP_SUFFIXES.length - 1);
+          const suffixes = EXP_SUFFIXES[suffixIdx];
+          const expKws = dbKeywords.flatMap((kw: string) => suffixes.map(s => `${kw} ${s}`));
+          const uniqueKws = Array.from(new Set(expKws)).filter(kw => !usedExpKws.has(kw)).slice(0, 8);
+          if (uniqueKws.length === 0) { await appendAndSave(`DB resume expansion: all keyword variations exhausted.`); break; }
+          for (const kw of uniqueKws) usedExpKws.add(kw);
+
+          let newPlatformLeads: PlatformLead[] = [];
+          for (const platform of dbEnabledSources) {
+            if (cancelledRunIds.has(runId)) throw new RunCancelledError(runId);
+            if (await isBudgetExhausted(runId, 0.10)) break;
+            const maxExpLeads = Math.min(Math.ceil(deficit * 4), 500);
+            try {
+              if (platform === "patreon") {
+                const results = await scrapePatreonCreators(runId, uniqueKws, maxExpLeads, (msg) => appendAndSave(msg), { minMemberCount: params.minMemberCount || 0, maxMemberCount: params.maxMemberCount || 0, minPostCount: params.minPostCount || 0 });
+                newPlatformLeads.push(...results);
+              } else if (platform === "facebook") {
+                const results = await scrapeFacebookGroups(runId, uniqueKws, maxExpLeads, (msg) => appendAndSave(msg), { minMemberCount: params.minMemberCount || 0, maxMemberCount: params.maxMemberCount || 0, geos: dbGeos });
+                newPlatformLeads.push(...results);
+              } else if (platform === "substack") {
+                const results = await scrapeSubstackWriters(runId, uniqueKws, maxExpLeads, (msg) => appendAndSave(msg));
+                newPlatformLeads.push(...results);
+              } else if (platform === "podcast" && dbRun2?.podcastEnabled !== false) {
+                const results = await scrapeApplePodcasts(runId, uniqueKws, maxExpLeads, (msg) => appendAndSave(msg), { minEpisodeCount: params.minEpisodeCount || 0, podcastCountry: params.podcastCountry || "US" });
+                newPlatformLeads.push(...results);
+              }
+            } catch (err: any) { await appendAndSave(`DB expansion: ${platform} error: ${err.message}`); }
+          }
+
+          if (newPlatformLeads.length === 0) { await appendAndSave(`DB expansion: no new leads, stopping.`); break; }
+
+          const fbLeads2 = newPlatformLeads.filter(l => l.source === "facebook" && !l.email && !l.ownedChannels?.website && !l.ownedChannels?.linkedin);
+          if (fbLeads2.length > 0 && !(await isBudgetExhausted(runId, 0.10))) { try { await googleBridgeEnrichFacebookGroups(runId, newPlatformLeads, appendAndSave); } catch {} }
+          const rssLeads2 = newPlatformLeads.filter(l => l.ownedChannels?.rss?.startsWith("http") && !l.email);
+          if (rssLeads2.length > 0) { try { await enrichFromRssFeeds(runId, newPlatformLeads, appendAndSave); } catch {} }
+          const ltLeads2 = newPlatformLeads.filter(l => !l.email && l.ownedChannels?.linktree?.startsWith("http"));
+          if (ltLeads2.length > 0 && !(await isBudgetExhausted(runId, 0.10))) { try { await enrichFromLinkAggregators(runId, newPlatformLeads, appendAndSave); } catch {} }
+
+          if (!(await isBudgetExhausted(runId, 0.10))) {
+            const tasks2: Promise<void>[] = [];
+            if (newPlatformLeads.some(l => l.ownedChannels?.youtube?.startsWith("http"))) tasks2.push(enrichFromYouTubeAboutPages(runId, newPlatformLeads, appendAndSave));
+            if (newPlatformLeads.some(l => l.ownedChannels?.instagram?.startsWith("http"))) tasks2.push(enrichFromInstagramBios(runId, newPlatformLeads, appendAndSave));
+            if (newPlatformLeads.some(l => { const tw = l.ownedChannels?.twitter; return tw && (tw.startsWith("http") || tw.startsWith("@")); })) tasks2.push(enrichFromTwitterBios(runId, newPlatformLeads, appendAndSave));
+            if (tasks2.length > 0) await Promise.allSettled(tasks2);
+          }
+
+          const noContact2 = newPlatformLeads.filter(l => !l.email && !l.ownedChannels?.website && !l.ownedChannels?.linkedin);
+          if (noContact2.length > 0 && !(await isBudgetExhausted(runId, 0.10))) { try { await googleSearchEnrichCreators(runId, newPlatformLeads, appendAndSave); } catch {} }
+          const web2 = newPlatformLeads.filter(l => !l.email && l.ownedChannels?.website && !isPatreonCdnUrl(l.ownedChannels.website));
+          if (web2.length > 0 && !(await isBudgetExhausted(runId, 0.10))) {
+            try {
+              const emailMap = await crawlCreatorWebsitesForEmails(runId, web2, appendAndSave);
+              for (const pl of newPlatformLeads) { if (!pl.email && pl.ownedChannels?.website) { const d = extractDomain(pl.ownedChannels.website); if (d && emailMap.has(d)) pl.email = emailMap.get(d)!; } }
+            } catch {}
+          }
+
+          let created2 = 0;
+          for (const pl of newPlatformLeads) {
+            try {
+              let exist = null;
+              if (pl.email) exist = await storage.findLeadByEmail(pl.email);
+              if (!exist && pl.website) exist = await storage.findLeadByWebsite(pl.website);
+              if (!exist && pl.communityName) exist = await storage.findLeadByNameAndLocation(pl.communityName, pl.location);
+              if (exist) continue;
+              const community = await storage.createCommunity({ name: pl.communityName, type: pl.communityType, description: pl.description, website: pl.website, ownedChannels: pl.ownedChannels, eventCadence: pl.engagementSignals, audienceSignals: pl.tripFitSignals, sourceUrls: [pl.website] });
+              let leaderId2: number | undefined;
+              if (pl.leaderName) { const leader = await storage.createLeader({ name: pl.leaderName, role: "", email: pl.email, phone: pl.phone, sourceUrl: pl.website, communityId: community.id }); leaderId2 = leader.id; }
+              const breakdown = scoreLead({ name: pl.communityName, description: pl.description, type: pl.communityType, location: pl.location, website: pl.website, email: pl.email, phone: pl.phone, linkedin: pl.ownedChannels?.linkedin || "", ownedChannels: pl.ownedChannels, monetizationSignals: pl.monetizationSignals, engagementSignals: pl.engagementSignals, tripFitSignals: pl.tripFitSignals, leaderName: pl.leaderName, memberCount: pl.memberCount, subscriberCount: pl.subscriberCount, raw: pl.raw });
+              await storage.createLead({ leadType: pl.leaderName ? "leader" : "community", communityName: pl.communityName, communityType: pl.communityType, leaderName: pl.leaderName, location: pl.location, website: pl.website, email: pl.email, phone: pl.phone, ownedChannels: pl.ownedChannels, monetizationSignals: pl.monetizationSignals, engagementSignals: pl.engagementSignals, tripFitSignals: pl.tripFitSignals, score: breakdown.total, scoreBreakdown: breakdown, status: "new", source: pl.source || "", raw: pl.raw, runId, communityId: community.id, leaderId: leaderId2 });
+              created2++;
+            } catch {}
+          }
+          await appendAndSave(`DB expansion: created ${created2} new leads`);
+          if (created2 === 0) { await appendAndSave(`DB expansion: all duplicates, stopping.`); break; }
+
+          if (params.enableApollo !== false && isApolloAvailable() && !(await isBudgetExhausted(runId, 0.10))) {
+            const dbLeads3 = await storage.listLeadsByRun(runId);
+            const apolloLeads3 = dbLeads3.filter(l => !l.email && (l.score || 0) >= 15 && !l.apolloEnrichedAt);
+            for (const lead of apolloLeads3) {
+              try {
+                if (await isBudgetExhausted(runId, 0.05)) break;
+                const hash = computeApolloInputHash(lead);
+                if (lead.apolloEnrichedAt && lead.apolloInputHash === hash) continue;
+                const name = lead.leaderName || lead.communityName || "";
+                if (!name || !isValidApolloCandidate(name)) continue;
+                const parts = name.trim().split(/\s+/);
+                const fn = parts[0], ln = parts.length > 1 ? parts.slice(1).join(" ") : "";
+                const hasName = parts.length >= 2 && fn.length > 1 && ln.length > 1;
+                const ch = (lead.ownedChannels as Record<string, string>) || {};
+                let dom = apolloExtractDomain(lead.website || "");
+                if (!dom || !apolloIsEnrichable(dom)) { if (ch.website) dom = apolloExtractDomain(ch.website); }
+                const eDom = dom && apolloIsEnrichable(dom) ? dom : undefined;
+                const li = ch.linkedin?.startsWith("http") ? ch.linkedin : undefined;
+                let res = await apolloPersonMatch({ name, firstName: hasName ? fn : undefined, lastName: hasName ? ln : undefined, domain: eDom, linkedinUrl: li });
+                if (!res && hasName && !li) { res = await apolloPersonMatch({ firstName: fn, lastName: ln, domain: eDom }); await new Promise(r => setTimeout(r, 300)); }
+                if (!res) { await storage.updateLead(lead.id, { apolloEnrichedAt: new Date(), apolloInputHash: hash }); continue; }
+                const ud: Record<string, any> = { apolloEnrichedAt: new Date(), apolloInputHash: hash };
+                if (res.email && !isBlockedEmail(res.email)) ud.email = res.email;
+                if (res.phone) ud.phone = res.phone;
+                if (res.linkedin) ud.linkedin = res.linkedin;
+                await storage.updateLead(lead.id, ud);
+                await new Promise(r => setTimeout(r, 300));
+              } catch {}
+            }
+          }
+
+          const expValid3 = (await storage.listLeadsByRun(runId)).filter(l => l.email && !l.emailValidation);
+          if (expValid3.length > 0 && process.env.MILLIONVERIFIER_API_KEY) {
+            try {
+              const emailsV = expValid3.map(l => ({ email: l.email!, leadId: l.id }));
+              const vRes = await verifyEmailBatch(emailsV, async () => {});
+              for (const [lid, r] of Array.from(vRes.entries())) { await storage.updateLead(lid, { emailValidation: mapResultToValidation(r.result) }); }
+            } catch {}
+          }
+
+          const pv = await storage.countLeadsByRunWithValidEmail(runId);
+          const pe = await storage.countLeadsByRunWithEmail(runId);
+          await storage.updateRun(runId, { leadsWithEmail: pe, leadsWithValidEmail: pv, leadsExtracted: (await storage.listLeadsByRun(runId)).length });
+          await appendAndSave(`DB expansion round ${expansionRound} complete: ${pv}/${dbEmailTarget} valid emails.`, 95);
+          if (await isValidEmailTargetReached(runId)) break;
+        }
+      }
+
+      const finalEmailCount = await storage.countLeadsByRunWithEmail(runId);
+      const finalValidCount = await storage.countLeadsByRunWithValidEmail(runId);
+      const totalLeads = (await storage.listLeadsByRun(runId)).length;
+
       await storage.updateRun(runId, {
         status: "succeeded",
         progress: 100,
         step: "Complete",
         finishedAt: new Date(),
-        logs: appendLog(currentLogs, `Resume complete! ${reScored} leads re-scored, ${emailCount} with email.`),
+        leadsWithEmail: finalEmailCount,
+        leadsWithValidEmail: finalValidCount,
+        logs: appendLog(currentLogs, `Resume complete! ${totalLeads} leads, ${finalEmailCount} with email, ${finalValidCount} validated.`),
       });
 
       log(`Resume of run ${runId} completed successfully`, "pipeline");
