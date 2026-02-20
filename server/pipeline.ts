@@ -11,6 +11,18 @@ import { PIPELINE_STEPS } from "@shared/schema";
 
 export const activeRunIds = new Set<number>();
 export const cancelledRunIds = new Set<number>();
+export const resumingRunIds = new Set<number>();
+
+const HEARTBEAT_INTERVAL_MS = 60_000;
+
+function startHeartbeat(runId: number): () => void {
+  const update = () => {
+    storage.updateRun(runId, { lastHeartbeat: new Date() }).catch(() => {});
+  };
+  update();
+  const interval = setInterval(update, HEARTBEAT_INTERVAL_MS);
+  return () => clearInterval(interval);
+}
 
 async function getRunBudgetInfo(runId: number): Promise<{ isAutonomous: boolean; budgetUsd: number; spentUsd: number }> {
   const run = await storage.getRun(runId);
@@ -2248,6 +2260,9 @@ async function googleSearchEnrichCreators(
   const batchSize = 10;
   const concurrentSearchBatches = 3;
   const enrichedLeadIndices = new Set<number>();
+  const CIRCUIT_BREAKER_THRESHOLD = 5;
+  let consecutiveSearchFailures = 0;
+  let searchCircuitBroken = false;
 
   const allSearchBatches: { queries: { term: string; leadIdx: number }[]; batchNum: number }[] = [];
   const totalBatches = Math.ceil(queries.length / batchSize);
@@ -2259,6 +2274,7 @@ async function googleSearchEnrichCreators(
   }
 
   async function processSearchBatch(batchInfo: { queries: { term: string; leadIdx: number }[]; batchNum: number }): Promise<void> {
+    if (searchCircuitBroken) return;
     const batch = batchInfo.queries;
     await appendAndSave(`Google enrichment: batch ${batchInfo.batchNum}/${totalBatches} (${batch.length} searches)...`);
 
@@ -2294,6 +2310,7 @@ async function googleSearchEnrichCreators(
         }
       }
 
+      consecutiveSearchFailures = 0;
       const totalOrganic = Array.from(resultsByQuery.values()).reduce((sum, arr) => sum + arr.length, 0);
 
       for (let j = 0; j < batch.length; j++) {
@@ -2357,11 +2374,17 @@ async function googleSearchEnrichCreators(
       if (err.costUsd) {
         await storage.incrementApifySpend(runId, err.costUsd);
       }
+      consecutiveSearchFailures++;
       await appendAndSave(`[WARN] Google enrichment batch ${batchInfo.batchNum} failed: ${err.message}`);
+      if (consecutiveSearchFailures >= CIRCUIT_BREAKER_THRESHOLD) {
+        searchCircuitBroken = true;
+        await appendAndSave(`[WARN] Google enrichment circuit breaker tripped after ${consecutiveSearchFailures} consecutive failures — skipping remaining batches`);
+      }
     }
   }
 
   for (let i = 0; i < allSearchBatches.length; i += concurrentSearchBatches) {
+    if (searchCircuitBroken) break;
     const concurrentSlice = allSearchBatches.slice(i, i + concurrentSearchBatches);
     await Promise.allSettled(concurrentSlice.map((b, idx) =>
       new Promise<void>(resolve => setTimeout(() => processSearchBatch(b).then(resolve).catch(resolve), idx * 2000))
@@ -2402,6 +2425,9 @@ async function googleBridgeEnrichFacebookGroups(
   const batchSize = 10;
   const concurrentBridgeBatches = 3;
   const enrichedLeadIndices = new Set<number>();
+  const CIRCUIT_BREAKER_THRESHOLD = 5;
+  let consecutiveFailures = 0;
+  let circuitBroken = false;
 
   const allBridgeBatches: { queries: typeof queries; batchNum: number }[] = [];
   const totalBatches = Math.ceil(queries.length / batchSize);
@@ -2413,6 +2439,7 @@ async function googleBridgeEnrichFacebookGroups(
   }
 
   async function processBridgeBatch(batchInfo: { queries: typeof queries; batchNum: number }): Promise<void> {
+    if (circuitBroken) return;
     const batch = batchInfo.queries;
     await appendAndSave(`Google Bridge: batch ${batchInfo.batchNum}/${totalBatches} (${batch.length} searches)...`);
 
@@ -2446,6 +2473,7 @@ async function googleBridgeEnrichFacebookGroups(
         }
       }
 
+      consecutiveFailures = 0;
       const totalOrganic = Array.from(resultsByQuery.values()).reduce((sum, arr) => sum + arr.length, 0);
       await appendAndSave(`Google Bridge: batch ${batchInfo.batchNum} got ${results.length} query results, ${totalOrganic} organic results`);
 
@@ -2516,11 +2544,17 @@ async function googleBridgeEnrichFacebookGroups(
       if (err.costUsd) {
         await storage.incrementApifySpend(runId, err.costUsd);
       }
+      consecutiveFailures++;
       await appendAndSave(`[WARN] Google Bridge batch ${batchInfo.batchNum} failed: ${err.message}`);
+      if (consecutiveFailures >= CIRCUIT_BREAKER_THRESHOLD) {
+        circuitBroken = true;
+        await appendAndSave(`[WARN] Google Bridge circuit breaker tripped after ${consecutiveFailures} consecutive failures — skipping remaining batches`);
+      }
     }
   }
 
   for (let i = 0; i < allBridgeBatches.length; i += concurrentBridgeBatches) {
+    if (circuitBroken) break;
     const concurrentSlice = allBridgeBatches.slice(i, i + concurrentBridgeBatches);
     await Promise.allSettled(concurrentSlice.map((b, idx) =>
       new Promise<void>(resolve => setTimeout(() => processBridgeBatch(b).then(resolve).catch(resolve), idx * 2000))
@@ -3121,6 +3155,7 @@ async function crawlCreatorWebsitesForEmails(
 
 export async function runPipeline(runId: number): Promise<void> {
   let currentLogs = "";
+  let stopHeartbeat: (() => void) | null = null;
 
   const appendAndSave = async (msg: string, progress?: number, step?: string) => {
     if (cancelledRunIds.has(runId)) throw new RunCancelledError(runId);
@@ -3138,6 +3173,7 @@ export async function runPipeline(runId: number): Promise<void> {
 
     const params = run.params as RunParams;
     activeRunIds.add(runId);
+    stopHeartbeat = startHeartbeat(runId);
     await storage.updateRun(runId, { status: "running", startedAt: new Date() });
 
     const isAutonomousRun = run.isAutonomous || false;
@@ -4777,6 +4813,7 @@ export async function runPipeline(runId: number): Promise<void> {
       });
     }
   } finally {
+    if (stopHeartbeat) stopHeartbeat();
     activeRunIds.delete(runId);
     cancelledRunIds.delete(runId);
   }
@@ -4788,6 +4825,7 @@ export async function reEnrichRun(runId: number): Promise<void> {
 
   const params = run.params as RunParams;
   let currentLogs = "";
+  let stopHeartbeat: (() => void) | null = null;
 
   const appendAndSave = async (msg: string, progress?: number, step?: string) => {
     if (cancelledRunIds.has(runId)) throw new RunCancelledError(runId);
@@ -4800,6 +4838,7 @@ export async function reEnrichRun(runId: number): Promise<void> {
 
   try {
     activeRunIds.add(runId);
+    stopHeartbeat = startHeartbeat(runId);
 
     const leads = await storage.listLeadsByRun(runId);
     if (leads.length === 0) {
@@ -5195,6 +5234,7 @@ export async function reEnrichRun(runId: number): Promise<void> {
       });
     }
   } finally {
+    if (stopHeartbeat) stopHeartbeat();
     activeRunIds.delete(runId);
     cancelledRunIds.delete(runId);
   }
@@ -6113,12 +6153,19 @@ export async function restartRun(runId: number): Promise<void> {
 }
 
 export async function resumeRun(runId: number): Promise<void> {
+  if (activeRunIds.has(runId) || resumingRunIds.has(runId)) {
+    log(`Resume skipped: run ${runId} is already active or being resumed`, "pipeline");
+    return;
+  }
+  resumingRunIds.add(runId);
+
   const run = await storage.getRun(runId);
-  if (!run) throw new Error(`Run ${runId} not found`);
+  if (!run) { resumingRunIds.delete(runId); throw new Error(`Run ${runId} not found`); }
 
   const params = run.params as RunParams;
   const lastCompleted = run.lastCompletedStep || "";
   let currentLogs = "";
+  let stopHeartbeat: (() => void) | null = null;
 
   const appendAndSave = async (msg: string, progress?: number, step?: string) => {
     if (cancelledRunIds.has(runId)) throw new RunCancelledError(runId);
@@ -6132,6 +6179,7 @@ export async function resumeRun(runId: number): Promise<void> {
 
   try {
     activeRunIds.add(runId);
+    stopHeartbeat = startHeartbeat(runId);
 
     const checkpoint = await loadCheckpoint(runId);
     const hasCheckpoint = checkpoint && checkpoint.platformLeads && checkpoint.platformLeads.length > 0;
@@ -6657,7 +6705,9 @@ export async function resumeRun(runId: number): Promise<void> {
       });
     }
   } finally {
+    if (stopHeartbeat) stopHeartbeat();
     activeRunIds.delete(runId);
     cancelledRunIds.delete(runId);
+    resumingRunIds.delete(runId);
   }
 }

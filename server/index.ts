@@ -2,7 +2,7 @@ import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
-import { activeRunIds } from "./pipeline";
+import { activeRunIds, resumeRun, resumingRunIds } from "./pipeline";
 import { storage } from "./storage";
 import { abortAllActiveRuns } from "./apify";
 
@@ -131,4 +131,69 @@ app.use((req, res, next) => {
 
   process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
   process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+
+  const autoResumeStaleRuns = async () => {
+    try {
+      const allRuns = await storage.listRuns();
+      const staleRuns = allRuns.filter(r => r.status === "running" && !activeRunIds.has(r.id) && !resumingRunIds.has(r.id));
+
+      if (staleRuns.length === 0) return;
+
+      log(`Found ${staleRuns.length} stale run(s) in 'running' status — auto-resuming...`, "watchdog");
+
+      for (const run of staleRuns) {
+        try {
+          await storage.updateRun(run.id, {
+            status: "interrupted",
+            step: "Interrupted (server restart detected)",
+            logs: (run.logs || "") + `\n[${new Date().toLocaleTimeString("en-US", { hour12: false })}] Run detected as stale after server restart. Auto-resuming from checkpoint...\n`,
+          });
+
+          log(`Auto-resuming run ${run.id} from checkpoint...`, "watchdog");
+          resumeRun(run.id).catch((err) => {
+            log(`Auto-resume of run ${run.id} failed: ${err.message}`, "watchdog");
+          });
+        } catch (err: any) {
+          log(`Failed to auto-resume run ${run.id}: ${err.message}`, "watchdog");
+        }
+      }
+    } catch (err: any) {
+      log(`Auto-resume check failed: ${err.message}`, "watchdog");
+    }
+  };
+
+  setTimeout(autoResumeStaleRuns, 5000);
+
+  const WATCHDOG_INTERVAL_MS = 3 * 60 * 1000;
+  const HEARTBEAT_STALE_MS = 5 * 60 * 1000;
+
+  setInterval(async () => {
+    try {
+      const allRuns = await storage.listRuns();
+      const runningRuns = allRuns.filter(r => r.status === "running");
+
+      for (const run of runningRuns) {
+        if (activeRunIds.has(run.id) || resumingRunIds.has(run.id)) continue;
+
+        const heartbeat = run.lastHeartbeat ? new Date(run.lastHeartbeat).getTime() : 0;
+        const age = Date.now() - heartbeat;
+
+        if (heartbeat === 0 || age > HEARTBEAT_STALE_MS) {
+          log(`Watchdog: run ${run.id} has stale heartbeat (${Math.round(age / 1000)}s old). Auto-resuming...`, "watchdog");
+
+          await storage.updateRun(run.id, {
+            status: "interrupted",
+            step: "Interrupted (stale heartbeat)",
+            logs: (run.logs || "") + `\n[${new Date().toLocaleTimeString("en-US", { hour12: false })}] Heartbeat stale for ${Math.round(age / 1000)}s. Auto-resuming from checkpoint...\n`,
+          });
+
+          resumeRun(run.id).catch((err) => {
+            log(`Watchdog auto-resume of run ${run.id} failed: ${err.message}`, "watchdog");
+          });
+        }
+      }
+    } catch (err: any) {
+      log(`Watchdog check failed: ${err.message}`, "watchdog");
+    }
+  }, WATCHDOG_INTERVAL_MS);
 })();

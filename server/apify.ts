@@ -37,33 +37,57 @@ export async function abortAllActiveRuns(): Promise<void> {
 export async function startActorRun(actorId: string, input: Record<string, any>): Promise<string> {
   const token = getToken();
   const url = `${APIFY_BASE}/acts/${actorId}/runs?token=${token}`;
+  const timeouts = [30000, 60000, 90000];
 
-  const controller = new AbortController();
-  const fetchTimeout = setTimeout(() => controller.abort(), 30000);
+  for (let attempt = 0; attempt < timeouts.length; attempt++) {
+    const timeoutMs = timeouts[attempt];
+    const controller = new AbortController();
+    const fetchTimeout = setTimeout(() => controller.abort(), timeoutMs);
 
-  try {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(input),
-      signal: controller.signal,
-    });
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+        signal: controller.signal,
+      });
 
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`Apify start failed (${res.status}): ${text}`);
+      if (!res.ok) {
+        const text = await res.text();
+        const is429or5xx = res.status === 429 || res.status >= 500;
+        if (is429or5xx && attempt < timeouts.length - 1) {
+          log(`[APIFY] Start failed (${res.status}) for ${actorId}, retrying in ${(attempt + 1) * 5}s (attempt ${attempt + 1}/${timeouts.length})...`, "apify");
+          clearTimeout(fetchTimeout);
+          await sleep((attempt + 1) * 5000);
+          continue;
+        }
+        throw new Error(`Apify start failed (${res.status}): ${text}`);
+      }
+
+      const data = await res.json();
+      return data.data.id;
+    } catch (err: any) {
+      clearTimeout(fetchTimeout);
+      if (err.name === "AbortError") {
+        if (attempt < timeouts.length - 1) {
+          log(`[APIFY] Start timed out after ${timeoutMs / 1000}s for ${actorId}, retrying with ${timeouts[attempt + 1] / 1000}s timeout (attempt ${attempt + 1}/${timeouts.length})...`, "apify");
+          continue;
+        }
+        throw new Error(`Apify start timed out after ${timeoutMs / 1000}s for actor ${actorId} (${timeouts.length} attempts)`);
+      }
+      const isTransient = err.code === "ECONNRESET" || err.code === "ETIMEDOUT" || err.code === "ENOTFOUND" || err.message?.includes("fetch failed");
+      if (isTransient && attempt < timeouts.length - 1) {
+        log(`[APIFY] Transient error starting ${actorId}: ${err.message}, retrying in ${(attempt + 1) * 5}s (attempt ${attempt + 1}/${timeouts.length})...`, "apify");
+        await sleep((attempt + 1) * 5000);
+        continue;
+      }
+      throw err;
+    } finally {
+      clearTimeout(fetchTimeout);
     }
-
-    const data = await res.json();
-    return data.data.id;
-  } catch (err: any) {
-    if (err.name === "AbortError") {
-      throw new Error(`Apify start timed out after 30s for actor ${actorId}`);
-    }
-    throw err;
-  } finally {
-    clearTimeout(fetchTimeout);
   }
+
+  throw new Error(`Apify start failed after ${timeouts.length} attempts for actor ${actorId}`);
 }
 
 export interface ApifyRunResult {

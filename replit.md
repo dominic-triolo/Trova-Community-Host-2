@@ -143,6 +143,15 @@ The discovery form uses platform-specific tabs. Patreon, Facebook Groups, Podcas
 - `MILLIONVERIFIER_API_KEY` - MillionVerifier API key (secret, optional, email validation)
 - `HUBSPOT_ACCESS_TOKEN` - HubSpot Private App token (secret, optional, CRM contact check)
 
+## Pipeline Resilience
+- **Heartbeat**: Runs update `lastHeartbeat` column every 60s while active
+- **Auto-resume on startup**: Server detects runs stuck in 'running' status on boot, auto-resumes from checkpoint (5s delay)
+- **Watchdog timer**: Every 3 min checks for runs with stale heartbeat (5+ min old), auto-resumes from checkpoint
+- **Race guard**: `resumingRunIds` set prevents duplicate resume attempts from watchdog + startup overlap
+- **Circuit breaker**: Google Bridge & Google enrichment batch loops skip remaining batches after 5 consecutive failures
+- **Retry with backoff**: Apify actor starts retry up to 3 times (30s → 60s → 90s timeout), also retries on 429/5xx and transient network errors
+- **Graceful shutdown**: SIGTERM/SIGINT marks active runs as 'interrupted' with checkpoint preserved for resume
+
 ## Running
 - `npm run dev` - Start development server
 - `npm run db:push` - Push schema to database

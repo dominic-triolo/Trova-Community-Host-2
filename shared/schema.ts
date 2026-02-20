@@ -70,6 +70,7 @@ export const runs = pgTable("runs", {
   podcastEnabled: boolean("podcast_enabled").default(true),
   checkpoint: jsonb("checkpoint").$type<PipelineCheckpoint>(),
   completedSubSteps: text("completed_sub_steps").array().default([]),
+  lastHeartbeat: timestamp("last_heartbeat"),
 });
 
 export const sourceUrls = pgTable("source_urls", {
