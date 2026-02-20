@@ -33,7 +33,7 @@ server/
   db.ts - Database connection
   apify.ts - Apify API helper (start/wait/fetch)
   pipeline.ts - Full pipeline runner (discover/classify/extract/enrich/score)
-  scoring.ts - ICP scoring engine (6 pillars + penalties, supports learned weights)
+  scoring.ts - ICP scoring engine (6 pillars + penalties, learned weights view-only)
   hubspot-sync.ts - HubSpot deal sync + trait analysis + scoring weight computation
 
 shared/

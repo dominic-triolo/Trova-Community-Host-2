@@ -94,7 +94,7 @@ export default function HubSpotLearning() {
             HubSpot Learning
           </h1>
           <p className="text-muted-foreground mt-1">
-            Analyze your top-performing Hosts to optimize scoring and discover high-converting keywords
+            Analyze your top-performing Hosts to discover patterns and high-converting keywords
           </p>
         </div>
         <Button
@@ -186,9 +186,10 @@ export default function HubSpotLearning() {
                 <CardTitle className="flex items-center gap-2 text-base">
                   <BarChart3 className="h-4 w-4" />
                   Learned Scoring Weights
+                  <Badge variant="outline" className="ml-auto text-xs font-normal">View Only</Badge>
                 </CardTitle>
                 <CardDescription>
-                  How scoring pillar weights have been adjusted based on top Host traits
+                  What scoring weights would look like based on top Host traits. These are not applied to scoring yet.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">

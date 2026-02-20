@@ -1,6 +1,6 @@
 import { storage } from "./storage";
 import { runActorAndGetResults, runActorWithWallClockTimeout } from "./apify";
-import { scoreLead, loadLearnedWeights } from "./scoring";
+import { scoreLead } from "./scoring";
 import { apolloPersonMatch, isApolloAvailable, extractDomainFromUrl as apolloExtractDomain, isEnrichableDomain as apolloIsEnrichable } from "./apollo";
 import { extractDomainFromUrl, isEnrichableDomain } from "./hunter";
 import { verifyEmailBatch, mapResultToValidation } from "./millionverifier";
@@ -3144,11 +3144,6 @@ export async function runPipeline(runId: number): Promise<void> {
     const budgetUsd = run.budgetUsd || 0;
     const globalEmailTarget = run.emailTarget || 0;
 
-    const learnedWeights = await loadLearnedWeights();
-    if (learnedWeights) {
-      await appendAndSave(`Using learned scoring weights from HubSpot data`);
-    }
-
     if (isAutonomousRun && budgetUsd > 0) {
       const targetNote = globalEmailTarget > 0 ? `, target: ${globalEmailTarget} emails` : "";
       await appendAndSave(`Autonomous mode: $${budgetUsd.toFixed(2)} budget${targetNote}`, 2, "Step 1: Platform-specific discovery");
@@ -4805,7 +4800,6 @@ export async function reEnrichRun(runId: number): Promise<void> {
 
   try {
     activeRunIds.add(runId);
-    await loadLearnedWeights();
 
     const leads = await storage.listLeadsByRun(runId);
     if (leads.length === 0) {
@@ -6138,7 +6132,6 @@ export async function resumeRun(runId: number): Promise<void> {
 
   try {
     activeRunIds.add(runId);
-    await loadLearnedWeights();
 
     const checkpoint = await loadCheckpoint(runId);
     const hasCheckpoint = checkpoint && checkpoint.platformLeads && checkpoint.platformLeads.length > 0;

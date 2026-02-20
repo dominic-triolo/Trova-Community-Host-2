@@ -99,7 +99,7 @@ function audienceSizeScore(memberCount: number, subscriberCount: number): number
 }
 
 export function scoreLead(input: ScoringInput, learnedWeights?: LearnedWeights | null): ScoreBreakdown {
-  const w = learnedWeights || cachedWeights || DEFAULT_WEIGHTS;
+  const w = learnedWeights || DEFAULT_WEIGHTS;
   const fullText = [input.name, input.description, input.type, JSON.stringify(input.raw)].join(" ");
 
   const nicheIdentity = textScore(fullText, NICHE_KEYWORDS, w.nicheIdentity);

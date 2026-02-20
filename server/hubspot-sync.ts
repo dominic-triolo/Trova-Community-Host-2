@@ -1,5 +1,6 @@
 import { storage } from "./storage";
 import { isHubspotConfigured } from "./hubspot";
+import { log } from "./index";
 import type { HostTraits, ScoringInsights, LearnedWeights, Lead } from "@shared/schema";
 
 const HUBSPOT_API_BASE = "https://api.hubapi.com";
@@ -110,18 +111,70 @@ async function getAllDeals(pipelineId: string): Promise<HubSpotDeal[]> {
   return deals;
 }
 
-async function getDealContacts(dealId: string): Promise<string[]> {
-  const res = await hubspotFetch(`/crm/v3/objects/deals/${dealId}/associations/contacts`);
-  if (!res.ok) return [];
-  const data = await res.json();
-  return (data.results || []).map((r: any) => r.id || r.toObjectId);
+async function getDealContactsBatch(dealIds: string[]): Promise<Map<string, string[]>> {
+  const result = new Map<string, string[]>();
+  const batches: string[][] = [];
+  for (let i = 0; i < dealIds.length; i += 100) {
+    batches.push(dealIds.slice(i, i + 100));
+  }
+
+  for (const batch of batches) {
+    const body = {
+      inputs: batch.map(id => ({ id })),
+    };
+    const res = await hubspotFetch("/crm/v4/associations/deals/contacts/batch/read", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    await new Promise(r => setTimeout(r, 110));
+
+    if (!res.ok) {
+      for (const id of batch) {
+        result.set(id, []);
+      }
+      continue;
+    }
+
+    const data = await res.json();
+    for (const item of data.results || []) {
+      const dealId = item.from?.id;
+      const contactIds = (item.to || []).map((t: any) => t.toObjectId || t.id);
+      if (dealId) result.set(dealId, contactIds);
+    }
+    for (const id of batch) {
+      if (!result.has(id)) result.set(id, []);
+    }
+  }
+
+  return result;
 }
 
-async function getContactById(contactId: string): Promise<HubSpotContact | null> {
-  const res = await hubspotFetch(`/crm/v3/objects/contacts/${contactId}?properties=email,firstname,lastname`);
-  if (!res.ok) return null;
-  const data = await res.json();
-  return data;
+async function getContactsBatch(contactIds: string[]): Promise<Map<string, HubSpotContact>> {
+  const result = new Map<string, HubSpotContact>();
+  const batches: string[][] = [];
+  for (let i = 0; i < contactIds.length; i += 100) {
+    batches.push(contactIds.slice(i, i + 100));
+  }
+
+  for (const batch of batches) {
+    const body = {
+      inputs: batch.map(id => ({ id })),
+      properties: ["email", "firstname", "lastname"],
+    };
+    const res = await hubspotFetch("/crm/v3/objects/contacts/batch/read", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    await new Promise(r => setTimeout(r, 110));
+
+    if (!res.ok) continue;
+    const data = await res.json();
+    for (const contact of data.results || []) {
+      result.set(contact.id, contact);
+    }
+  }
+
+  return result;
 }
 
 function extractTraitsFromLead(lead: Lead): HostTraits {
@@ -166,7 +219,8 @@ function extractTraitsFromLead(lead: Lead): HostTraits {
 }
 
 export async function syncHubSpotDeals(): Promise<{
-  totalContacts: number;
+  dealsFound: number;
+  profilesCreated: number;
   matched: number;
   topHosts: number;
   pipelineId: string | null;
@@ -175,20 +229,27 @@ export async function syncHubSpotDeals(): Promise<{
     throw new Error("HubSpot not configured");
   }
 
+  log("Finding Trips pipeline...", "hubspot-learn");
   const pipelineId = await findTripsPipelineId();
   if (!pipelineId) {
     throw new Error("Could not find 'Trips' pipeline in HubSpot. Make sure a pipeline with 'Trips' in the name exists.");
   }
 
   const confirmedStageIds = await getConfirmedStageIds(pipelineId);
+  log(`Found ${confirmedStageIds.size} confirmed stages`, "hubspot-learn");
+
+  log("Fetching all deals...", "hubspot-learn");
   const allDeals = await getAllDeals(pipelineId);
+  log(`Found ${allDeals.length} deals in Trips pipeline`, "hubspot-learn");
+
+  log("Fetching deal-contact associations (batch)...", "hubspot-learn");
+  const dealIds = allDeals.map(d => d.id);
+  const dealContactsMap = await getDealContactsBatch(dealIds);
 
   const contactTrips = new Map<string, { contactId: string; confirmedTrips: number; totalDeals: number }>();
 
   for (const deal of allDeals) {
-    const contactIds = await getDealContacts(deal.id);
-    await new Promise(r => setTimeout(r, 110));
-
+    const contactIds = dealContactsMap.get(deal.id) || [];
     const isConfirmed = confirmedStageIds.has(deal.properties.dealstage || "");
 
     for (const contactId of contactIds) {
@@ -199,14 +260,20 @@ export async function syncHubSpotDeals(): Promise<{
     }
   }
 
+  log(`Found ${contactTrips.size} unique contacts across deals`, "hubspot-learn");
+
+  log("Fetching contact details (batch)...", "hubspot-learn");
+  const allContactIds = Array.from(contactTrips.keys());
+  const contactsMap = await getContactsBatch(allContactIds);
+  log(`Retrieved ${contactsMap.size} contact records`, "hubspot-learn");
+
   await storage.clearHostProfiles();
 
   let matched = 0;
   const contactEntries = Array.from(contactTrips.values());
 
   for (const entry of contactEntries) {
-    const contact = await getContactById(entry.contactId);
-    await new Promise(r => setTimeout(r, 110));
+    const contact = contactsMap.get(entry.contactId);
     if (!contact) continue;
 
     const email = contact.properties.email || "";
@@ -242,9 +309,11 @@ export async function syncHubSpotDeals(): Promise<{
   }
 
   const topHosts = contactEntries.filter(c => c.confirmedTrips >= 2).length;
+  log(`Profiles created: ${contactEntries.length}, matched to leads: ${matched}, top hosts (2+ trips): ${topHosts}`, "hubspot-learn");
 
   return {
-    totalContacts: contactEntries.length,
+    dealsFound: allDeals.length,
+    profilesCreated: contactEntries.length,
     matched,
     topHosts,
     pipelineId,
