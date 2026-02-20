@@ -16,7 +16,6 @@ import RunStatus from "@/pages/run-status";
 import RunsList from "@/pages/runs-list";
 import Results from "@/pages/results";
 import Documentation from "@/pages/documentation";
-import HubSpotLearning from "@/pages/hubspot-learning";
 import NotFound from "@/pages/not-found";
 
 const AUTH_KEY = "trova_authenticated";
@@ -94,7 +93,6 @@ function Router() {
       <Route path="/runs" component={RunsList} />
       <Route path="/runs/:id" component={RunStatus} />
       <Route path="/results" component={Results} />
-      <Route path="/learning" component={HubSpotLearning} />
       <Route path="/docs" component={Documentation} />
       <Route component={NotFound} />
     </Switch>

@@ -1,5 +1,5 @@
 import { useLocation, Link } from "wouter";
-import { Search, Activity, BarChart3, Compass, BookOpen, Brain } from "lucide-react";
+import { Search, Activity, BarChart3, Compass, BookOpen } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -17,7 +17,6 @@ const navItems = [
   { title: "Discover", url: "/", icon: Search },
   { title: "Run Status", url: "/runs", icon: Activity },
   { title: "Results", url: "/results", icon: BarChart3 },
-  { title: "Learning", url: "/learning", icon: Brain },
   { title: "Documentation", url: "/docs", icon: BookOpen },
 ];
 
