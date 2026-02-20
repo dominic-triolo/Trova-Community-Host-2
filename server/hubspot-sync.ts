@@ -23,6 +23,14 @@ interface HubSpotContact {
     email?: string;
     firstname?: string;
     lastname?: string;
+    jobtitle?: string;
+    company?: string;
+    city?: string;
+    state?: string;
+    country?: string;
+    website?: string;
+    linkedinbio?: string;
+    hs_linkedinid?: string;
   };
 }
 
@@ -159,7 +167,7 @@ async function getContactsBatch(contactIds: string[]): Promise<Map<string, HubSp
   for (const batch of batches) {
     const body = {
       inputs: batch.map(id => ({ id })),
-      properties: ["email", "firstname", "lastname"],
+      properties: ["email", "firstname", "lastname", "jobtitle", "company", "city", "state", "country", "website", "hs_linkedinid"],
     };
     const res = await hubspotFetch("/crm/v3/objects/contacts/batch/read", {
       method: "POST",
@@ -246,16 +254,20 @@ export async function syncHubSpotDeals(): Promise<{
   const dealIds = allDeals.map(d => d.id);
   const dealContactsMap = await getDealContactsBatch(dealIds);
 
-  const contactTrips = new Map<string, { contactId: string; confirmedTrips: number; totalDeals: number }>();
+  const contactTrips = new Map<string, { contactId: string; confirmedTrips: number; totalDeals: number; dealNames: string[]; totalAmount: number }>();
 
   for (const deal of allDeals) {
     const contactIds = dealContactsMap.get(deal.id) || [];
     const isConfirmed = confirmedStageIds.has(deal.properties.dealstage || "");
+    const dealName = deal.properties.dealname || "";
+    const amount = parseFloat(deal.properties.amount || "0") || 0;
 
     for (const contactId of contactIds) {
-      const existing = contactTrips.get(contactId) || { contactId, confirmedTrips: 0, totalDeals: 0 };
+      const existing = contactTrips.get(contactId) || { contactId, confirmedTrips: 0, totalDeals: 0, dealNames: [], totalAmount: 0 };
       existing.totalDeals++;
+      existing.totalAmount += amount;
       if (isConfirmed) existing.confirmedTrips++;
+      if (dealName) existing.dealNames.push(dealName);
       contactTrips.set(contactId, existing);
     }
   }
@@ -279,14 +291,32 @@ export async function syncHubSpotDeals(): Promise<{
     const email = contact.properties.email || "";
     const name = [contact.properties.firstname, contact.properties.lastname].filter(Boolean).join(" ");
 
+    const locationParts = [contact.properties.city, contact.properties.state, contact.properties.country].filter(Boolean);
+    const traits: HostTraits = {
+      jobTitle: contact.properties.jobtitle || undefined,
+      company: contact.properties.company || undefined,
+      location: locationParts.join(", ") || undefined,
+      website: contact.properties.website || undefined,
+      hasWebsite: !!contact.properties.website,
+      hasLinkedin: !!contact.properties.hs_linkedinid,
+      dealNames: entry.dealNames,
+    };
+
     let matchedLeadId: number | undefined;
-    let traits: HostTraits = {};
 
     if (email) {
       const lead = await storage.findLeadByEmail(email);
       if (lead) {
         matchedLeadId = lead.id;
-        traits = extractTraitsFromLead(lead);
+        const leadTraits = extractTraitsFromLead(lead);
+        Object.assign(traits, {
+          ...leadTraits,
+          jobTitle: traits.jobTitle || undefined,
+          location: traits.location || undefined,
+          hasWebsite: traits.hasWebsite || leadTraits.hasWebsite,
+          hasLinkedin: traits.hasLinkedin || leadTraits.hasLinkedin,
+          dealNames: traits.dealNames,
+        });
 
         const runParams = lead.runId ? (await storage.getRun(lead.runId))?.params as any : null;
         if (runParams?.seedKeywords) {
@@ -329,6 +359,16 @@ const DEFAULT_WEIGHTS: LearnedWeights = {
   tripFit: 10,
 };
 
+function extractDealKeywords(dealNames: string[]): string[] {
+  const stopWords = new Set(["the", "a", "an", "and", "or", "of", "to", "in", "for", "with", "on", "at", "by", "from", "trip", "deal", "host", "-", "&", "|"]);
+  const keywords: string[] = [];
+  for (const name of dealNames) {
+    const words = name.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(w => w.length > 2 && !stopWords.has(w));
+    keywords.push(...words);
+  }
+  return keywords;
+}
+
 export async function computeScoringWeights(): Promise<{
   weights: LearnedWeights;
   insights: ScoringInsights;
@@ -337,119 +377,82 @@ export async function computeScoringWeights(): Promise<{
 }> {
   const profiles = await storage.listHostProfiles();
 
-  if (profiles.length < 5) {
-    return {
-      weights: DEFAULT_WEIGHTS,
-      insights: {
-        topTraits: [],
-        topPlatforms: [],
-        topCommunityTypes: [],
-        avgAudienceSize: 0,
-        avgPlatformCount: 0,
-        avgScore: 0,
-        suggestedKeywords: [],
-      },
-      sampleSize: profiles.length,
-      topHostCount: 0,
-    };
+  const emptyInsights: ScoringInsights = {
+    topTraits: [],
+    topPlatforms: [],
+    topCommunityTypes: [],
+    avgAudienceSize: 0,
+    avgPlatformCount: 0,
+    avgScore: 0,
+    suggestedKeywords: [],
+    topJobTitles: [],
+    topLocations: [],
+    topDealKeywords: [],
+    topCompanies: [],
+    avgConfirmedTrips: 0,
+  };
+
+  if (profiles.length < 3) {
+    return { weights: DEFAULT_WEIGHTS, insights: emptyInsights, sampleSize: profiles.length, topHostCount: 0 };
   }
 
-  const topHosts = profiles.filter(p => (p.confirmedTrips || 0) >= 2 && p.traits);
-  const allWithTraits = profiles.filter(p => p.traits && Object.keys(p.traits).length > 0);
+  let topHosts = profiles.filter(p => (p.confirmedTrips || 0) >= 2);
 
   if (topHosts.length < 3) {
-    const sortedByTrips = profiles
-      .filter(p => (p.confirmedTrips || 0) >= 1 && p.traits)
+    const sorted = profiles
+      .filter(p => (p.confirmedTrips || 0) >= 1)
       .sort((a, b) => (b.confirmedTrips || 0) - (a.confirmedTrips || 0));
-    topHosts.push(...sortedByTrips.slice(0, Math.max(5, sortedByTrips.length)));
-    const unique = new Map(topHosts.map(h => [h.id, h]));
-    topHosts.length = 0;
-    topHosts.push(...Array.from(unique.values()));
+    topHosts = sorted.slice(0, Math.max(5, sorted.length));
   }
 
   if (topHosts.length === 0) {
-    return {
-      weights: DEFAULT_WEIGHTS,
-      insights: {
-        topTraits: [],
-        topPlatforms: [],
-        topCommunityTypes: [],
-        avgAudienceSize: 0,
-        avgPlatformCount: 0,
-        avgScore: 0,
-        suggestedKeywords: [],
-      },
-      sampleSize: profiles.length,
-      topHostCount: 0,
-    };
+    return { weights: DEFAULT_WEIGHTS, insights: emptyInsights, sampleSize: profiles.length, topHostCount: 0 };
   }
 
-  function avgPillar(hosts: typeof topHosts, key: keyof HostTraits): number {
-    const vals = hosts.map(h => Number((h.traits as any)?.[key]) || 0);
-    return vals.reduce((s, v) => s + v, 0) / Math.max(vals.length, 1);
-  }
-
-  const topAvg = {
-    nicheIdentity: avgPillar(topHosts, "nicheIdentity"),
-    trustLeadership: avgPillar(topHosts, "trustLeadership"),
-    engagement: avgPillar(topHosts, "engagement"),
-    monetization: avgPillar(topHosts, "monetization"),
-    ownedChannels: avgPillar(topHosts, "ownedChannels"),
-    tripFit: avgPillar(topHosts, "tripFit"),
-  };
-
-  const allAvg = {
-    nicheIdentity: avgPillar(allWithTraits, "nicheIdentity"),
-    trustLeadership: avgPillar(allWithTraits, "trustLeadership"),
-    engagement: avgPillar(allWithTraits, "engagement"),
-    monetization: avgPillar(allWithTraits, "monetization"),
-    ownedChannels: avgPillar(allWithTraits, "ownedChannels"),
-    tripFit: avgPillar(allWithTraits, "tripFit"),
-  };
-
-  const rawWeights: LearnedWeights = { ...DEFAULT_WEIGHTS };
-  const pillars: (keyof LearnedWeights)[] = ["nicheIdentity", "trustLeadership", "engagement", "monetization", "ownedChannels", "tripFit"];
-
-  for (const p of pillars) {
-    const topVal = topAvg[p];
-    const allVal = allAvg[p] || 1;
-    const lift = topVal / Math.max(allVal, 0.1);
-    rawWeights[p] = DEFAULT_WEIGHTS[p] * Math.min(Math.max(lift, 0.5), 2.0);
-  }
-
-  const totalRaw = pillars.reduce((s, p) => s + rawWeights[p], 0);
-  const weights: LearnedWeights = {} as LearnedWeights;
-  for (const p of pillars) {
-    weights[p] = Math.round((rawWeights[p] / totalRaw) * 100);
-  }
-
+  const jobTitleCounts = new Map<string, number>();
+  const locationCounts = new Map<string, number>();
+  const companyCounts = new Map<string, number>();
+  const dealKeywordCounts = new Map<string, number>();
   const traitCounts = new Map<string, number>();
-  const platformCounts = new Map<string, number>();
-  const typeCounts = new Map<string, number>();
   const keywordCounts = new Map<string, number>();
-  let totalAudience = 0;
-  let totalPlatforms = 0;
-  let totalScore = 0;
+  let totalConfirmedTrips = 0;
 
   for (const h of topHosts) {
-    const t = h.traits as HostTraits;
-    if (!t) continue;
+    const t = (h.traits as HostTraits) || {};
+
+    if (t.jobTitle) {
+      const normalized = t.jobTitle.trim().toLowerCase();
+      if (normalized.length > 1) {
+        jobTitleCounts.set(normalized, (jobTitleCounts.get(normalized) || 0) + 1);
+      }
+    }
+
+    if (t.location) {
+      locationCounts.set(t.location, (locationCounts.get(t.location) || 0) + 1);
+    }
+
+    if (t.company) {
+      const normalized = t.company.trim();
+      if (normalized.length > 1) {
+        companyCounts.set(normalized, (companyCounts.get(normalized) || 0) + 1);
+      }
+    }
+
+    if (t.dealNames && t.dealNames.length > 0) {
+      const dkws = extractDealKeywords(t.dealNames);
+      for (const kw of dkws) {
+        dealKeywordCounts.set(kw, (dealKeywordCounts.get(kw) || 0) + 1);
+      }
+    }
 
     if (t.hasWebsite) traitCounts.set("Has Website", (traitCounts.get("Has Website") || 0) + 1);
+    if (t.hasLinkedin) traitCounts.set("Has LinkedIn", (traitCounts.get("Has LinkedIn") || 0) + 1);
     if (t.hasNewsletter) traitCounts.set("Newsletter/Substack", (traitCounts.get("Newsletter/Substack") || 0) + 1);
     if (t.hasYoutube) traitCounts.set("YouTube Channel", (traitCounts.get("YouTube Channel") || 0) + 1);
     if (t.hasPodcast) traitCounts.set("Podcast", (traitCounts.get("Podcast") || 0) + 1);
     if (t.hasInstagram) traitCounts.set("Instagram", (traitCounts.get("Instagram") || 0) + 1);
-    if (t.hasLinkedin) traitCounts.set("LinkedIn", (traitCounts.get("LinkedIn") || 0) + 1);
-    if ((t.monetizationSignalCount || 0) > 0) traitCounts.set("Monetization Signals", (traitCounts.get("Monetization Signals") || 0) + 1);
-    if ((t.audienceSize || 0) > 1000) traitCounts.set("1K+ Audience", (traitCounts.get("1K+ Audience") || 0) + 1);
-    if ((t.platformCount || 0) >= 3) traitCounts.set("3+ Platforms", (traitCounts.get("3+ Platforms") || 0) + 1);
 
-    if (t.source) platformCounts.set(t.source, (platformCounts.get(t.source) || 0) + 1);
-    if (t.communityType) typeCounts.set(t.communityType, (typeCounts.get(t.communityType) || 0) + 1);
-    totalAudience += t.audienceSize || 0;
-    totalPlatforms += t.platformCount || 0;
-    totalScore += t.score || 0;
+    totalConfirmedTrips += h.confirmedTrips || 0;
 
     if (t.keywords) {
       for (const kw of t.keywords) {
@@ -463,12 +466,25 @@ export async function computeScoringWeights(): Promise<{
     .sort((a, b) => b.prevalence - a.prevalence)
     .slice(0, 10);
 
-  const topPlatforms = Array.from(platformCounts.entries())
-    .map(([platform, count]) => ({ platform, count }))
-    .sort((a, b) => b.count - a.count);
+  const topJobTitles = Array.from(jobTitleCounts.entries())
+    .map(([title, count]) => ({ title, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 15);
 
-  const topCommunityTypes = Array.from(typeCounts.entries())
-    .map(([type, count]) => ({ type, count }))
+  const topLocations = Array.from(locationCounts.entries())
+    .map(([location, count]) => ({ location, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 15);
+
+  const topDealKeywords = Array.from(dealKeywordCounts.entries())
+    .filter(([_, count]) => count >= 2)
+    .map(([keyword, count]) => ({ keyword, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 20);
+
+  const topCompanies = Array.from(companyCounts.entries())
+    .filter(([_, count]) => count >= 2)
+    .map(([company, count]) => ({ company, count }))
     .sort((a, b) => b.count - a.count)
     .slice(0, 10);
 
@@ -479,22 +495,27 @@ export async function computeScoringWeights(): Promise<{
 
   const insights: ScoringInsights = {
     topTraits,
-    topPlatforms,
-    topCommunityTypes,
-    avgAudienceSize: Math.round(totalAudience / topHosts.length),
-    avgPlatformCount: Math.round((totalPlatforms / topHosts.length) * 10) / 10,
-    avgScore: Math.round(totalScore / topHosts.length),
+    topPlatforms: [],
+    topCommunityTypes: [],
+    avgAudienceSize: 0,
+    avgPlatformCount: 0,
+    avgScore: 0,
     suggestedKeywords,
+    topJobTitles,
+    topLocations,
+    topDealKeywords,
+    topCompanies,
+    avgConfirmedTrips: Math.round((totalConfirmedTrips / topHosts.length) * 10) / 10,
   };
 
   await storage.saveScoringWeights({
-    weights,
+    weights: DEFAULT_WEIGHTS,
     sampleSize: profiles.length,
     topHostCount: topHosts.length,
     insights,
   });
 
-  return { weights, insights, sampleSize: profiles.length, topHostCount: topHosts.length };
+  return { weights: DEFAULT_WEIGHTS, insights, sampleSize: profiles.length, topHostCount: topHosts.length };
 }
 
 export async function getLatestWeights(): Promise<LearnedWeights | null> {

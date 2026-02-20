@@ -4,7 +4,7 @@ import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Brain, TrendingUp, Users, Target, Lightbulb, RefreshCw, BarChart3 } from "lucide-react";
+import { Loader2, Brain, TrendingUp, Users, Lightbulb, RefreshCw, MapPin, Briefcase, Tag } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 interface ScoringInsights {
@@ -15,6 +15,11 @@ interface ScoringInsights {
   avgPlatformCount: number;
   avgScore: number;
   suggestedKeywords: { keyword: string; score: number }[];
+  topJobTitles?: { title: string; count: number }[];
+  topLocations?: { location: string; count: number }[];
+  topDealKeywords?: { keyword: string; count: number }[];
+  topCompanies?: { company: string; count: number }[];
+  avgConfirmedTrips?: number;
 }
 
 interface LearnedWeights {
@@ -34,24 +39,6 @@ interface InsightsData {
   topHostCount: number;
   computedAt: string;
 }
-
-const DEFAULT_WEIGHTS: LearnedWeights = {
-  nicheIdentity: 20,
-  trustLeadership: 15,
-  engagement: 20,
-  monetization: 15,
-  ownedChannels: 20,
-  tripFit: 10,
-};
-
-const WEIGHT_LABELS: Record<string, string> = {
-  nicheIdentity: "Niche Identity",
-  trustLeadership: "Trust & Leadership",
-  engagement: "Engagement",
-  monetization: "Monetization",
-  ownedChannels: "Owned Channels",
-  tripFit: "Trip Fit",
-};
 
 export default function HubSpotLearning() {
   const { toast } = useToast();
@@ -83,7 +70,8 @@ export default function HubSpotLearning() {
     },
   });
 
-  const hasInsights = insights?.hasData && insights.weights && insights.insights;
+  const hasInsights = insights?.hasData && insights.insights;
+  const ins = insights?.insights;
 
   return (
     <div className="flex-1 overflow-auto p-6 space-y-6" data-testid="page-hubspot-learning">
@@ -111,7 +99,7 @@ export default function HubSpotLearning() {
           ) : (
             <>
               <RefreshCw className="h-4 w-4 mr-2" />
-              Sync & Learn from HubSpot
+              Sync & Analyze
             </>
           )}
         </Button>
@@ -122,7 +110,7 @@ export default function HubSpotLearning() {
           <CardContent className="pt-4">
             <p className="text-sm text-green-700 dark:text-green-300" data-testid="text-sync-result">
               Synced {syncResult.sync.dealsFound} deals, created {syncResult.sync.profilesCreated} host profiles.
-              Computed weights from {syncResult.topHostCount} top Hosts (out of {syncResult.sampleSize} total).
+              Found {syncResult.topHostCount} top Hosts (2+ confirmed trips) out of {syncResult.sampleSize} total contacts.
             </p>
           </CardContent>
         </Card>
@@ -138,7 +126,7 @@ export default function HubSpotLearning() {
             <Brain className="h-12 w-12 mx-auto mb-4 text-muted-foreground/50" />
             <h3 className="text-lg font-medium mb-2">No Learning Data Yet</h3>
             <p className="text-muted-foreground max-w-md mx-auto mb-4">
-              Click "Sync & Learn from HubSpot" to analyze your Trips pipeline deals and identify what makes your best Hosts successful.
+              Click "Sync & Analyze" to pull your Trips pipeline data and discover what makes your best Hosts successful.
             </p>
           </CardContent>
         </Card>
@@ -147,76 +135,122 @@ export default function HubSpotLearning() {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <Card data-testid="card-sample-size">
               <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground">Hosts Analyzed</CardTitle>
+                <CardTitle className="text-sm font-medium text-muted-foreground">Total Contacts</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold">{insights.sampleSize}</div>
+                <div className="text-2xl font-bold">{insights!.sampleSize.toLocaleString()}</div>
                 <p className="text-xs text-muted-foreground">
-                  {insights.topHostCount} top performers (2+ confirmed trips)
+                  From your Trips pipeline
                 </p>
               </CardContent>
             </Card>
 
-            <Card data-testid="card-avg-score">
+            <Card data-testid="card-top-hosts">
               <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground">Avg Top Host Score</CardTitle>
+                <CardTitle className="text-sm font-medium text-muted-foreground">Top Hosts</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold">{insights.insights!.avgScore}</div>
-                <p className="text-xs text-muted-foreground">ICP score of top performers</p>
+                <div className="text-2xl font-bold">{insights!.topHostCount.toLocaleString()}</div>
+                <p className="text-xs text-muted-foreground">
+                  2+ confirmed trips
+                </p>
               </CardContent>
             </Card>
 
-            <Card data-testid="card-avg-audience">
+            <Card data-testid="card-avg-trips">
               <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground">Avg Audience Size</CardTitle>
+                <CardTitle className="text-sm font-medium text-muted-foreground">Avg Confirmed Trips</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold">{(insights.insights!.avgAudienceSize || 0).toLocaleString()}</div>
-                <p className="text-xs text-muted-foreground">
-                  Across {insights.insights!.avgPlatformCount} platforms avg
-                </p>
+                <div className="text-2xl font-bold">{ins!.avgConfirmedTrips || 0}</div>
+                <p className="text-xs text-muted-foreground">Per top Host</p>
               </CardContent>
             </Card>
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <Card data-testid="card-learned-weights">
+            <Card data-testid="card-job-titles">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2 text-base">
-                  <BarChart3 className="h-4 w-4" />
-                  Learned Scoring Weights
-                  <Badge variant="outline" className="ml-auto text-xs font-normal">View Only</Badge>
+                  <Briefcase className="h-4 w-4" />
+                  Top Job Titles
                 </CardTitle>
                 <CardDescription>
-                  What scoring weights would look like based on top Host traits. These are not applied to scoring yet.
+                  Most common roles among your best Hosts
                 </CardDescription>
               </CardHeader>
-              <CardContent className="space-y-3">
-                {Object.entries(insights.weights!).map(([key, value]) => {
-                  const defaultVal = DEFAULT_WEIGHTS[key as keyof LearnedWeights];
-                  const diff = value - defaultVal;
-                  const diffLabel = diff > 0 ? `+${diff}` : diff < 0 ? `${diff}` : "=";
-                  const diffColor = diff > 0 ? "text-green-600 dark:text-green-400" : diff < 0 ? "text-red-600 dark:text-red-400" : "text-muted-foreground";
-                  return (
-                    <div key={key} className="flex items-center justify-between" data-testid={`weight-${key}`}>
-                      <span className="text-sm font-medium">{WEIGHT_LABELS[key] || key}</span>
-                      <div className="flex items-center gap-3">
-                        <div className="w-32 h-2 bg-muted rounded-full overflow-hidden">
-                          <div
-                            className="h-full bg-primary rounded-full transition-all"
-                            style={{ width: `${(value / 30) * 100}%` }}
-                          />
-                        </div>
-                        <span className="text-sm font-mono w-8 text-right">{value}</span>
-                        <span className={`text-xs font-mono w-8 ${diffColor}`}>{diffLabel}</span>
+              <CardContent>
+                {ins!.topJobTitles && ins!.topJobTitles.length > 0 ? (
+                  <div className="space-y-2">
+                    {ins!.topJobTitles.map((jt) => (
+                      <div key={jt.title} className="flex items-center justify-between" data-testid={`jobtitle-${jt.title}`}>
+                        <span className="text-sm capitalize">{jt.title}</span>
+                        <Badge variant="secondary" className="text-xs">{jt.count}</Badge>
                       </div>
-                    </div>
-                  );
-                })}
-                <p className="text-xs text-muted-foreground pt-2 border-t">
-                  Last computed: {new Date(insights.computedAt).toLocaleString()}
-                </p>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">No job title data available</p>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card data-testid="card-locations">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <MapPin className="h-4 w-4" />
+                  Top Locations
+                </CardTitle>
+                <CardDescription>
+                  Where your most successful Hosts are based
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {ins!.topLocations && ins!.topLocations.length > 0 ? (
+                  <div className="space-y-2">
+                    {ins!.topLocations.map((loc) => (
+                      <div key={loc.location} className="flex items-center justify-between" data-testid={`location-${loc.location}`}>
+                        <span className="text-sm">{loc.location}</span>
+                        <Badge variant="secondary" className="text-xs">{loc.count}</Badge>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">No location data available</p>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <Card data-testid="card-deal-keywords">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <Tag className="h-4 w-4" />
+                  Deal Name Keywords
+                </CardTitle>
+                <CardDescription>
+                  Recurring themes from trip deal names of top Hosts
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {ins!.topDealKeywords && ins!.topDealKeywords.length > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {ins!.topDealKeywords.map((dk) => (
+                      <Badge
+                        key={dk.keyword}
+                        variant={dk.count >= 5 ? "default" : "secondary"}
+                        className="cursor-default"
+                        data-testid={`deal-keyword-${dk.keyword}`}
+                      >
+                        {dk.keyword}
+                        <span className="ml-1 opacity-70">({dk.count})</span>
+                      </Badge>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">No recurring keywords found in deal names</p>
+                )}
               </CardContent>
             </Card>
 
@@ -224,15 +258,15 @@ export default function HubSpotLearning() {
               <CardHeader>
                 <CardTitle className="flex items-center gap-2 text-base">
                   <Lightbulb className="h-4 w-4" />
-                  Suggested Keywords
+                  Suggested Discovery Keywords
                 </CardTitle>
                 <CardDescription>
-                  Keywords from top-performing Hosts that may yield high-quality leads
+                  Keywords from matched leads that produced top Hosts
                 </CardDescription>
               </CardHeader>
               <CardContent>
                 <div className="flex flex-wrap gap-2">
-                  {insights.insights!.suggestedKeywords.map((kw) => (
+                  {ins!.suggestedKeywords.map((kw) => (
                     <Badge
                       key={kw.keyword}
                       variant={kw.score >= 50 ? "default" : "secondary"}
@@ -243,8 +277,8 @@ export default function HubSpotLearning() {
                       <span className="ml-1 opacity-70">{kw.score}%</span>
                     </Badge>
                   ))}
-                  {insights.insights!.suggestedKeywords.length === 0 && (
-                    <p className="text-sm text-muted-foreground">No keyword patterns detected yet</p>
+                  {ins!.suggestedKeywords.length === 0 && (
+                    <p className="text-sm text-muted-foreground">Run more discovery pipelines to see keyword suggestions</p>
                   )}
                 </div>
               </CardContent>
@@ -259,64 +293,61 @@ export default function HubSpotLearning() {
                   Top Host Traits
                 </CardTitle>
                 <CardDescription>
-                  Most common characteristics among your best-performing Hosts
+                  Online presence patterns among your best Hosts
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-2">
-                {insights.insights!.topTraits.map((t) => (
-                  <div key={t.trait} className="flex items-center justify-between" data-testid={`trait-${t.trait}`}>
-                    <span className="text-sm capitalize">{t.trait.replace(/_/g, " ")}</span>
-                    <div className="flex items-center gap-2">
-                      <div className="w-20 h-1.5 bg-muted rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-primary/70 rounded-full"
-                          style={{ width: `${t.prevalence}%` }}
-                        />
+                {ins!.topTraits.length > 0 ? (
+                  ins!.topTraits.map((t) => (
+                    <div key={t.trait} className="flex items-center justify-between" data-testid={`trait-${t.trait}`}>
+                      <span className="text-sm">{t.trait}</span>
+                      <div className="flex items-center gap-2">
+                        <div className="w-20 h-1.5 bg-muted rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-primary/70 rounded-full"
+                            style={{ width: `${t.prevalence}%` }}
+                          />
+                        </div>
+                        <span className="text-xs text-muted-foreground w-10 text-right">{t.prevalence}%</span>
                       </div>
-                      <span className="text-xs text-muted-foreground w-10 text-right">{t.prevalence}%</span>
                     </div>
-                  </div>
-                ))}
+                  ))
+                ) : (
+                  <p className="text-sm text-muted-foreground">No trait data available yet</p>
+                )}
               </CardContent>
             </Card>
 
-            <Card data-testid="card-top-platforms">
+            <Card data-testid="card-companies">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2 text-base">
                   <Users className="h-4 w-4" />
-                  Source Platforms & Community Types
+                  Top Companies
                 </CardTitle>
                 <CardDescription>
-                  Where your top Hosts were discovered
+                  Organizations with multiple successful Hosts
                 </CardDescription>
               </CardHeader>
-              <CardContent className="space-y-4">
-                <div>
-                  <h4 className="text-xs font-medium text-muted-foreground uppercase mb-2">Discovery Platforms</h4>
-                  <div className="flex flex-wrap gap-2">
-                    {insights.insights!.topPlatforms.map((p) => (
-                      <Badge key={p.platform} variant="outline" data-testid={`platform-${p.platform}`}>
-                        {p.platform} ({p.count})
-                      </Badge>
+              <CardContent>
+                {ins!.topCompanies && ins!.topCompanies.length > 0 ? (
+                  <div className="space-y-2">
+                    {ins!.topCompanies.map((c) => (
+                      <div key={c.company} className="flex items-center justify-between" data-testid={`company-${c.company}`}>
+                        <span className="text-sm">{c.company}</span>
+                        <Badge variant="secondary" className="text-xs">{c.count} hosts</Badge>
+                      </div>
                     ))}
                   </div>
-                </div>
-                <div>
-                  <h4 className="text-xs font-medium text-muted-foreground uppercase mb-2">Community Types</h4>
-                  <div className="flex flex-wrap gap-2">
-                    {insights.insights!.topCommunityTypes.map((ct) => (
-                      <Badge key={ct.type} variant="outline" data-testid={`community-type-${ct.type}`}>
-                        {ct.type} ({ct.count})
-                      </Badge>
-                    ))}
-                    {insights.insights!.topCommunityTypes.length === 0 && (
-                      <span className="text-sm text-muted-foreground">No data yet</span>
-                    )}
-                  </div>
-                </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">No company patterns detected</p>
+                )}
               </CardContent>
             </Card>
           </div>
+
+          <p className="text-xs text-muted-foreground text-center">
+            Last synced: {new Date(insights!.computedAt).toLocaleString()}
+          </p>
         </>
       )}
     </div>

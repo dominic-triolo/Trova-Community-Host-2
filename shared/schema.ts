@@ -300,6 +300,11 @@ export interface HostTraits {
   ownedChannels?: number;
   tripFit?: number;
   keywords?: string[];
+  jobTitle?: string;
+  company?: string;
+  location?: string;
+  dealNames?: string[];
+  website?: string;
 }
 
 export const scoringWeights = pgTable("scoring_weights", {
@@ -328,6 +333,11 @@ export interface ScoringInsights {
   avgPlatformCount: number;
   avgScore: number;
   suggestedKeywords: { keyword: string; score: number }[];
+  topJobTitles?: { title: string; count: number }[];
+  topLocations?: { location: string; count: number }[];
+  topDealKeywords?: { keyword: string; count: number }[];
+  topCompanies?: { company: string; count: number }[];
+  avgConfirmedTrips?: number;
 }
 
 export const insertHostProfileSchema = createInsertSchema(hostProfiles).omit({ id: true, syncedAt: true });
