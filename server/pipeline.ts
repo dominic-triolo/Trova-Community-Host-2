@@ -2246,7 +2246,7 @@ async function googleSearchEnrichCreators(
   }
 
   const batchSize = 10;
-  const concurrentSearchBatches = 10;
+  const concurrentSearchBatches = 3;
   const enrichedLeadIndices = new Set<number>();
 
   const allSearchBatches: { queries: { term: string; leadIdx: number }[]; batchNum: number }[] = [];
@@ -2363,7 +2363,9 @@ async function googleSearchEnrichCreators(
 
   for (let i = 0; i < allSearchBatches.length; i += concurrentSearchBatches) {
     const concurrentSlice = allSearchBatches.slice(i, i + concurrentSearchBatches);
-    await Promise.allSettled(concurrentSlice.map(b => processSearchBatch(b)));
+    await Promise.allSettled(concurrentSlice.map((b, idx) =>
+      new Promise<void>(resolve => setTimeout(() => processSearchBatch(b).then(resolve).catch(resolve), idx * 2000))
+    ));
   }
 
   await appendAndSave(`Google enrichment: found new data for ${enrichedLeadIndices.size}/${leadsToSearch.length} creators`);
@@ -2398,7 +2400,7 @@ async function googleBridgeEnrichFacebookGroups(
   }
 
   const batchSize = 10;
-  const concurrentBridgeBatches = 10;
+  const concurrentBridgeBatches = 3;
   const enrichedLeadIndices = new Set<number>();
 
   const allBridgeBatches: { queries: typeof queries; batchNum: number }[] = [];
@@ -2520,7 +2522,9 @@ async function googleBridgeEnrichFacebookGroups(
 
   for (let i = 0; i < allBridgeBatches.length; i += concurrentBridgeBatches) {
     const concurrentSlice = allBridgeBatches.slice(i, i + concurrentBridgeBatches);
-    await Promise.allSettled(concurrentSlice.map(b => processBridgeBatch(b)));
+    await Promise.allSettled(concurrentSlice.map((b, idx) =>
+      new Promise<void>(resolve => setTimeout(() => processBridgeBatch(b).then(resolve).catch(resolve), idx * 2000))
+    ));
   }
 
   await appendAndSave(`Google Bridge: found new data for ${enrichedLeadIndices.size}/${fbLeads.length} Facebook groups`);
@@ -3025,7 +3029,7 @@ async function crawlCreatorWebsitesForEmails(
   await appendAndSave(`Website crawl: found ${websiteEntries.length} unique personal websites to crawl`);
 
   const batchSize = 5;
-  const concurrentBatches = 10;
+  const concurrentBatches = 3;
   const allBatches: { entries: [string, string][]; batchNum: number }[] = [];
   const totalBatches = Math.ceil(websiteEntries.length / batchSize);
 
@@ -3106,7 +3110,9 @@ async function crawlCreatorWebsitesForEmails(
 
   for (let i = 0; i < allBatches.length; i += concurrentBatches) {
     const concurrentSlice = allBatches.slice(i, i + concurrentBatches);
-    await Promise.allSettled(concurrentSlice.map(b => processCrawlBatch(b)));
+    await Promise.allSettled(concurrentSlice.map((b, idx) =>
+      new Promise<void>(resolve => setTimeout(() => processCrawlBatch(b).then(resolve).catch(resolve), idx * 2000))
+    ));
   }
 
   await appendAndSave(`Website crawl complete: found ${emailMap.size} emails from ${websiteEntries.length} websites`);
