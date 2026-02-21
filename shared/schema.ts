@@ -154,10 +154,11 @@ export const AVAILABLE_SOURCES = [
   { id: "podcast", label: "Podcasters", description: "Podcast hosts with episode counts & RSS emails" },
   { id: "substack", label: "Substack Writers", description: "Newsletter writers with subscriber bases & public emails" },
   { id: "mighty", label: "Mighty Networks", description: "Community builders with engaged, paying members" },
+  { id: "linkedin", label: "LinkedIn Groups", description: "Professional community leaders & alumni network organizers" },
   { id: "google", label: "Google Search + Websites", description: "Generic website discovery" },
 ] as const;
 
-export type SourceId = "meetup" | "youtube" | "reddit" | "eventbrite" | "facebook" | "patreon" | "podcast" | "substack" | "mighty" | "google";
+export type SourceId = "meetup" | "youtube" | "reddit" | "eventbrite" | "facebook" | "patreon" | "podcast" | "substack" | "mighty" | "linkedin" | "google";
 export const DEFAULT_ENABLED_SOURCES: SourceId[] = ["patreon"];
 
 export const TEMPORARILY_DISABLED_SOURCES: SourceId[] = ["youtube", "reddit", "eventbrite", "google"];
@@ -173,7 +174,7 @@ export const runParamsSchema = z.object({
   seedGeos: z.array(z.string()).default([]),
   maxDiscoveredUrls: z.number().min(1).max(500).default(200),
   maxGoogleResultsPerQuery: z.number().min(1).max(100).default(10),
-  enabledSources: z.array(z.enum(["meetup", "youtube", "reddit", "eventbrite", "facebook", "patreon", "podcast", "substack", "mighty", "google"])).min(1, "At least one source must be selected").default(DEFAULT_ENABLED_SOURCES),
+  enabledSources: z.array(z.enum(["meetup", "youtube", "reddit", "eventbrite", "facebook", "patreon", "podcast", "substack", "mighty", "linkedin", "google"])).min(1, "At least one source must be selected").default(DEFAULT_ENABLED_SOURCES),
   minMemberCount: z.number().min(0).default(0),
   maxMemberCount: z.number().min(0).default(0),
   minPostCount: z.number().min(0).default(0),
@@ -217,6 +218,7 @@ export const PLATFORM_COST_PER_LEAD: Record<string, number> = {
   substack: 0.01,
   meetup: 0.01,
   mighty: 0.01,
+  linkedin: 0.01,
 };
 
 export const PLATFORM_EMAIL_YIELD: Record<string, number> = {
@@ -226,6 +228,7 @@ export const PLATFORM_EMAIL_YIELD: Record<string, number> = {
   substack: 0.40,
   meetup: 0.20,
   mighty: 0.30,
+  linkedin: 0.25,
 };
 
 export const PLATFORM_VALID_EMAIL_RATE: Record<string, number> = {
@@ -235,6 +238,7 @@ export const PLATFORM_VALID_EMAIL_RATE: Record<string, number> = {
   substack: 0.21,
   meetup: 0.40,
   mighty: 0.35,
+  linkedin: 0.45,
 };
 
 export const KEYWORD_PLATFORM_MAP: Record<string, SourceId[]> = {
@@ -244,28 +248,32 @@ export const KEYWORD_PLATFORM_MAP: Record<string, SourceId[]> = {
   "substack": ["substack"],
   "facebook group": ["facebook"],
   "fb group": ["facebook"],
+  "linkedin group": ["linkedin"],
   "church": ["facebook", "patreon", "meetup"],
   "ministry": ["facebook", "patreon"],
   "faith": ["facebook", "patreon", "meetup"],
   "run club": ["facebook", "patreon", "meetup"],
-  "running": ["facebook", "patreon", "podcast", "meetup"],
+  "running": ["facebook", "patreon", "podcast", "meetup", "linkedin"],
   "hiking": ["facebook", "patreon", "podcast", "meetup"],
   "cycling": ["facebook", "patreon", "podcast", "meetup"],
-  "alumni": ["facebook", "meetup"],
+  "alumni": ["facebook", "meetup", "linkedin"],
   "social club": ["facebook", "meetup"],
   "meetup": ["meetup"],
   "yoga": ["patreon", "meetup", "podcast", "mighty"],
-  "fitness": ["patreon", "meetup", "podcast", "mighty"],
+  "fitness": ["patreon", "meetup", "podcast", "mighty", "linkedin"],
   "outdoor": ["facebook", "meetup", "patreon", "mighty"],
   "photography": ["meetup", "patreon", "podcast"],
   "book club": ["meetup", "facebook", "mighty"],
-  "tech": ["meetup", "mighty"],
-  "networking": ["meetup", "facebook", "mighty"],
+  "tech": ["meetup", "mighty", "linkedin"],
+  "networking": ["meetup", "facebook", "mighty", "linkedin"],
   "community": ["mighty", "facebook", "meetup"],
-  "coaching": ["mighty", "patreon", "podcast"],
+  "coaching": ["mighty", "patreon", "podcast", "linkedin"],
   "wellness": ["mighty", "patreon", "podcast"],
-  "leadership": ["mighty", "facebook"],
+  "leadership": ["mighty", "facebook", "linkedin"],
   "membership": ["mighty", "patreon"],
+  "professional": ["linkedin", "meetup"],
+  "industry": ["linkedin"],
+  "association": ["linkedin", "facebook"],
 };
 
 export const autonomousParamsSchema = z.object({
@@ -480,6 +488,24 @@ export const MIGHTY_RECOMMENDED_KEYWORDS = [
   { label: "Creative arts", keywords: ["art community", "creative", "painting"] },
   { label: "Membership community", keywords: ["membership", "paid community", "online community"] },
   { label: "Surfing & water sports", keywords: ["surf community", "diving", "water sports"] },
+] as const;
+
+export const LINKEDIN_RECOMMENDED_KEYWORDS = [
+  { label: "Professional networking", keywords: ["professional networking group", "business networking", "industry professionals"] },
+  { label: "Alumni networks", keywords: ["alumni group", "alumni network", "alumni association"] },
+  { label: "Leadership & coaching", keywords: ["leadership group", "executive coaching", "professional development"] },
+  { label: "Travel & adventure", keywords: ["travel group", "adventure travel", "group travel"] },
+  { label: "Hiking & outdoors", keywords: ["hiking group", "outdoor adventure", "trail hiking"] },
+  { label: "Fitness & wellness", keywords: ["fitness group", "wellness community", "health professionals"] },
+  { label: "Running & endurance", keywords: ["running group", "marathon", "trail running"] },
+  { label: "Yoga & mindfulness", keywords: ["yoga community", "mindfulness", "wellness retreat"] },
+  { label: "Women's professional", keywords: ["women professionals", "women in business", "women leaders"] },
+  { label: "Cycling", keywords: ["cycling group", "bike club", "cycling community"] },
+  { label: "Photography", keywords: ["photography group", "photographers network", "photo club"] },
+  { label: "Food & wine", keywords: ["food lovers", "wine group", "culinary professionals"] },
+  { label: "Tech & innovation", keywords: ["tech group", "technology professionals", "startup community"] },
+  { label: "Nonprofit & social impact", keywords: ["nonprofit group", "social impact", "community leaders"] },
+  { label: "Outdoor recreation", keywords: ["outdoor recreation", "camping group", "nature lovers"] },
 ] as const;
 
 export const MEETUP_RECOMMENDED_KEYWORDS = [

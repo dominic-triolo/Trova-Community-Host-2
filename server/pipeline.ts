@@ -192,8 +192,8 @@ export function extractHighConfidenceFirstName(leaderName: string): string {
 
 const SOURCE_DISPLAY: Record<string, string> = {
   patreon: "Patreon", facebook: "Facebook Groups", podcast: "Podcast", substack: "Substack",
-  meetup: "Meetup", mighty: "Mighty Networks", youtube: "YouTube", reddit: "Reddit",
-  eventbrite: "Eventbrite", google: "Google Search",
+  meetup: "Meetup", mighty: "Mighty Networks", linkedin: "LinkedIn Groups", youtube: "YouTube",
+  reddit: "Reddit", eventbrite: "Eventbrite", google: "Google Search",
 };
 
 export function generateResearchSummary(data: {
@@ -3163,6 +3163,214 @@ async function scrapeMightyNetworks(
   return leads;
 }
 
+function expandLinkedInKeywords(keywords: string[], geos: string[], maxQueries: number = 60): string[] {
+  const synonymMap: Record<string, string[]> = {
+    "hiking": ["hiking group", "hiking club", "outdoor hiking", "trail group"],
+    "running": ["run club", "running group", "runners club", "marathon group"],
+    "cycling": ["cycling group", "cycling club", "bike group", "bike club"],
+    "fitness": ["fitness group", "fitness professionals", "workout group", "health fitness"],
+    "yoga": ["yoga group", "yoga community", "yoga professionals"],
+    "travel": ["travel group", "travel professionals", "adventure travel", "group travel"],
+    "outdoor": ["outdoor group", "outdoor recreation", "outdoor adventure", "nature group"],
+    "photography": ["photography group", "photographers network", "photo club"],
+    "book club": ["book club", "reading group", "book lovers"],
+    "alumni": ["alumni group", "alumni network", "alumni association"],
+    "women": ["women professionals", "women leaders", "women's network", "women in business"],
+    "professional": ["professional group", "professional network", "industry professionals"],
+    "coaching": ["coaching group", "executive coaching", "leadership coaching"],
+    "wellness": ["wellness group", "wellness professionals", "holistic health"],
+    "food": ["food lovers", "culinary group", "wine group"],
+    "tech": ["tech group", "technology professionals", "startup community"],
+    "church": ["faith group", "ministry group", "spiritual community"],
+    "social club": ["social group", "networking group", "social networking"],
+    "nonprofit": ["nonprofit group", "social impact", "community leadership"],
+    "climbing": ["climbing group", "mountaineering", "outdoor climbing"],
+    "surf": ["surf group", "water sports group", "surfing community"],
+  };
+
+  const TOP_US_CITIES = [
+    "New York", "Los Angeles", "Chicago", "Houston", "Phoenix",
+    "Philadelphia", "San Antonio", "San Diego", "Dallas", "Austin",
+    "Denver", "Seattle", "Portland", "Nashville", "Atlanta",
+    "Miami", "Boston", "Minneapolis", "Charlotte", "San Francisco",
+  ];
+
+  const expanded: string[] = [];
+  const seen = new Set<string>();
+  const addQuery = (q: string) => {
+    if (!seen.has(q) && expanded.length < maxQueries) {
+      seen.add(q);
+      expanded.push(q);
+    }
+  };
+
+  for (const kw of keywords) {
+    addQuery(`site:linkedin.com/groups "${kw}"`);
+
+    const kwLower = kw.toLowerCase().trim();
+    const synonyms = synonymMap[kwLower] || [];
+    for (const syn of synonyms) {
+      addQuery(`site:linkedin.com/groups "${syn}"`);
+    }
+
+    addQuery(`site:linkedin.com/groups ${kw} group`);
+    addQuery(`site:linkedin.com/groups ${kw} community`);
+    addQuery(`site:linkedin.com/groups ${kw} network`);
+  }
+
+  const allSearchTerms = [...keywords];
+  for (const kw of keywords) {
+    const kwLower = kw.toLowerCase().trim();
+    const synonyms = synonymMap[kwLower] || [];
+    for (const syn of synonyms) allSearchTerms.push(syn);
+  }
+
+  const geoCities = geos.length > 0 ? geos.slice(0, 20) : TOP_US_CITIES;
+  for (const term of allSearchTerms) {
+    if (expanded.length >= maxQueries) break;
+    for (const geo of geoCities) {
+      addQuery(`site:linkedin.com/groups "${term}" "${geo}"`);
+    }
+  }
+
+  return expanded;
+}
+
+function parseLinkedInMembersFromSnippet(text: string): number {
+  const patterns = [
+    /(\d[\d,]*)\s*members?/i,
+    /(\d[\d,]*)\s*professionals?/i,
+    /(\d[\d,]*)\s*people/i,
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match) {
+      return parseInt(match[1].replace(/,/g, ""), 10) || 0;
+    }
+  }
+  return 0;
+}
+
+function extractLinkedInGroupId(url: string): string {
+  const match = url.match(/linkedin\.com\/groups\/(\d+)/);
+  return match ? match[1] : "";
+}
+
+function cleanLinkedInGroupName(title: string): string {
+  return title
+    .replace(/\s*\|\s*LinkedIn$/i, "")
+    .replace(/\s*[-–—]\s*LinkedIn$/i, "")
+    .replace(/\s*LinkedIn\s*$/i, "")
+    .replace(/\s*\|\s*Groups$/i, "")
+    .replace(/\s*[-–—]\s*Groups$/i, "")
+    .trim();
+}
+
+async function scrapeLinkedInGroups(
+  runId: number,
+  keywords: string[],
+  maxItems: number,
+  appendAndSave: (msg: string) => Promise<void>,
+  filters: { minMemberCount?: number; maxMemberCount?: number; geos?: string[] } = {},
+): Promise<PlatformLead[]> {
+  const leads: PlatformLead[] = [];
+  const seenGroupIds = new Set<string>();
+  const minMembers = filters.minMemberCount || 0;
+  const maxMembers = filters.maxMemberCount || 0;
+
+  const googleQueries = expandLinkedInKeywords(keywords, filters.geos || []);
+  await appendAndSave(`LinkedIn Groups: expanded ${keywords.length} keyword(s) into ${googleQueries.length} Google queries (target: ${maxItems} groups)`);
+  const batchSize = 10;
+
+  for (let i = 0; i < googleQueries.length; i += batchSize) {
+    if (leads.length >= maxItems) break;
+    const batch = googleQueries.slice(i, i + batchSize);
+
+    try {
+      await appendAndSave(`LinkedIn Groups (via Google): batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(googleQueries.length / batchSize)} (${leads.length}/${maxItems} found so far)...`);
+      const { items, costUsd: actorCost } = await runActorAndGetResults("apify~google-search-scraper", {
+        queries: batch.join("\n"),
+        maxPagesPerQuery: 5,
+        resultsPerPage: 20,
+        countryCode: "us",
+        languageCode: "en",
+        mobileResults: false,
+      }, 120000);
+      await storage.incrementApifySpend(runId, actorCost);
+
+      let filteredOut = 0;
+      for (const item of items) {
+        if (leads.length >= maxItems) break;
+
+        const organicResults = item.organicResults || [];
+        for (const result of organicResults) {
+          if (leads.length >= maxItems) break;
+
+          const rawUrl = result.url || result.link || "";
+          if (!rawUrl.includes("linkedin.com/groups/")) continue;
+
+          const groupId = extractLinkedInGroupId(rawUrl);
+          if (!groupId) continue;
+          if (seenGroupIds.has(groupId)) continue;
+          seenGroupIds.add(groupId);
+
+          const title = result.title || "";
+          const snippet = result.description || result.snippet || "";
+          const fullText = `${title} ${snippet}`;
+
+          const groupName = cleanLinkedInGroupName(title) || `LinkedIn Group ${groupId}`;
+          const memberCount = parseLinkedInMembersFromSnippet(fullText);
+
+          if (minMembers > 0 && memberCount > 0 && memberCount < minMembers) { filteredOut++; continue; }
+          if (maxMembers > 0 && memberCount > 0 && memberCount > maxMembers) { filteredOut++; continue; }
+
+          const groupUrl = `https://www.linkedin.com/groups/${groupId}/`;
+          const channels: Record<string, string> = { linkedin_group: groupUrl };
+
+          const descUrls = extractUrlsFromText(snippet);
+          const socialFromDesc = extractSocialChannelsFromUrls(descUrls);
+          Object.assign(channels, socialFromDesc);
+
+          const descEmails = extractEmailsFromText(snippet);
+
+          leads.push({
+            source: "linkedin",
+            communityName: groupName,
+            communityType: detectCommunityType(fullText),
+            description: snippet.substring(0, 2000),
+            location: "",
+            website: channels.website || groupUrl,
+            email: descEmails[0] || "",
+            phone: "",
+            leaderName: "",
+            memberCount,
+            subscriberCount: 0,
+            ownedChannels: channels,
+            monetizationSignals: detectMonetization(snippet),
+            engagementSignals: {
+              member_count: memberCount,
+              attendance_proxy: memberCount,
+              ...detectEngagement(snippet),
+            },
+            tripFitSignals: detectTripFit(fullText),
+            raw: result,
+          });
+        }
+      }
+
+      await appendAndSave(`LinkedIn Groups: found ${leads.length} unique groups so far${filteredOut > 0 ? ` (${filteredOut} filtered by member count)` : ""}`);
+    } catch (err: any) {
+      if (err.costUsd) {
+        await storage.incrementApifySpend(runId, err.costUsd);
+      }
+      await appendAndSave(`[WARN] LinkedIn Groups Google search batch failed: ${err.message}`);
+    }
+  }
+
+  await appendAndSave(`LinkedIn Groups discovery complete: ${leads.length} groups from ${googleQueries.length} queries`);
+  return leads;
+}
+
 const GOOGLE_ENRICHMENT_MAX = Infinity;
 const GOOGLE_ENRICHMENT_SOCIAL_HOSTS = ["youtube.com", "youtu.be", "instagram.com", "twitter.com", "x.com", "discord.gg", "discord.com", "facebook.com", "tiktok.com", "twitch.tv", "linkedin.com", "patreon.com", "google.com", "apple.com", "spotify.com", "amazon.com", "reddit.com", "tumblr.com", "pinterest.com", "github.com", "medium.com", "wordpress.com", "linktr.ee", "beacons.ai", "ko-fi.com", "buymeacoffee.com", "gumroad.com", "substack.com", "bit.ly", "apify.com", "meetup.com", "eventbrite.com", "yelp.com", "tripadvisor.com", "bbb.org", "mn.co", "mightynetworks.com"];
 
@@ -3378,13 +3586,13 @@ async function googleBridgeEnrichFacebookGroups(
   leads: PlatformLead[],
   appendAndSave: (msg: string) => Promise<void>,
 ): Promise<void> {
-  const groupLeads = leads.filter(l => (l.source === "facebook" || l.source === "meetup") && !l.email && !l.ownedChannels?.website && !l.ownedChannels?.linkedin);
+  const groupLeads = leads.filter(l => (l.source === "facebook" || l.source === "meetup" || l.source === "linkedin") && !l.email && !l.ownedChannels?.website && !l.ownedChannels?.linkedin);
   if (groupLeads.length === 0) {
-    await appendAndSave("Google Bridge: all Facebook/Meetup leads already have website/LinkedIn or email");
+    await appendAndSave("Google Bridge: all Facebook/Meetup/LinkedIn leads already have website/LinkedIn or email");
     return;
   }
 
-  await appendAndSave(`Google Bridge: searching for leaders/orgs behind ${groupLeads.length} Facebook/Meetup groups...`);
+  await appendAndSave(`Google Bridge: searching for leaders/orgs behind ${groupLeads.length} Facebook/Meetup/LinkedIn groups...`);
 
   const queries: { term: string; leadIdx: number }[] = [];
   for (const l of groupLeads) {
@@ -4269,6 +4477,13 @@ export async function runPipeline(runId: number): Promise<void> {
     if (enabledSources.includes("mighty")) {
       platformTasks.push({ name: "Mighty Networks", promise: scrapeMightyNetworks(runId, keywords, getMaxForPlatform("mighty"), (msg) => appendAndSave(msg), params.seedGeos || []) });
     }
+    if (enabledSources.includes("linkedin")) {
+      platformTasks.push({ name: "LinkedIn Groups", promise: scrapeLinkedInGroups(runId, keywords, getMaxForPlatform("linkedin"), (msg) => appendAndSave(msg), {
+        minMemberCount: params.minMemberCount || 0,
+        maxMemberCount: params.maxMemberCount || 0,
+        geos,
+      }) });
+    }
 
     if (platformTasks.length === 0) {
       await appendAndSave("No platform sources selected, skipping platform discovery");
@@ -4306,11 +4521,11 @@ export async function runPipeline(runId: number): Promise<void> {
 
     const enrichGroup1: { name: string; promise: Promise<void> }[] = [];
 
-    const hasFbOrMeetupLeads = allPlatformLeads.some(l => l.source === "facebook" || l.source === "meetup");
-    if (hasFbOrMeetupLeads) {
-      const groupLeadsNeedingEnrich = allPlatformLeads.filter(l => (l.source === "facebook" || l.source === "meetup") && !l.email && !l.ownedChannels?.website && !l.ownedChannels?.linkedin);
+    const hasGroupLeads = allPlatformLeads.some(l => l.source === "facebook" || l.source === "meetup" || l.source === "linkedin");
+    if (hasGroupLeads) {
+      const groupLeadsNeedingEnrich = allPlatformLeads.filter(l => (l.source === "facebook" || l.source === "meetup" || l.source === "linkedin") && !l.email && !l.ownedChannels?.website && !l.ownedChannels?.linkedin);
       if (groupLeadsNeedingEnrich.length > 0) {
-        await appendAndSave(`Google Bridge: ${groupLeadsNeedingEnrich.length} Facebook/Meetup groups need leader/org lookup`, 29, "Step 1b: Parallel enrichment group 1");
+        await appendAndSave(`Google Bridge: ${groupLeadsNeedingEnrich.length} Facebook/Meetup/LinkedIn groups need leader/org lookup`, 29, "Step 1b: Parallel enrichment group 1");
         enrichGroup1.push({ name: "Google Bridge", promise: googleBridgeEnrichFacebookGroups(runId, allPlatformLeads, appendAndSave) });
       }
     }
@@ -4484,6 +4699,7 @@ export async function runPipeline(runId: number): Promise<void> {
     if (enabledSources.includes("facebook")) skipDomains.push("facebook.com");
     if (enabledSources.includes("patreon")) skipDomains.push("patreon.com");
     if (enabledSources.includes("mighty")) skipDomains.push("mn.co", "mightynetworks.com");
+    if (enabledSources.includes("linkedin")) skipDomains.push("linkedin.com");
 
     const batchSize = 20;
     const queryBatches = [];
@@ -5394,6 +5610,14 @@ export async function runPipeline(runId: number): Promise<void> {
               await appendAndSave(`Expansion: deeper Mighty Networks search (${uniqueExpKws.length} queries)...`);
               const results = await scrapeMightyNetworks(runId, uniqueExpKws, maxExpLeads, (msg) => appendAndSave(msg), geos);
               newPlatformLeads.push(...results);
+            } else if (platform === "linkedin") {
+              await appendAndSave(`Expansion: deeper LinkedIn Groups search (${uniqueExpKws.length} queries)...`);
+              const results = await scrapeLinkedInGroups(runId, uniqueExpKws, maxExpLeads, (msg) => appendAndSave(msg), {
+                minMemberCount: params.minMemberCount || 0,
+                maxMemberCount: params.maxMemberCount || 0,
+                geos,
+              });
+              newPlatformLeads.push(...results);
             } else if (platform === "podcast" && run.podcastEnabled !== false) {
               await appendAndSave(`Expansion: deeper podcast search (${uniqueExpKws.length} queries)...`);
               const results = await scrapeApplePodcasts(runId, uniqueExpKws, maxExpLeads, (msg) => appendAndSave(msg), {
@@ -5416,10 +5640,10 @@ export async function runPipeline(runId: number): Promise<void> {
 
         // --- Enrichment chain on PlatformLead[] before creating DB leads ---
 
-        // Step E1: Google Bridge for Facebook groups
-        const expFbLeads = newPlatformLeads.filter(l => l.source === "facebook" && !l.email && !l.ownedChannels?.website && !l.ownedChannels?.linkedin);
+        // Step E1: Google Bridge for Facebook/LinkedIn groups
+        const expFbLeads = newPlatformLeads.filter(l => (l.source === "facebook" || l.source === "linkedin") && !l.email && !l.ownedChannels?.website && !l.ownedChannels?.linkedin);
         if (expFbLeads.length > 0 && !(await isBudgetExhausted(runId, 0.10))) {
-          await appendAndSave(`Expansion: Google Bridge for ${expFbLeads.length} Facebook groups...`);
+          await appendAndSave(`Expansion: Google Bridge for ${expFbLeads.length} Facebook/LinkedIn groups...`);
           try {
             await googleBridgeEnrichFacebookGroups(runId, newPlatformLeads, appendAndSave);
           } catch (err: any) {
@@ -6370,11 +6594,11 @@ async function resumeFromCheckpoint(
     if (!completedSubs.has("fb_google_bridge")) {
       const enrichGroup1: { name: string; promise: Promise<void> }[] = [];
 
-      const hasFbOrMeetupLeads = allPlatformLeads.some(l => l.source === "facebook" || l.source === "meetup");
+      const hasFbOrMeetupLeads = allPlatformLeads.some(l => l.source === "facebook" || l.source === "meetup" || l.source === "linkedin");
       if (hasFbOrMeetupLeads) {
-        const groupLeadsNeedingEnrich = allPlatformLeads.filter(l => (l.source === "facebook" || l.source === "meetup") && !l.email && !l.ownedChannels?.website && !l.ownedChannels?.linkedin);
+        const groupLeadsNeedingEnrich = allPlatformLeads.filter(l => (l.source === "facebook" || l.source === "meetup" || l.source === "linkedin") && !l.email && !l.ownedChannels?.website && !l.ownedChannels?.linkedin);
         if (groupLeadsNeedingEnrich.length > 0) {
-          await appendAndSave(`Resume: Google Bridge for ${groupLeadsNeedingEnrich.length} Facebook/Meetup groups`, 32, "Resume: Google Bridge + Link Aggregators");
+          await appendAndSave(`Resume: Google Bridge for ${groupLeadsNeedingEnrich.length} Facebook/Meetup/LinkedIn groups`, 32, "Resume: Google Bridge + Link Aggregators");
           enrichGroup1.push({ name: "Google Bridge", promise: googleBridgeEnrichFacebookGroups(runId, allPlatformLeads, appendAndSave) });
         }
       }
@@ -6942,6 +7166,14 @@ async function resumeFromCheckpoint(
               await appendAndSave(`Resume expansion: deeper Mighty Networks search (${uniqueExpKws.length} queries)...`);
               const results = await scrapeMightyNetworks(runId, uniqueExpKws, maxExpLeads, (msg) => appendAndSave(msg), resumeGeos);
               newPlatformLeads.push(...results);
+            } else if (platform === "linkedin") {
+              await appendAndSave(`Resume expansion: deeper LinkedIn Groups search (${uniqueExpKws.length} queries)...`);
+              const results = await scrapeLinkedInGroups(runId, uniqueExpKws, maxExpLeads, (msg) => appendAndSave(msg), {
+                minMemberCount: params.minMemberCount || 0,
+                maxMemberCount: params.maxMemberCount || 0,
+                geos: resumeGeos,
+              });
+              newPlatformLeads.push(...results);
             } else if (platform === "podcast" && run2?.podcastEnabled !== false) {
               await appendAndSave(`Resume expansion: deeper podcast search (${uniqueExpKws.length} queries)...`);
               const results = await scrapeApplePodcasts(runId, uniqueExpKws, maxExpLeads, (msg) => appendAndSave(msg), {
@@ -6962,8 +7194,8 @@ async function resumeFromCheckpoint(
           break;
         }
 
-        const expFbLeads = newPlatformLeads.filter(l => l.source === "facebook" && !l.email && !l.ownedChannels?.website && !l.ownedChannels?.linkedin);
-        if (expFbLeads.length > 0 && !(await isBudgetExhausted(runId, 0.10))) {
+        const expFbLeads2 = newPlatformLeads.filter(l => (l.source === "facebook" || l.source === "linkedin") && !l.email && !l.ownedChannels?.website && !l.ownedChannels?.linkedin);
+        if (expFbLeads2.length > 0 && !(await isBudgetExhausted(runId, 0.10))) {
           try { await googleBridgeEnrichFacebookGroups(runId, newPlatformLeads, appendAndSave); } catch {}
         }
 
@@ -7656,6 +7888,9 @@ export async function resumeRun(runId: number): Promise<void> {
               } else if (platform === "mighty") {
                 const results = await scrapeMightyNetworks(runId, uniqueKws, maxExpLeads, (msg) => appendAndSave(msg), dbGeos);
                 newPlatformLeads.push(...results);
+              } else if (platform === "linkedin") {
+                const results = await scrapeLinkedInGroups(runId, uniqueKws, maxExpLeads, (msg) => appendAndSave(msg), { minMemberCount: params.minMemberCount || 0, maxMemberCount: params.maxMemberCount || 0, geos: dbGeos });
+                newPlatformLeads.push(...results);
               } else if (platform === "podcast" && dbRun2?.podcastEnabled !== false) {
                 const results = await scrapeApplePodcasts(runId, uniqueKws, maxExpLeads, (msg) => appendAndSave(msg), { minEpisodeCount: params.minEpisodeCount || 0, podcastCountry: params.podcastCountry || "US" });
                 newPlatformLeads.push(...results);
@@ -7665,7 +7900,7 @@ export async function resumeRun(runId: number): Promise<void> {
 
           if (newPlatformLeads.length === 0) { await appendAndSave(`DB expansion: no new leads, stopping.`); break; }
 
-          const fbLeads2 = newPlatformLeads.filter(l => l.source === "facebook" && !l.email && !l.ownedChannels?.website && !l.ownedChannels?.linkedin);
+          const fbLeads2 = newPlatformLeads.filter(l => (l.source === "facebook" || l.source === "linkedin") && !l.email && !l.ownedChannels?.website && !l.ownedChannels?.linkedin);
           if (fbLeads2.length > 0 && !(await isBudgetExhausted(runId, 0.10))) { try { await googleBridgeEnrichFacebookGroups(runId, newPlatformLeads, appendAndSave); } catch {} }
           const rssLeads2 = newPlatformLeads.filter(l => l.ownedChannels?.rss?.startsWith("http") && !l.email);
           if (rssLeads2.length > 0) { try { await enrichFromRssFeeds(runId, newPlatformLeads, appendAndSave); } catch {} }

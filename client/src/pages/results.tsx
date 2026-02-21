@@ -24,6 +24,7 @@ const SOURCE_LABELS: Record<string, string> = {
   substack: "Substack",
   meetup: "Meetup",
   mighty: "Mighty Networks",
+  linkedin: "LinkedIn Groups",
   youtube: "YouTube",
   reddit: "Reddit",
   eventbrite: "Eventbrite",

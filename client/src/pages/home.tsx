@@ -10,6 +10,7 @@ import {
   SUBSTACK_RECOMMENDED_KEYWORDS,
   MEETUP_RECOMMENDED_KEYWORDS,
   MIGHTY_RECOMMENDED_KEYWORDS,
+  LINKEDIN_RECOMMENDED_KEYWORDS,
   DEFAULT_RUN_PARAMS,
   AVAILABLE_ENRICHMENTS,
   type RunParams,
@@ -48,7 +49,7 @@ import {
   Network,
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
-import { SiPatreon, SiFacebook, SiApplepodcasts, SiSubstack, SiMeetup } from "react-icons/si";
+import { SiPatreon, SiFacebook, SiApplepodcasts, SiSubstack, SiMeetup, SiLinkedin } from "react-icons/si";
 
 function UsedKeywordsSuggestions({
   usedKeywords,
@@ -421,6 +422,7 @@ export default function Home() {
                   { id: "substack", label: "Substack", icon: SiSubstack },
                   { id: "meetup", label: "Meetup Groups", icon: SiMeetup },
                   { id: "mighty", label: "Mighty Networks", icon: Network },
+                  { id: "linkedin", label: "LinkedIn Groups", icon: SiLinkedin },
                 ] as const).map(({ id, label, icon: Icon }) => {
                   const isEnabled = autoEnabledPlatforms.includes(id);
                   const isLastEnabled = isEnabled && autoEnabledPlatforms.length === 1;
@@ -591,6 +593,10 @@ export default function Home() {
             <TabsTrigger value="mighty" className="gap-1.5" data-testid="tab-mighty">
               <Network className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">Mighty</span> <span className="sm:hidden">MN</span><span className="hidden sm:inline">Networks</span>
+            </TabsTrigger>
+            <TabsTrigger value="linkedin" className="gap-1.5" data-testid="tab-linkedin">
+              <SiLinkedin className="w-3.5 h-3.5" />
+              LinkedIn
             </TabsTrigger>
           </TabsList>
 
@@ -1568,6 +1574,135 @@ export default function Home() {
                   data-testid="input-mighty-max-urls"
                 />
                 <p className="text-[11px] text-muted-foreground">Maximum 200 communities per run</p>
+              </div>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="linkedin" className="mt-4 space-y-6">
+            <Card className="p-4 space-y-4">
+              <div className="flex items-center gap-2">
+                <Search className="w-4 h-4 text-muted-foreground" />
+                <Label className="text-sm font-medium">Search Keywords</Label>
+              </div>
+
+              {params.seedKeywords.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {params.seedKeywords.map((kw) => (
+                    <Badge
+                      key={kw}
+                      variant="secondary"
+                      className="gap-1 cursor-pointer select-none"
+                      data-testid={`badge-linkedin-keyword-active-${kw.replace(/\s+/g, "-")}`}
+                    >
+                      {kw}
+                      <X
+                        className="w-3 h-3"
+                        onClick={() => removeKeyword(kw)}
+                        data-testid={`button-linkedin-remove-keyword-${kw.replace(/\s+/g, "-")}`}
+                      />
+                    </Badge>
+                  ))}
+                </div>
+              )}
+
+              <Separator />
+
+              <div>
+                <p className="text-xs text-muted-foreground mb-2">Click to add recommended searches:</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {LINKEDIN_RECOMMENDED_KEYWORDS.map((rec) => {
+                    const isActive = rec.keywords.every((kw) => params.seedKeywords.includes(kw));
+                    const isPartial = !isActive && rec.keywords.some((kw) => params.seedKeywords.includes(kw));
+                    return (
+                      <Badge
+                        key={rec.label}
+                        variant={isActive ? "default" : "outline"}
+                        className={`cursor-pointer select-none toggle-elevate ${isActive ? "toggle-elevated" : ""} ${isPartial ? "border-primary/50" : ""}`}
+                        onClick={() => isActive ? removeKeywordGroup(rec.keywords) : addKeywordGroup(rec.keywords)}
+                        data-testid={`badge-linkedin-rec-${rec.label.replace(/\s+/g, "-")}`}
+                      >
+                        {rec.label}
+                        <span className="text-[10px] opacity-60 ml-0.5">({rec.keywords.length})</span>
+                      </Badge>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <Separator />
+
+              <form onSubmit={handleCustomKeywordSubmit} className="flex gap-2">
+                <Input
+                  data-testid="input-linkedin-custom-keyword"
+                  placeholder="Add a custom keyword..."
+                  value={customKeyword}
+                  onChange={(e) => setCustomKeyword(e.target.value)}
+                  className="text-sm"
+                />
+                <Button
+                  type="submit"
+                  size="icon"
+                  variant="outline"
+                  disabled={!customKeyword.trim()}
+                  data-testid="button-linkedin-add-keyword"
+                >
+                  <Plus className="w-4 h-4" />
+                </Button>
+              </form>
+            </Card>
+
+            <Card className="p-4 space-y-4">
+              <div className="flex items-center gap-2">
+                <Mail className="w-4 h-4 text-muted-foreground" />
+                <Label className="text-sm font-medium">Enrichment Methods</Label>
+              </div>
+              <p className="text-xs text-muted-foreground">LinkedIn Groups are discovered via Google search. Group admins and organizers are identified through Google Bridge enrichment. Choose additional methods below.</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {AVAILABLE_ENRICHMENTS.map((enr) => {
+                  const paramKey = "enableApollo" as const;
+                  const isEnabled = params[paramKey];
+                  return (
+                    <label
+                      key={enr.id}
+                      className="flex items-start gap-3 p-2.5 rounded-md cursor-pointer hover-elevate"
+                      data-testid={`linkedin-enrichment-toggle-${enr.id}`}
+                    >
+                      <Checkbox
+                        checked={isEnabled}
+                        onCheckedChange={(checked) => {
+                          setParams((p) => ({ ...p, [paramKey]: checked === true }));
+                        }}
+                        className="mt-0.5"
+                      />
+                      <div className="space-y-0.5">
+                        <span className="text-sm font-medium leading-none">{enr.label}</span>
+                        <p className="text-[11px] text-muted-foreground">{enr.description}</p>
+                      </div>
+                    </label>
+                  );
+                })}
+              </div>
+            </Card>
+
+            <Card className="p-4 space-y-4">
+              <div className="flex items-center gap-2">
+                <Settings2 className="w-4 h-4 text-muted-foreground" />
+                <Label className="text-sm font-medium">Settings</Label>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">Max Groups to Discover</Label>
+                <Input
+                  type="number"
+                  value={params.maxDiscoveredUrls}
+                  min={1}
+                  max={200}
+                  onChange={(e) => {
+                    const val = parseInt(e.target.value) || 200;
+                    setParams((p) => ({ ...p, maxDiscoveredUrls: Math.min(200, Math.max(1, val)) }));
+                  }}
+                  data-testid="input-linkedin-max-urls"
+                />
+                <p className="text-[11px] text-muted-foreground">Maximum 200 groups per run</p>
               </div>
             </Card>
           </TabsContent>
