@@ -37,7 +37,6 @@ import {
   Plus,
   Filter,
   Mail,
-  Lock,
   Lightbulb,
   Zap,
   DollarSign,
@@ -49,7 +48,7 @@ import {
   Network,
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
-import { SiPatreon, SiFacebook, SiLinkedin, SiApplepodcasts, SiSubstack, SiMeetup } from "react-icons/si";
+import { SiPatreon, SiFacebook, SiApplepodcasts, SiSubstack, SiMeetup } from "react-icons/si";
 
 function UsedKeywordsSuggestions({
   usedKeywords,
@@ -97,24 +96,6 @@ function UsedKeywordsSuggestions({
   );
 }
 
-function ComingSoonTab({ platform, icon: Icon }: { platform: string; icon: any }) {
-  return (
-    <div className="flex flex-col items-center justify-center py-16 space-y-4">
-      <div className="flex items-center justify-center w-16 h-16 rounded-md bg-muted">
-        <Icon className="w-8 h-8 text-muted-foreground" />
-      </div>
-      <div className="text-center space-y-1.5">
-        <div className="flex items-center justify-center gap-1.5">
-          <Lock className="w-4 h-4 text-muted-foreground" />
-          <p className="text-sm font-medium text-muted-foreground">Coming Soon</p>
-        </div>
-        <p className="text-xs text-muted-foreground max-w-xs">
-          {platform} discovery is under development. Stay tuned for updates.
-        </p>
-      </div>
-    </div>
-  );
-}
 
 export default function Home() {
   const [, navigate] = useLocation();
@@ -586,14 +567,14 @@ export default function Home() {
         )}
 
         {mode === "manual" && <><Tabs value={platformTab} onValueChange={handlePlatformTabChange}>
-          <TabsList data-testid="tabs-platform">
+          <TabsList className="flex flex-wrap h-auto gap-1 p-1" data-testid="tabs-platform">
             <TabsTrigger value="patreon" className="gap-1.5" data-testid="tab-patreon">
               <SiPatreon className="w-3.5 h-3.5" />
               Patreon
             </TabsTrigger>
             <TabsTrigger value="facebook" className="gap-1.5" data-testid="tab-facebook">
               <SiFacebook className="w-3.5 h-3.5" />
-              Facebook Groups
+              <span className="hidden sm:inline">Facebook</span> Groups
             </TabsTrigger>
             <TabsTrigger value="podcast" className="gap-1.5" data-testid="tab-podcast">
               <SiApplepodcasts className="w-3.5 h-3.5" />
@@ -609,11 +590,7 @@ export default function Home() {
             </TabsTrigger>
             <TabsTrigger value="mighty" className="gap-1.5" data-testid="tab-mighty">
               <Network className="w-3.5 h-3.5" />
-              Mighty Networks
-            </TabsTrigger>
-            <TabsTrigger value="linkedin" className="gap-1.5" data-testid="tab-linkedin" disabled>
-              <SiLinkedin className="w-3.5 h-3.5" />
-              LinkedIn
+              <span className="hidden sm:inline">Mighty</span> <span className="sm:hidden">MN</span><span className="hidden sm:inline">Networks</span>
             </TabsTrigger>
           </TabsList>
 
@@ -1595,11 +1572,6 @@ export default function Home() {
             </Card>
           </TabsContent>
 
-          <TabsContent value="linkedin" className="mt-4">
-            <Card>
-              <ComingSoonTab platform="LinkedIn" icon={SiLinkedin} />
-            </Card>
-          </TabsContent>
         </Tabs>
 
         <div className="flex items-center justify-between gap-4 flex-wrap">
