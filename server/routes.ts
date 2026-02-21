@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { runPipeline, reEnrichRun, resumeRun, restartRun, activeRunIds, cancelledRunIds } from "./pipeline";
+import { runPipeline, reEnrichRun, resumeRun, restartRun, activeRunIds, cancelledRunIds, extractHighConfidenceFirstName, generateResearchSummary } from "./pipeline";
 import { verifyEmailBatch, mapResultToValidation } from "./millionverifier";
 import { checkEmailsInHubspot, isHubspotConfigured } from "./hubspot";
 import { syncHubSpotDeals, computeScoringWeights, getLatestInsights, getLatestWeights } from "./hubspot-sync";
@@ -352,7 +352,7 @@ export async function registerRoutes(
       }
 
       const headers = [
-        "Source", "Community Name", "Community Type", "Leader Name", "Leader Role",
+        "Source", "Community Name", "Community Type", "Leader Name", "First Name", "Leader Role",
         "Location", "Website", "Email", "Email Status", "Phone", "LinkedIn",
         "Patreon URL", "Personal Website",
         "Member/Patron Count", "Subscriber Count", "Episode Count", "Post/Video Count",
@@ -365,6 +365,7 @@ export async function registerRoutes(
         "Niche Score", "Trust Score", "Engagement Score", "Monetization Score", "Channels Score", "Trip Fit Score",
         "HubSpot Status",
         "Discovered At",
+        "Research Summary",
       ];
 
       const esc = (v: any) => {
@@ -398,6 +399,7 @@ export async function registerRoutes(
           esc(lead.communityName),
           esc(lead.communityType),
           esc(lead.leaderName),
+          esc(lead.firstName || ""),
           esc(lead.leaderRole),
           esc(lead.location),
           esc(lead.website),
@@ -439,6 +441,7 @@ export async function registerRoutes(
           breakdown.tripFit ?? "",
           esc(lead.hubspotStatus === "existing" ? "Existing" : lead.hubspotStatus === "net_new" ? "Net New" : ""),
           esc(lead.firstSeenAt ? new Date(lead.firstSeenAt).toISOString() : ""),
+          esc(lead.researchSummary || ""),
         ];
         csvRows.push(row.join(","));
       }
@@ -448,6 +451,64 @@ export async function registerRoutes(
       res.setHeader("Content-Type", "text/csv");
       res.setHeader("Content-Disposition", `attachment; filename=${filename}`);
       res.send(csv);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.post("/api/admin/backfill-first-name-research", async (req, res) => {
+    try {
+      const sitePassword = process.env.SITE_PASSWORD;
+      if (sitePassword && req.body.password !== sitePassword) {
+        return res.status(403).json({ message: "Unauthorized" });
+      }
+
+      const allLeads = await storage.listLeads();
+      let updatedFirstName = 0;
+      let updatedResearch = 0;
+
+      for (const lead of allLeads) {
+        const updates: any = {};
+
+        if (!lead.firstName && lead.leaderName) {
+          const fn = extractHighConfidenceFirstName(lead.leaderName);
+          if (fn) {
+            updates.firstName = fn;
+            updatedFirstName++;
+          }
+        }
+
+        if (!lead.researchSummary) {
+          const summary = generateResearchSummary({
+            communityName: lead.communityName || "",
+            communityType: lead.communityType || "",
+            leaderName: lead.leaderName || "",
+            description: (lead.raw as any)?.description || (lead.raw as any)?.about || "",
+            source: lead.source || "",
+            website: lead.website || "",
+            location: lead.location || "",
+            ownedChannels: (lead.ownedChannels as Record<string, string>) || {},
+            engagementSignals: (lead.engagementSignals as Record<string, any>) || {},
+            monetizationSignals: (lead.monetizationSignals as Record<string, any>) || {},
+            tripFitSignals: (lead.tripFitSignals as Record<string, any>) || {},
+            raw: (lead.raw as Record<string, any>) || {},
+          });
+          if (summary) {
+            updates.researchSummary = summary;
+            updatedResearch++;
+          }
+        }
+
+        if (Object.keys(updates).length > 0) {
+          await storage.updateLead(lead.id, updates);
+        }
+      }
+
+      res.json({
+        total: allLeads.length,
+        updatedFirstName,
+        updatedResearch,
+      });
     } catch (err: any) {
       res.status(500).json({ message: err.message });
     }

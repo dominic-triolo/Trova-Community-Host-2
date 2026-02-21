@@ -142,6 +142,158 @@ function extractDomain(url: string): string {
   }
 }
 
+export function extractHighConfidenceFirstName(leaderName: string): string {
+  if (!leaderName || leaderName.trim().length < 3) return "";
+  const cleaned = leaderName.replace(/[\n\r]+/g, " ").trim();
+  const words = cleaned.split(/\s+/);
+  if (words.length !== 2) return "";
+  if (!words.every(w => /^[A-Z][a-z]+$/.test(w))) return "";
+  if (words[0].length < 3 || words[1].length < 2) return "";
+  const nonPersonWords = new Set([
+    "the", "and", "for", "with", "of", "in", "on", "now", "us", "we", "our", "your", "my",
+    "join", "sign", "contact", "click", "subscribe", "welcome", "about", "home", "get", "buy",
+    "shop", "learn", "read", "view", "see", "not", "all", "new", "out", "up", "off", "how",
+    "just", "big", "old", "hot", "top", "pro", "fun", "red", "zen", "one", "two",
+    "bike", "trail", "bay", "run", "hike", "surf", "camp", "yoga", "trek", "wild", "fit",
+    "club", "team", "group", "community", "network", "collective", "tribe", "hub", "crew",
+    "outdoor", "outdoors", "adventure", "adventures", "touring", "running", "hiking", "cycling",
+    "travel", "fitness", "wellness", "coaching", "podcast", "creative", "digital", "online",
+    "wales", "texas", "mesa", "paso", "area", "north", "south", "east", "west", "mountain",
+    "church", "ministry", "faith", "sacred", "divine", "global", "world", "international",
+    "studio", "media", "productions", "academy", "school", "foundation", "institute",
+    "video", "games", "spirit", "forest", "house", "random", "beer", "tape", "duct", "comfy",
+    "cozy", "witch", "penguin", "bird", "songs", "prof", "extremely", "accurate", "gooners",
+    "university", "college", "city", "town", "county", "state", "lake", "river", "park",
+    "daily", "weekly", "super", "ultra", "mega", "mini", "tiny", "magic", "golden", "silver",
+    "little", "true", "pure", "bold", "bright", "dark", "deep", "high", "long", "great", "grand",
+    "lost", "secret", "hidden", "ancient", "royal", "holy", "free", "love", "peace",
+    "privacy", "policy", "terms", "login", "account", "logout", "register", "password",
+    "best", "lonely", "planet", "midlife", "marathoner", "backpacker", "backpacking", "around",
+    "halfway", "anywhere", "everywhere", "somewhere", "nowhere", "bigfoot",
+    "reader", "writer", "blogger", "vlogger", "gamer", "maker", "builder", "seeker",
+    "explorer", "nomad", "wanderer", "rambling", "roaming", "drifting",
+    "solo", "solo", "happy", "crazy", "funny", "lucky", "lazy",
+    "mile", "miles", "step", "steps", "page", "pages", "word", "words",
+    "improved", "health", "treasure", "books", "book", "flourish", "bedouins",
+    "simple", "modern", "classic", "essential", "ultimate", "basic", "complete",
+    "extra", "bonus", "special", "general", "total", "full", "real",
+    "rare", "earth", "sanctuary", "asia", "nasty", "backpack", "member", "directory",
+    "traveling", "suwanee", "take", "family", "families", "friends", "sisters", "brothers",
+    "nature", "animals", "sky", "ocean", "moon", "sun", "star", "fire", "water",
+    "morning", "evening", "night", "sunrise", "sunset", "dawn", "dusk",
+    "southern", "northern", "eastern", "western", "central", "upper", "lower",
+    "iron", "steel", "stone", "rock", "sand", "ice", "snow", "rain", "storm",
+    "bear", "wolf", "fox", "hawk", "eagle", "deer", "elk", "moose",
+    "meditation", "mind", "body", "soul", "heart", "zen", "karma", "dharma",
+  ]);
+  if (words.some(w => nonPersonWords.has(w.toLowerCase()))) return "";
+  return words[0];
+}
+
+const SOURCE_DISPLAY: Record<string, string> = {
+  patreon: "Patreon", facebook: "Facebook Groups", podcast: "Podcast", substack: "Substack",
+  meetup: "Meetup", mighty: "Mighty Networks", youtube: "YouTube", reddit: "Reddit",
+  eventbrite: "Eventbrite", google: "Google Search",
+};
+
+export function generateResearchSummary(data: {
+  communityName?: string;
+  communityType?: string;
+  leaderName?: string;
+  description?: string;
+  source?: string;
+  website?: string;
+  location?: string;
+  ownedChannels?: Record<string, string>;
+  engagementSignals?: Record<string, any>;
+  monetizationSignals?: Record<string, any>;
+  tripFitSignals?: Record<string, any>;
+  raw?: Record<string, any>;
+}): string {
+  const parts: string[] = [];
+
+  if (data.communityName) {
+    const src = SOURCE_DISPLAY[data.source || ""] || data.source || "";
+    const typePart = data.communityType && data.communityType !== "other" ? ` (${data.communityType})` : "";
+    parts.push(`${data.communityName}${typePart}${src ? ` on ${src}` : ""}.`);
+  }
+
+  if (data.leaderName) {
+    const cleanedLeader = data.leaderName.replace(/[\n\r]+/g, " ").trim();
+    if (cleanedLeader && cleanedLeader.length > 2 && !/^(join|sign|contact|click|subscribe)/i.test(cleanedLeader)) {
+      parts.push(`Led by ${cleanedLeader}.`);
+    }
+  }
+
+  if (data.description) {
+    let desc = data.description
+      .replace(/<[^>]*>/g, " ")
+      .replace(/&nbsp;/gi, " ")
+      .replace(/&amp;/gi, "&")
+      .replace(/&lt;/gi, "<")
+      .replace(/&gt;/gi, ">")
+      .replace(/&quot;/gi, '"')
+      .replace(/\s+/g, " ")
+      .trim();
+    if (desc.length > 300) desc = desc.substring(0, 297) + "...";
+    if (desc.length > 20) parts.push(desc);
+  }
+
+  const eng = data.engagementSignals || {};
+  const audienceParts: string[] = [];
+  if (eng.member_count) audienceParts.push(`${Number(eng.member_count).toLocaleString()} members`);
+  if (eng.patron_count) audienceParts.push(`${Number(eng.patron_count).toLocaleString()} patrons`);
+  if (eng.subscriber_count) audienceParts.push(`${Number(eng.subscriber_count).toLocaleString()} subscribers`);
+  if (eng.episode_count) audienceParts.push(`${eng.episode_count} episodes`);
+  if (eng.instagram_followers) audienceParts.push(`${Number(eng.instagram_followers).toLocaleString()} Instagram followers`);
+  if (eng.twitter_followers) audienceParts.push(`${Number(eng.twitter_followers).toLocaleString()} Twitter followers`);
+  if (eng.total_videos) audienceParts.push(`${eng.total_videos} YouTube videos`);
+  if (audienceParts.length > 0) parts.push(`Audience: ${audienceParts.join(", ")}.`);
+
+  const channels = data.ownedChannels || {};
+  const platforms: string[] = [];
+  if (channels.youtube) platforms.push("YouTube");
+  if (channels.instagram) platforms.push("Instagram");
+  if (channels.twitter) platforms.push("Twitter/X");
+  if (channels.facebook) platforms.push("Facebook");
+  if (channels.tiktok) platforms.push("TikTok");
+  if (channels.linkedin || (data as any).linkedin) platforms.push("LinkedIn");
+  if (channels.substack) platforms.push("Substack");
+  if (channels.podcast || channels.rss) platforms.push("Podcast");
+  if (channels.discord) platforms.push("Discord");
+  if (channels.patreon) platforms.push("Patreon");
+  if (platforms.length > 0) parts.push(`Active on: ${platforms.join(", ")}.`);
+
+  const mon = data.monetizationSignals || {};
+  const monParts: string[] = [];
+  if (mon.sponsored) monParts.push("sponsorships");
+  if (mon.merch) monParts.push("merchandise");
+  if (mon.courses) monParts.push("courses");
+  if (mon.membership || mon.patreon) monParts.push("paid membership");
+  if (mon.established) monParts.push("established creator");
+  const raw = data.raw || {};
+  if (raw.monthlyEarnings || raw.earnings) {
+    const e = raw.monthlyEarnings || raw.earnings;
+    if (typeof e === "string" && e.includes("$")) monParts.push(`earning ${e}/mo`);
+    else if (typeof e === "number" && e > 0) monParts.push(`earning $${e}/mo`);
+  }
+  if (monParts.length > 0) parts.push(`Monetization: ${monParts.join(", ")}.`);
+
+  if (data.website) parts.push(`Website: ${data.website}`);
+  if (data.location) parts.push(`Location: ${data.location}.`);
+
+  const trip = data.tripFitSignals || {};
+  const tripParts: string[] = [];
+  if (trip.travel_interest) tripParts.push("travel interest");
+  if (trip.group_experience) tripParts.push("group experience");
+  if (trip.retreat_experience) tripParts.push("retreat experience");
+  if (trip.active_events) tripParts.push("active events");
+  if (tripParts.length > 0) parts.push(`Trip fit signals: ${tripParts.join(", ")}.`);
+
+  if (raw.genre) parts.push(`Genre: ${raw.genre}.`);
+
+  return parts.join(" ").trim();
+}
 
 function extractRealNameFromAbout(aboutText: string, fallbackName: string): string | null {
   if (!aboutText || aboutText.length < 10) return null;
@@ -4642,6 +4794,8 @@ export async function runPipeline(runId: number): Promise<void> {
           communityName: pl.communityName,
           communityType: pl.communityType,
           leaderName: pl.leaderName,
+          firstName: extractHighConfidenceFirstName(pl.leaderName),
+          researchSummary: generateResearchSummary({ communityName: pl.communityName, communityType: pl.communityType, leaderName: pl.leaderName, description: pl.description, source: pl.source, website: pl.website, location: pl.location, ownedChannels: pl.ownedChannels, engagementSignals: pl.engagementSignals, monetizationSignals: pl.monetizationSignals, tripFitSignals: pl.tripFitSignals, raw: pl.raw }),
           location: pl.location,
           website: pl.website,
           email: pl.email,
@@ -4779,6 +4933,8 @@ export async function runPipeline(runId: number): Promise<void> {
           communityName: name,
           communityType,
           leaderName,
+          firstName: extractHighConfidenceFirstName(leaderName),
+          researchSummary: generateResearchSummary({ communityName: name, communityType, leaderName, description: item.description || "", source: "google", website: url, ownedChannels: channels, engagementSignals: engagement, monetizationSignals: monetization, tripFitSignals: tripFit, raw: item }),
           location: "",
           website: url,
           email,
@@ -5443,7 +5599,10 @@ export async function runPipeline(runId: number): Promise<void> {
             await storage.createLead({
               leadType: pl.leaderName ? "leader" : "community",
               communityName: pl.communityName, communityType: pl.communityType,
-              leaderName: pl.leaderName, location: pl.location, website: pl.website,
+              leaderName: pl.leaderName,
+              firstName: extractHighConfidenceFirstName(pl.leaderName),
+              researchSummary: generateResearchSummary({ communityName: pl.communityName, communityType: pl.communityType, leaderName: pl.leaderName, description: pl.description, source: pl.source, website: pl.website, location: pl.location, ownedChannels: pl.ownedChannels, engagementSignals: pl.engagementSignals, monetizationSignals: pl.monetizationSignals, tripFitSignals: pl.tripFitSignals, raw: pl.raw }),
+              location: pl.location, website: pl.website,
               email: pl.email, phone: pl.phone, ownedChannels: pl.ownedChannels,
               monetizationSignals: pl.monetizationSignals, engagementSignals: pl.engagementSignals,
               tripFitSignals: pl.tripFitSignals, score: breakdown.total, scoreBreakdown: breakdown,
@@ -6420,6 +6579,8 @@ async function resumeFromCheckpoint(
           email: pl.email,
           phone: pl.phone,
           leaderName: pl.leaderName,
+          firstName: extractHighConfidenceFirstName(pl.leaderName),
+          researchSummary: generateResearchSummary({ communityName: pl.communityName, communityType: pl.communityType, leaderName: pl.leaderName, description: pl.description, source: pl.source, website: pl.website, location: pl.location, ownedChannels: pl.ownedChannels || {}, engagementSignals: pl.engagementSignals || {}, monetizationSignals: pl.monetizationSignals || {}, tripFitSignals: pl.tripFitSignals || {}, raw: pl.raw || {} }),
           source: pl.source,
           score: breakdown.total,
           scoreBreakdown: breakdown,
@@ -7541,7 +7702,7 @@ export async function resumeRun(runId: number): Promise<void> {
               let leaderId2: number | undefined;
               if (pl.leaderName) { const leader = await storage.createLeader({ name: pl.leaderName, role: "", email: pl.email, phone: pl.phone, sourceUrl: pl.website, communityId: community.id }); leaderId2 = leader.id; }
               const breakdown = scoreLead({ name: pl.communityName, description: pl.description, type: pl.communityType, location: pl.location, website: pl.website, email: pl.email, phone: pl.phone, linkedin: pl.ownedChannels?.linkedin || "", ownedChannels: pl.ownedChannels, monetizationSignals: pl.monetizationSignals, engagementSignals: pl.engagementSignals, tripFitSignals: pl.tripFitSignals, leaderName: pl.leaderName, memberCount: pl.memberCount, subscriberCount: pl.subscriberCount, raw: pl.raw });
-              await storage.createLead({ leadType: pl.leaderName ? "leader" : "community", communityName: pl.communityName, communityType: pl.communityType, leaderName: pl.leaderName, location: pl.location, website: pl.website, email: pl.email, phone: pl.phone, ownedChannels: pl.ownedChannels, monetizationSignals: pl.monetizationSignals, engagementSignals: pl.engagementSignals, tripFitSignals: pl.tripFitSignals, score: breakdown.total, scoreBreakdown: breakdown, status: "new", source: pl.source || "", raw: pl.raw, runId, communityId: community.id, leaderId: leaderId2 });
+              await storage.createLead({ leadType: pl.leaderName ? "leader" : "community", communityName: pl.communityName, communityType: pl.communityType, leaderName: pl.leaderName, firstName: extractHighConfidenceFirstName(pl.leaderName), researchSummary: generateResearchSummary({ communityName: pl.communityName, communityType: pl.communityType, leaderName: pl.leaderName, description: pl.description, source: pl.source, website: pl.website, location: pl.location, ownedChannels: pl.ownedChannels, engagementSignals: pl.engagementSignals, monetizationSignals: pl.monetizationSignals, tripFitSignals: pl.tripFitSignals, raw: pl.raw }), location: pl.location, website: pl.website, email: pl.email, phone: pl.phone, ownedChannels: pl.ownedChannels, monetizationSignals: pl.monetizationSignals, engagementSignals: pl.engagementSignals, tripFitSignals: pl.tripFitSignals, score: breakdown.total, scoreBreakdown: breakdown, status: "new", source: pl.source || "", raw: pl.raw, runId, communityId: community.id, leaderId: leaderId2 });
               created2++;
             } catch {}
           }

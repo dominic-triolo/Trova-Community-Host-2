@@ -168,6 +168,13 @@ function LeadDetail({ lead }: { lead: Lead }) {
         </div>
       </div>
 
+      {lead.leaderName && (
+        <div className="space-y-1">
+          <p className="text-xs font-medium text-muted-foreground">Leader</p>
+          <p className="text-sm" data-testid="text-detail-leader">{lead.leaderName}{lead.firstName ? ` (${lead.firstName})` : ""}</p>
+        </div>
+      )}
+
       <div className="flex items-center gap-2">
         <div className="text-2xl font-bold" data-testid="text-detail-score">{lead.score}</div>
         <span className="text-xs text-muted-foreground">/ 100</span>
@@ -288,6 +295,16 @@ function LeadDetail({ lead }: { lead: Lead }) {
                 <Badge key={k} variant="outline" className="text-[10px]">{k}: {String(v)}</Badge>
               ))}
             </div>
+          </div>
+        </>
+      )}
+
+      {lead.researchSummary && (
+        <>
+          <Separator />
+          <div className="space-y-1">
+            <p className="text-xs font-medium text-muted-foreground">Research Summary</p>
+            <p className="text-sm text-foreground/80 whitespace-pre-wrap" data-testid="text-detail-research">{lead.researchSummary}</p>
           </div>
         </>
       )}
