@@ -2572,6 +2572,66 @@ function cleanMightyName(raw: string): string {
   return name;
 }
 
+const MIGHTY_JUNK_NAMES = new Set([
+  "join", "sign in", "log in", "about", "home", "community", "tribe", "collective",
+  "network", "group", "club", "hub", "forum", "members", "events", "courses",
+  "support", "help", "contact", "info", "admin", "team", "staff", "host",
+  "survivors", "judgment", "professional", "volunteers", "friends", "people",
+  "welcome", "subscribe", "newsletter", "donate", "blog", "podcast",
+]);
+
+function isLikelyPersonName(name: string): boolean {
+  if (!name || name.length < 3) return false;
+  const words = name.trim().split(/\s+/);
+  if (words.length < 2 || words.length > 5) return false;
+  if (MIGHTY_JUNK_NAMES.has(name.toLowerCase())) return false;
+  for (const w of words) {
+    if (MIGHTY_JUNK_NAMES.has(w.toLowerCase())) return false;
+  }
+  if (/\b(and|or|the|for|with|from|that|this|their|our|your|ltd|llc|inc|org|co)\s*$/i.test(name)) return false;
+  if (/^\d+$/.test(name)) return false;
+  if (!/^[A-Z]/.test(words[0])) return false;
+  if (words.every(w => w === w.toUpperCase()) && name.length > 5) return false;
+  if (!words.every(w => /^[A-Z][a-z]+$/.test(w) || w.length <= 3)) return false;
+  return true;
+}
+
+function extractNameFromEmail(email: string): string {
+  if (!email) return "";
+  const prefix = email.split("@")[0];
+  if (!prefix || prefix.length < 3) return "";
+  const genericPrefixes = ["info", "hello", "contact", "support", "admin", "team",
+    "help", "office", "sales", "mail", "noreply", "no-reply", "webmaster",
+    "billing", "service", "enquiries", "general", "press", "media",
+    "first", "last", "email", "emailsupport", "donate", "news",
+    "corporategiving", "betrayalpod"];
+  if (genericPrefixes.includes(prefix.toLowerCase().replace(/[._-]/g, ""))) return "";
+  const parts = prefix.split(/[._-]+/).filter(p => p.length >= 2);
+  if (parts.length < 2 || parts.length > 3) return "";
+  if (parts.some(p => /\d{2,}/.test(p))) return "";
+  if (parts.some(p => p.length > 12)) return "";
+  const capitalized = parts.map(p => p.charAt(0).toUpperCase() + p.slice(1).toLowerCase());
+  const name = capitalized.join(" ");
+  if (name.length < 5 || name.length > 40) return "";
+  return name;
+}
+
+function extractNameFromLinkedIn(linkedinUrl: string): string {
+  if (!linkedinUrl) return "";
+  const match = linkedinUrl.match(/linkedin\.com\/in\/([a-zA-Z0-9-]+)/);
+  if (!match) return "";
+  let slug = match[1];
+  slug = slug.replace(/-?\d{3,}$/, "").replace(/-+$/, "");
+  if (!slug || slug.length < 3) return "";
+  const junkSuffixes = ["contact", "profile", "official", "page", "real", "main", "cmt", "phd", "mba", "md", "esq", "tribe", "community", "club", "group"];
+  const parts = slug.split("-").filter(p => p.length >= 2 && !/^\d+$/.test(p));
+  const cleanParts = parts.filter(p => !junkSuffixes.includes(p.toLowerCase()));
+  if (cleanParts.length < 2 || cleanParts.length > 4) return "";
+  if (cleanParts.some(p => p.length > 15)) return "";
+  const capitalized = cleanParts.map(p => p.charAt(0).toUpperCase() + p.slice(1).toLowerCase());
+  return capitalized.join(" ");
+}
+
 function cleanMightyLeaderName(raw: string): string {
   if (!raw) return "";
   let name = raw
@@ -2856,7 +2916,7 @@ async function scrapeMightyNetworks(
 
           if (page.hostName) {
             const cleanedHost = cleanMightyLeaderName(page.hostName);
-            if (cleanedHost && !lead.leaderName) {
+            if (cleanedHost && !lead.leaderName && isLikelyPersonName(cleanedHost)) {
               lead.leaderName = cleanedHost;
             }
           }
@@ -2901,10 +2961,10 @@ async function scrapeMightyNetworks(
             }
           }
 
-          if (!lead.leaderName && lead.communityName) {
-            const extractedName = extractRealNameFromAbout(lead.description || "", lead.communityName);
-            if (extractedName) {
-              lead.leaderName = cleanMightyLeaderName(extractedName) || extractedName;
+          if (!lead.leaderName && lead.description) {
+            const extractedName = extractRealNameFromAbout(lead.description, "");
+            if (extractedName && isLikelyPersonName(extractedName)) {
+              lead.leaderName = cleanMightyLeaderName(extractedName) || "";
             }
           }
         }
@@ -2924,7 +2984,27 @@ async function scrapeMightyNetworks(
       }
     }
 
-    await appendAndSave(`Mighty Networks scrape: ${enrichedCount} emails from landing pages, scraped ${leads.length} communities`);
+    let nameExtractCount = 0;
+    for (const lead of leads) {
+      if (lead.leaderName) continue;
+
+      const linkedinUrl = lead.ownedChannels?.linkedin || "";
+      const linkedinName = extractNameFromLinkedIn(linkedinUrl);
+      if (linkedinName && isLikelyPersonName(linkedinName)) {
+        lead.leaderName = linkedinName;
+        nameExtractCount++;
+        continue;
+      }
+
+      const emailName = extractNameFromEmail(lead.email || "");
+      if (emailName && isLikelyPersonName(emailName)) {
+        lead.leaderName = emailName;
+        nameExtractCount++;
+        continue;
+      }
+    }
+
+    await appendAndSave(`Mighty Networks scrape: ${enrichedCount} emails from landing pages, ${nameExtractCount} names from contacts, scraped ${leads.length} communities`);
   }
 
   await appendAndSave(`Mighty Networks discovery complete: ${leads.length} communities found`);
