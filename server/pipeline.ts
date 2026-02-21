@@ -3439,7 +3439,7 @@ async function scrapeLinkedInGroupsViaActor(
     try {
       await appendAndSave(`LinkedIn Groups: searching "${keyword}" (${leads.length}/${maxItems} found)...`);
       const { items, costUsd: actorCost } = await runActorAndGetResults(
-        "contactminerlabs/linkedin-groups-search-scraper---cheap",
+        "contactminerlabs~linkedin-groups-search-scraper---cheap",
         {
           KEYWORD: keyword,
           TIME_FILTER: "any",
