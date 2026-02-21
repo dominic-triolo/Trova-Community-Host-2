@@ -2557,27 +2557,76 @@ async function scrapeMightyNetworks(
   keywords: string[],
   maxItems: number,
   appendAndSave: (msg: string) => Promise<void>,
+  geos: string[] = [],
 ): Promise<PlatformLead[]> {
   const leads: PlatformLead[] = [];
   const seenSlugs = new Set<string>();
   const MIGHTY_SYSTEM_SLUGS = ["community", "www", "api", "app", "help", "support", "faq", "docs", "blog", "status"];
 
-  const googleQueries = keywords.flatMap(kw => [
-    `site:mn.co "${kw}"`,
-    `site:mightynetworks.com "${kw}" community`,
-    `"mn.co" "${kw}" community join`,
-  ]);
+  const MIGHTY_KEYWORD_EXPANSIONS: Record<string, string[]> = {
+    "hiking": ["hiking", "trail", "backpacking", "outdoors", "outdoor adventure"],
+    "outdoor": ["outdoor", "outdoors", "nature", "adventure", "wilderness"],
+    "yoga": ["yoga", "mindfulness", "meditation", "wellness yoga"],
+    "fitness": ["fitness", "workout", "training", "gym", "health fitness"],
+    "travel": ["travel", "adventure travel", "group travel", "wanderlust"],
+    "coaching": ["coaching", "life coach", "business coaching", "mentor"],
+    "wellness": ["wellness", "holistic", "health wellness", "self-care"],
+    "community": ["community", "tribe", "collective", "network"],
+    "running": ["running", "run club", "marathon", "runners"],
+    "photography": ["photography", "photo", "photographers"],
+  };
+
+  const expandedKeywords = new Set<string>();
+  for (const kw of keywords) {
+    expandedKeywords.add(kw);
+    const kwLower = kw.toLowerCase();
+    for (const [trigger, expansions] of Object.entries(MIGHTY_KEYWORD_EXPANSIONS)) {
+      if (kwLower.includes(trigger)) {
+        for (const exp of expansions) {
+          if (exp.toLowerCase() !== kwLower) expandedKeywords.add(exp);
+        }
+      }
+    }
+  }
+
+  const allKeywords = Array.from(expandedKeywords);
+  const googleQueries: string[] = [];
+
+  for (const kw of allKeywords) {
+    googleQueries.push(`site:mn.co "${kw}"`);
+    googleQueries.push(`site:mn.co ${kw} community`);
+  }
+
+  for (const kw of keywords) {
+    googleQueries.push(`site:mightynetworks.com "${kw}" community`);
+    googleQueries.push(`"mn.co" ${kw} join community`);
+    googleQueries.push(`"mighty networks" "${kw}" community`);
+    googleQueries.push(`mn.co ${kw} group membership`);
+  }
+
+  if (geos.length > 0) {
+    for (const kw of keywords) {
+      for (const geo of geos.slice(0, 3)) {
+        googleQueries.push(`site:mn.co "${kw}" "${geo}"`);
+        googleQueries.push(`"mighty networks" "${kw}" "${geo}" community`);
+      }
+    }
+  }
+
+  const MAX_QUERIES = 40;
+  const uniqueQueries = Array.from(new Set(googleQueries)).slice(0, MAX_QUERIES);
+  await appendAndSave(`Mighty Networks: ${uniqueQueries.length} search queries (${allKeywords.length} keywords${geos.length > 0 ? `, ${geos.length} geos` : ""})`);
   const batchSize = 10;
 
-  for (let i = 0; i < googleQueries.length; i += batchSize) {
+  for (let i = 0; i < uniqueQueries.length; i += batchSize) {
     if (leads.length >= maxItems) break;
-    const batch = googleQueries.slice(i, i + batchSize);
+    const batch = uniqueQueries.slice(i, i + batchSize);
 
     try {
-      await appendAndSave(`Mighty Networks (via Google): batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(googleQueries.length / batchSize)} (${leads.length}/${maxItems} found)...`);
+      await appendAndSave(`Mighty Networks (via Google): batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(uniqueQueries.length / batchSize)} (${leads.length}/${maxItems} found)...`);
       const { items, costUsd: actorCost } = await runActorAndGetResults("apify~google-search-scraper", {
         queries: batch.join("\n"),
-        maxPagesPerQuery: 3,
+        maxPagesPerQuery: 5,
         resultsPerPage: 20,
         countryCode: "us",
         languageCode: "en",
@@ -3908,7 +3957,7 @@ export async function runPipeline(runId: number): Promise<void> {
       platformTasks.push({ name: "Substack", promise: scrapeSubstackWriters(runId, keywords, getMaxForPlatform("substack"), (msg) => appendAndSave(msg)) });
     }
     if (enabledSources.includes("mighty")) {
-      platformTasks.push({ name: "Mighty Networks", promise: scrapeMightyNetworks(runId, keywords, getMaxForPlatform("mighty"), (msg) => appendAndSave(msg)) });
+      platformTasks.push({ name: "Mighty Networks", promise: scrapeMightyNetworks(runId, keywords, getMaxForPlatform("mighty"), (msg) => appendAndSave(msg), params.seedGeos || []) });
     }
 
     if (platformTasks.length === 0) {
@@ -5029,7 +5078,7 @@ export async function runPipeline(runId: number): Promise<void> {
               newPlatformLeads.push(...results);
             } else if (platform === "mighty") {
               await appendAndSave(`Expansion: deeper Mighty Networks search (${uniqueExpKws.length} queries)...`);
-              const results = await scrapeMightyNetworks(runId, uniqueExpKws, maxExpLeads, (msg) => appendAndSave(msg));
+              const results = await scrapeMightyNetworks(runId, uniqueExpKws, maxExpLeads, (msg) => appendAndSave(msg), geos);
               newPlatformLeads.push(...results);
             } else if (platform === "podcast" && run.podcastEnabled !== false) {
               await appendAndSave(`Expansion: deeper podcast search (${uniqueExpKws.length} queries)...`);
@@ -6572,7 +6621,7 @@ async function resumeFromCheckpoint(
               newPlatformLeads.push(...results);
             } else if (platform === "mighty") {
               await appendAndSave(`Resume expansion: deeper Mighty Networks search (${uniqueExpKws.length} queries)...`);
-              const results = await scrapeMightyNetworks(runId, uniqueExpKws, maxExpLeads, (msg) => appendAndSave(msg));
+              const results = await scrapeMightyNetworks(runId, uniqueExpKws, maxExpLeads, (msg) => appendAndSave(msg), resumeGeos);
               newPlatformLeads.push(...results);
             } else if (platform === "podcast" && run2?.podcastEnabled !== false) {
               await appendAndSave(`Resume expansion: deeper podcast search (${uniqueExpKws.length} queries)...`);
@@ -7286,7 +7335,7 @@ export async function resumeRun(runId: number): Promise<void> {
                 const results = await scrapeSubstackWriters(runId, uniqueKws, maxExpLeads, (msg) => appendAndSave(msg));
                 newPlatformLeads.push(...results);
               } else if (platform === "mighty") {
-                const results = await scrapeMightyNetworks(runId, uniqueKws, maxExpLeads, (msg) => appendAndSave(msg));
+                const results = await scrapeMightyNetworks(runId, uniqueKws, maxExpLeads, (msg) => appendAndSave(msg), dbGeos);
                 newPlatformLeads.push(...results);
               } else if (platform === "podcast" && dbRun2?.podcastEnabled !== false) {
                 const results = await scrapeApplePodcasts(runId, uniqueKws, maxExpLeads, (msg) => appendAndSave(msg), { minEpisodeCount: params.minEpisodeCount || 0, podcastCountry: params.podcastCountry || "US" });
