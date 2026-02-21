@@ -157,7 +157,7 @@ export const AVAILABLE_SOURCES = [
 export type SourceId = "meetup" | "youtube" | "reddit" | "eventbrite" | "facebook" | "patreon" | "podcast" | "substack" | "google";
 export const DEFAULT_ENABLED_SOURCES: SourceId[] = ["patreon"];
 
-export const TEMPORARILY_DISABLED_SOURCES: SourceId[] = ["meetup", "youtube", "reddit", "eventbrite", "google"];
+export const TEMPORARILY_DISABLED_SOURCES: SourceId[] = ["youtube", "reddit", "eventbrite", "google"];
 
 export const AVAILABLE_ENRICHMENTS = [
   { id: "apollo", label: "Apollo.io", description: "Contact lookup by name, domain & LinkedIn URL (uses API credits)" },
@@ -211,6 +211,7 @@ export const PLATFORM_COST_PER_LEAD: Record<string, number> = {
   facebook: 0.01,
   podcast: 0.03,
   substack: 0.01,
+  meetup: 0.01,
 };
 
 export const PLATFORM_EMAIL_YIELD: Record<string, number> = {
@@ -218,6 +219,7 @@ export const PLATFORM_EMAIL_YIELD: Record<string, number> = {
   facebook: 0.15,
   podcast: 0.55,
   substack: 0.40,
+  meetup: 0.20,
 };
 
 export const PLATFORM_VALID_EMAIL_RATE: Record<string, number> = {
@@ -225,6 +227,7 @@ export const PLATFORM_VALID_EMAIL_RATE: Record<string, number> = {
   facebook: 0.36,
   podcast: 0.45,
   substack: 0.21,
+  meetup: 0.40,
 };
 
 export const KEYWORD_PLATFORM_MAP: Record<string, SourceId[]> = {
@@ -234,15 +237,23 @@ export const KEYWORD_PLATFORM_MAP: Record<string, SourceId[]> = {
   "substack": ["substack"],
   "facebook group": ["facebook"],
   "fb group": ["facebook"],
-  "church": ["facebook", "patreon"],
+  "church": ["facebook", "patreon", "meetup"],
   "ministry": ["facebook", "patreon"],
-  "faith": ["facebook", "patreon"],
-  "run club": ["facebook", "patreon"],
-  "running": ["facebook", "patreon", "podcast"],
-  "hiking": ["facebook", "patreon", "podcast"],
-  "cycling": ["facebook", "patreon", "podcast"],
-  "alumni": ["facebook"],
-  "social club": ["facebook"],
+  "faith": ["facebook", "patreon", "meetup"],
+  "run club": ["facebook", "patreon", "meetup"],
+  "running": ["facebook", "patreon", "podcast", "meetup"],
+  "hiking": ["facebook", "patreon", "podcast", "meetup"],
+  "cycling": ["facebook", "patreon", "podcast", "meetup"],
+  "alumni": ["facebook", "meetup"],
+  "social club": ["facebook", "meetup"],
+  "meetup": ["meetup"],
+  "yoga": ["patreon", "meetup", "podcast"],
+  "fitness": ["patreon", "meetup", "podcast"],
+  "outdoor": ["facebook", "meetup", "patreon"],
+  "photography": ["meetup", "patreon", "podcast"],
+  "book club": ["meetup", "facebook"],
+  "tech": ["meetup"],
+  "networking": ["meetup", "facebook"],
 };
 
 export const autonomousParamsSchema = z.object({
@@ -439,6 +450,24 @@ export const SUBSTACK_RECOMMENDED_KEYWORDS = [
   { label: "Nature & wildlife", keywords: ["nature", "wildlife", "birdwatching"] },
   { label: "Surf & water sports", keywords: ["surfing", "diving", "water sports"] },
   { label: "Art & creativity", keywords: ["art", "creative writing", "painting"] },
+] as const;
+
+export const MEETUP_RECOMMENDED_KEYWORDS = [
+  { label: "Hiking & outdoors", keywords: ["hiking group", "outdoor adventure", "trail hiking"] },
+  { label: "Run clubs", keywords: ["run club", "running group", "marathon training"] },
+  { label: "Yoga & wellness", keywords: ["yoga group", "wellness community", "meditation group"] },
+  { label: "Cycling clubs", keywords: ["cycling club", "bike group", "cycling group"] },
+  { label: "Travel & adventure", keywords: ["adventure travel", "group travel", "travel club"] },
+  { label: "Photography", keywords: ["photography club", "photo walk", "camera club"] },
+  { label: "Book clubs", keywords: ["book club", "reading group", "literary club"] },
+  { label: "Women's groups", keywords: ["women's group", "women's hiking", "women's adventure"] },
+  { label: "Fitness groups", keywords: ["fitness group", "CrossFit", "workout group"] },
+  { label: "Social & networking", keywords: ["social club", "networking group", "friends meetup"] },
+  { label: "Climbing", keywords: ["climbing group", "bouldering", "mountaineering club"] },
+  { label: "Camping & van life", keywords: ["camping group", "backpacking group", "van life"] },
+  { label: "Food & wine", keywords: ["food group", "wine tasting", "supper club"] },
+  { label: "Surf & water sports", keywords: ["surf club", "diving group", "kayaking group"] },
+  { label: "Dance & movement", keywords: ["dance group", "salsa meetup", "dance community"] },
 ] as const;
 
 export const DEFAULT_RUN_PARAMS: RunParams = {

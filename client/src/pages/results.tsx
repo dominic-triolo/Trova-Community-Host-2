@@ -71,7 +71,7 @@ import {
   ShieldAlert,
   ShieldQuestion,
 } from "lucide-react";
-import { SiPatreon, SiInstagram, SiX, SiFacebook, SiLinkedin, SiTiktok, SiDiscord, SiTwitch, SiSubstack } from "react-icons/si";
+import { SiPatreon, SiInstagram, SiX, SiFacebook, SiLinkedin, SiTiktok, SiDiscord, SiTwitch, SiSubstack, SiMeetup } from "react-icons/si";
 
 const PLATFORM_ICONS: Record<string, { icon: any; label: string; color: string }> = {
   patreon: { icon: SiPatreon, label: "Patreon", color: "text-[#FF424D]" },
@@ -84,6 +84,7 @@ const PLATFORM_ICONS: Record<string, { icon: any; label: string; color: string }
   discord: { icon: SiDiscord, label: "Discord", color: "text-[#5865F2]" },
   twitch: { icon: SiTwitch, label: "Twitch", color: "text-[#9146FF]" },
   substack: { icon: SiSubstack, label: "Substack", color: "text-[#FF6719]" },
+  meetup: { icon: SiMeetup, label: "Meetup", color: "text-[#ED1C40]" },
   linktree: { icon: Link2, label: "Linktree", color: "text-[#43E55E]" },
   website: { icon: Globe, label: "Website", color: "text-muted-foreground" },
   newsletter: { icon: BookOpen, label: "Newsletter", color: "text-muted-foreground" },

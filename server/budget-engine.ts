@@ -9,7 +9,7 @@ const PODCAST_MIN_BUDGET = 3;
 const ENRICHMENT_EMAIL_ADD_RATE = 0.25;
 const ENRICHMENT_VALID_RATE = 0.55;
 
-const ACTIVE_PLATFORMS: SourceId[] = ["patreon", "facebook", "podcast", "substack"];
+const ACTIVE_PLATFORMS: SourceId[] = ["patreon", "facebook", "podcast", "substack", "meetup"];
 
 export interface PlatformStats {
   platform: string;

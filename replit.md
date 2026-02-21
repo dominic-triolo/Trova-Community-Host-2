@@ -50,8 +50,8 @@ shared/
 - **leads** - Flattened, scored, export-ready lead records
 
 ## Pipeline Steps (Social Graph Enrichment Chain)
-1. **Platform Discovery** - Patreon creator search (social links, about text, tiers, earnings) + Facebook Groups search (group name, description, member count, admin name, URLs from descriptions) + Apple Podcasts search via `benthepythondev/podcast-intelligence-aggregator` ($30/1K results, pay-per-use) extracting feedUrl, websiteUrl, artistName, episodeCount, genres, social links + bare domain/email extraction from about text + obfuscated email extraction ("[at]", "(at)" patterns) + real name extraction from about text (regex patterns for "I'm X", "my name is X", etc.) + brand name parsing ("Jenne Sluder Yoga" → "Jenne Sluder") + link aggregator URL extraction (Linktree, Beacons, etc.)
-1a. **Google Bridge for Facebook Groups** - Smart Google search for each Facebook group to find leader/organizer websites, LinkedIn profiles, and org contact pages. Searches by group name + admin name (if available) or group name + "organizer/founder/leader". Extracts websites, LinkedIn, Instagram, Twitter from results.
+1. **Platform Discovery** - Patreon creator search (social links, about text, tiers, earnings) + Facebook Groups search (group name, description, member count, admin name, URLs from descriptions) + Meetup Groups search (via Google `site:meetup.com` + Cheerio group page scraping for organizer name, member count, emails, social links) + Apple Podcasts search via `benthepythondev/podcast-intelligence-aggregator` ($30/1K results, pay-per-use) extracting feedUrl, websiteUrl, artistName, episodeCount, genres, social links + bare domain/email extraction from about text + obfuscated email extraction ("[at]", "(at)" patterns) + real name extraction from about text (regex patterns for "I'm X", "my name is X", etc.) + brand name parsing ("Jenne Sluder Yoga" → "Jenne Sluder") + link aggregator URL extraction (Linktree, Beacons, etc.)
+1a. **Google Bridge for Facebook/Meetup Groups** - Smart Google search for each Facebook or Meetup group to find leader/organizer websites, LinkedIn profiles, and org contact pages. Searches by group name + admin name (if available) or group name + "organizer/founder/leader". Extracts websites, LinkedIn, Instagram, Twitter from results.
 1b. **RSS Feed Email Extraction (Podcasts)** - Cheerio scraper parses podcast RSS feeds to extract `<itunes:email>` (host email), `<itunes:name>`, website links, and social URLs from show notes. Expected 40-60% direct email hit rate. Runs after platform discovery, before link aggregator scrape.
 1c. **Link Aggregator Scrape (Pass 1)** - Cheerio scraper on Linktree/Beacons/bio.link pages from Patreon about text (uncapped)
 2a. **YouTube About Page Scrape** - Scrape ALL YouTube channels (no email/website filter) for business emails, websites, LinkedIn, and link aggregator URLs (uncapped)
@@ -87,12 +87,12 @@ The pipeline collects cross-platform profile links (YouTube, Instagram, Twitter,
 - Display linked platforms in results UI with platform-specific icons
 
 ## Platform Tabs
-The discovery form uses platform-specific tabs. Patreon, Facebook Groups, Podcasters, and Substack are active; LinkedIn tab is visible but disabled (coming soon). Each platform tab has its own keyword/filter configuration. Facebook Groups tab includes a Google Bridge enrichment step that searches Google for group leader/organizer websites, LinkedIn profiles, and org contact pages. Facebook tab defaults to min 100 members filter. Substack tab uses Google Search (`site:substack.com`) + Cheerio about-page scraping for email/social extraction.
+The discovery form uses platform-specific tabs. Patreon, Facebook Groups, Podcasters, Substack, and Meetup are active; LinkedIn tab is visible but disabled (coming soon). Each platform tab has its own keyword/filter configuration. Facebook Groups tab includes a Google Bridge enrichment step that searches Google for group leader/organizer websites, LinkedIn profiles, and org contact pages. Facebook tab defaults to min 100 members filter. Meetup tab uses Google Search (`site:meetup.com`) + Cheerio group page scraping for organizer name, member count, emails, and social links. Meetup tab defaults to min 50 members filter. Substack tab uses Google Search (`site:substack.com`) + Cheerio about-page scraping for email/social extraction.
 
 ## Apify Actors Used
 - `apify~google-search-scraper` - Google Search discovery
 - `apify~cheerio-scraper` - Generic website extraction
-- `easyapi~meetup-groups-scraper` - Meetup group search (structured data)
+- `apify~google-search-scraper` + `apify~cheerio-scraper` - Meetup group discovery (Google Search `site:meetup.com` + Cheerio page scraping, no subscription)
 - `streamers~youtube-scraper` - YouTube channel/video search (structured data)
 - `trudax~reddit-scraper-lite` - Reddit community search (structured data)
 - `aitorsm~eventbrite` - Eventbrite event/organizer search (structured data)

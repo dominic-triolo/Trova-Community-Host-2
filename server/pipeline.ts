@@ -435,93 +435,305 @@ interface PlatformLead {
   raw: Record<string, any>;
 }
 
+function expandMeetupKeywords(keywords: string[], geos: string[], maxQueries: number = 100): string[] {
+  const synonymMap: Record<string, string[]> = {
+    "hiking": ["hiking group", "hiking club", "trail hiking", "hiking meetup"],
+    "running": ["run club", "running group", "running club", "marathon training"],
+    "yoga": ["yoga group", "yoga class", "yoga community", "yoga meetup"],
+    "cycling": ["cycling group", "cycling club", "bike group", "bike club"],
+    "fitness": ["fitness group", "workout group", "CrossFit community", "gym group"],
+    "photography": ["photography club", "photo walk", "camera club", "photography group"],
+    "book club": ["book club", "reading group", "literary club"],
+    "travel": ["travel group", "adventure travel", "group travel", "travel club"],
+    "climbing": ["climbing group", "climbing club", "bouldering group", "mountaineering"],
+    "camping": ["camping group", "camping club", "backpacking group"],
+    "outdoor": ["outdoor group", "outdoor club", "outdoor adventure", "nature group"],
+    "church": ["church group", "faith community", "young adults ministry"],
+    "women": ["women's group", "women's hiking", "women's adventure", "women's travel"],
+    "social": ["social club", "social group", "friends meetup", "networking group"],
+    "food": ["food group", "supper club", "wine tasting", "culinary group"],
+    "surf": ["surf club", "surfing group", "water sports group"],
+    "dance": ["dance group", "salsa meetup", "dance community"],
+  };
+
+  const TOP_US_CITIES = [
+    "New York", "Los Angeles", "Chicago", "Houston", "Phoenix",
+    "Philadelphia", "San Antonio", "San Diego", "Dallas", "Austin",
+    "Denver", "Seattle", "Portland", "Nashville", "Atlanta",
+    "Miami", "Boston", "Minneapolis", "Charlotte", "San Francisco",
+  ];
+
+  const expanded: string[] = [];
+  const seen = new Set<string>();
+  const addQuery = (q: string) => {
+    if (!seen.has(q) && expanded.length < maxQueries) {
+      seen.add(q);
+      expanded.push(q);
+    }
+  };
+
+  for (const kw of keywords) {
+    addQuery(`site:meetup.com "${kw}"`);
+
+    const kwLower = kw.toLowerCase().trim();
+    const synonyms = synonymMap[kwLower] || [];
+    for (const syn of synonyms) {
+      addQuery(`site:meetup.com "${syn}"`);
+    }
+
+    addQuery(`site:meetup.com ${kw} group`);
+    addQuery(`site:meetup.com ${kw} club`);
+    addQuery(`site:meetup.com ${kw} community`);
+  }
+
+  const allSearchTerms = [...keywords];
+  for (const kw of keywords) {
+    const kwLower = kw.toLowerCase().trim();
+    const synonyms = synonymMap[kwLower] || [];
+    for (const syn of synonyms) allSearchTerms.push(syn);
+  }
+
+  const geoCities = geos.length > 0 ? geos.slice(0, 20) : TOP_US_CITIES;
+  for (const term of allSearchTerms) {
+    if (expanded.length >= maxQueries) break;
+    for (const geo of geoCities) {
+      addQuery(`site:meetup.com "${term}" "${geo}"`);
+    }
+  }
+
+  return expanded;
+}
+
+function parseMeetupMembersFromSnippet(text: string): number {
+  const patterns = [
+    /(\d[\d,]*)\s*members?/i,
+    /(\d[\d,]*)\s*attendees?/i,
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match) {
+      return parseInt(match[1].replace(/,/g, ""), 10) || 0;
+    }
+  }
+  return 0;
+}
+
 async function scrapeMeetupGroups(
   runId: number,
   keywords: string[],
   geos: string[],
   maxItems: number,
   appendAndSave: (msg: string) => Promise<void>,
+  filters: { minMemberCount?: number; maxMemberCount?: number } = {},
 ): Promise<PlatformLead[]> {
   const leads: PlatformLead[] = [];
-  const searchUrls: string[] = [];
+  const seenGroupUrls = new Set<string>();
+  const minMembers = filters.minMemberCount || 0;
+  const maxMembers = filters.maxMemberCount || 0;
 
-  const locations = geos.length > 0 ? geos : [""];
-  for (const kw of keywords) {
-    for (const geo of locations) {
-      const locationParam = geo ? `&location=us--${encodeURIComponent(geo)}` : "";
-      searchUrls.push(
-        `https://www.meetup.com/find/?keywords=${encodeURIComponent(kw)}${locationParam}&source=GROUPS&distance=anyDistance`
-      );
-    }
-  }
+  const googleQueries = expandMeetupKeywords(keywords, geos);
+  await appendAndSave(`Meetup: expanded ${keywords.length} keyword(s) into ${googleQueries.length} Google queries (target: ${maxItems} groups)`);
+  const batchSize = 5;
 
-  const urlBatches: string[][] = [];
-  for (let i = 0; i < searchUrls.length; i += 5) {
-    urlBatches.push(searchUrls.slice(i, i + 5));
-  }
+  for (let i = 0; i < googleQueries.length; i += batchSize) {
+    if (leads.length >= maxItems) break;
+    const batch = googleQueries.slice(i, i + batchSize);
 
-  for (const batch of urlBatches) {
     try {
-      await appendAndSave(`Meetup: searching ${batch.length} queries...`);
-      const { items, costUsd: actorCost } = await runActorAndGetResults("easyapi~meetup-groups-scraper", {
-        searchUrls: batch,
-        maxItems: Math.min(maxItems - leads.length, 200),
-      }, 300000);
+      await appendAndSave(`Meetup (via Google): batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(googleQueries.length / batchSize)} (${leads.length}/${maxItems} found so far)...`);
+      const { items, costUsd: actorCost } = await runActorAndGetResults("apify~google-search-scraper", {
+        queries: batch.join("\n"),
+        maxPagesPerQuery: 3,
+        resultsPerPage: 20,
+        countryCode: "us",
+        languageCode: "en",
+        mobileResults: false,
+      }, 120000);
       await storage.incrementApifySpend(runId, actorCost);
 
+      let filteredOut = 0;
       for (const item of items) {
         if (leads.length >= maxItems) break;
-        const memberCount = item.stats?.memberCounts?.all || 0;
-        const description = item.description || "";
-        const fullText = `${item.name || ""} ${description}`;
-        const city = item.city || "";
-        const country = item.country || "";
-        const location = [city, item.state, country].filter(Boolean).join(", ");
 
-        const organizer = item.organizer || item.organizerProfile || {};
-        const organizerName = organizer.name || item.organizerName || "";
-        const organizerBio = organizer.bio || organizer.description || "";
-        const organizerEmail = extractEmailsFromText(`${description} ${organizerBio}`)[0] || "";
+        const organicResults = item.organicResults || [];
+        for (const result of organicResults) {
+          if (leads.length >= maxItems) break;
 
-        const meetupChannels: Record<string, string> = { meetup: item.link || "active" };
-        const socialsText = `${description} ${organizerBio}`;
-        if (socialsText.includes("instagram.com")) meetupChannels.instagram = "detected";
-        if (socialsText.includes("facebook.com")) meetupChannels.facebook = "detected";
-        if (socialsText.includes("discord")) meetupChannels.discord = "detected";
+          const rawUrl = result.url || result.link || "";
+          if (!rawUrl.includes("meetup.com/")) continue;
+          if (rawUrl.includes("/events/") || rawUrl.includes("/messages/") || rawUrl.includes("/photos/")) continue;
 
-        leads.push({
-          source: "meetup",
-          communityName: item.name || "",
-          communityType: detectCommunityType(fullText),
-          description,
-          location,
-          website: item.link || "",
-          email: organizerEmail,
-          phone: "",
-          leaderName: organizerName,
-          memberCount,
-          subscriberCount: 0,
-          ownedChannels: meetupChannels,
-          monetizationSignals: detectMonetization(description),
-          engagementSignals: {
-            ...detectEngagement(description),
-            member_count: memberCount,
-            attendance_proxy: memberCount,
-          },
-          tripFitSignals: detectTripFit(description),
-          raw: item,
-        });
+          const urlObj = (() => { try { return new URL(rawUrl); } catch { return null; } })();
+          if (!urlObj) continue;
+          const pathParts = urlObj.pathname.split("/").filter(Boolean);
+          if (pathParts.length === 0) continue;
+
+          const groupSlug = pathParts[0];
+          if (["find", "topics", "cities", "apps", "about", "pro", "lp", "blog", "help"].includes(groupSlug)) continue;
+
+          const normalizedUrl = `https://www.meetup.com/${groupSlug}/`;
+          if (seenGroupUrls.has(normalizedUrl)) continue;
+          seenGroupUrls.add(normalizedUrl);
+
+          const title = result.title || "";
+          const snippet = result.description || result.snippet || "";
+          const fullText = `${title} ${snippet}`;
+
+          const groupName = title
+            .replace(/\s*\|\s*Meetup$/i, "")
+            .replace(/\s*[-–—]\s*Meetup$/i, "")
+            .replace(/\s*Meetup\s*$/i, "")
+            .replace(/\s*\(.*?\)\s*$/, "")
+            .trim();
+
+          if (!groupName || groupName.length < 3) continue;
+
+          const memberCount = parseMeetupMembersFromSnippet(fullText);
+
+          if (minMembers > 0 && memberCount > 0 && memberCount < minMembers) { filteredOut++; continue; }
+          if (maxMembers > 0 && memberCount > 0 && memberCount > maxMembers) { filteredOut++; continue; }
+
+          const channels: Record<string, string> = { meetup: normalizedUrl };
+
+          const descUrls = extractUrlsFromText(snippet);
+          const socialFromDesc = extractSocialChannelsFromUrls(descUrls);
+          Object.assign(channels, socialFromDesc);
+
+          if (snippet.toLowerCase().includes("instagram")) channels.instagram = channels.instagram || "detected";
+          if (snippet.toLowerCase().includes("facebook")) channels.facebook = channels.facebook || "detected";
+          if (snippet.toLowerCase().includes("discord")) channels.discord = channels.discord || "detected";
+
+          const descEmails = extractEmailsFromText(snippet);
+
+          const locationMatch = snippet.match(/(?:in\s+)?([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*,\s*[A-Z]{2})/);
+          const location = locationMatch ? locationMatch[1] : "";
+
+          leads.push({
+            source: "meetup",
+            communityName: groupName,
+            communityType: detectCommunityType(fullText),
+            description: snippet.substring(0, 2000),
+            location,
+            website: normalizedUrl,
+            email: descEmails[0] || "",
+            phone: "",
+            leaderName: "",
+            memberCount,
+            subscriberCount: 0,
+            ownedChannels: channels,
+            monetizationSignals: detectMonetization(snippet),
+            engagementSignals: {
+              member_count: memberCount,
+              attendance_proxy: memberCount,
+              ...detectEngagement(snippet),
+            },
+            tripFitSignals: detectTripFit(fullText),
+            raw: result,
+          });
+        }
       }
 
-      await appendAndSave(`Meetup: found ${leads.length} groups so far`);
+      await appendAndSave(`Meetup: found ${leads.length} unique groups so far${filteredOut > 0 ? ` (${filteredOut} filtered by member count)` : ""}`);
     } catch (err: any) {
       if (err.costUsd) {
         await storage.incrementApifySpend(runId, err.costUsd);
       }
-      await appendAndSave(`[WARN] Meetup batch failed: ${err.message}`);
+      await appendAndSave(`[WARN] Meetup Google search batch failed: ${err.message}`);
     }
   }
 
+  const meetupUrls = leads.map(l => l.ownedChannels?.meetup || l.website).filter(u => u.includes("meetup.com"));
+  if (meetupUrls.length > 0) {
+    await appendAndSave(`Meetup: scraping ${meetupUrls.length} group pages for organizer info...`);
+    try {
+      const aboutUrls = meetupUrls.map(u => u.replace(/\/$/, "") + "/");
+      const cheerioUrls = aboutUrls.map(u => ({ url: u }));
+      const batchSize = 20;
+      for (let b = 0; b < cheerioUrls.length; b += batchSize) {
+        const urlBatch = cheerioUrls.slice(b, b + batchSize);
+        try {
+          const { items: pageResults, costUsd: cheerioCost } = await runActorAndGetResults("apify~cheerio-scraper", {
+            startUrls: urlBatch,
+            pageFunction: `async function pageFunction(context) {
+              const { $, request } = context;
+              const text = $('body').text() || '';
+              const organizerEl = $('[class*="organizer"], [data-testid*="organizer"], .organizers-list a, .groupHome-organizers a');
+              const organizerName = organizerEl.first().text().trim() || '';
+              const memberEl = $('[class*="member"] span, [data-testid*="member-count"]');
+              const memberText = memberEl.first().text().trim() || '';
+              const description = $('meta[name="description"]').attr('content') || $('meta[property="og:description"]').attr('content') || '';
+              const links = [];
+              $('a[href]').each(function() {
+                const href = $(this).attr('href') || '';
+                if (href.includes('linkedin.com') || href.includes('instagram.com') || href.includes('facebook.com') || href.includes('twitter.com') || href.includes('youtube.com') || href.includes('linktr.ee') || href.includes('beacons.ai')) {
+                  links.push(href);
+                }
+              });
+              const emails = text.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}/g) || [];
+              return { url: request.url, organizerName, memberText, description, links, emails: emails.slice(0, 5) };
+            }`,
+            maxRequestsPerCrawl: urlBatch.length,
+            maxConcurrency: 5,
+            proxyConfiguration: { useApifyProxy: true },
+          }, 120000);
+          await storage.incrementApifySpend(runId, cheerioCost);
+
+          for (const page of pageResults) {
+            const pageUrl = (page.url || "").replace(/\/$/, "") + "/";
+            const lead = leads.find(l => {
+              const meetupUrl = (l.ownedChannels?.meetup || l.website || "").replace(/\/$/, "") + "/";
+              return meetupUrl === pageUrl;
+            });
+            if (!lead) continue;
+
+            if (page.organizerName && !lead.leaderName) {
+              lead.leaderName = page.organizerName;
+            }
+
+            if (page.emails && page.emails.length > 0 && !lead.email) {
+              lead.email = page.emails[0];
+            }
+
+            if (page.memberText) {
+              const parsed = parseInt(page.memberText.replace(/[^0-9]/g, ""), 10);
+              if (parsed > 0 && lead.memberCount === 0) {
+                lead.memberCount = parsed;
+                lead.engagementSignals.member_count = parsed;
+                lead.engagementSignals.attendance_proxy = parsed;
+              }
+            }
+
+            if (page.links) {
+              for (const link of page.links) {
+                const linkLower = link.toLowerCase();
+                if (linkLower.includes("linkedin.com") && !lead.ownedChannels.linkedin) lead.ownedChannels.linkedin = link;
+                else if (linkLower.includes("instagram.com") && !lead.ownedChannels.instagram) lead.ownedChannels.instagram = link;
+                else if (linkLower.includes("facebook.com") && !lead.ownedChannels.facebook) lead.ownedChannels.facebook = link;
+                else if (linkLower.includes("twitter.com") || linkLower.includes("x.com") && !lead.ownedChannels.twitter) lead.ownedChannels.twitter = link;
+                else if (linkLower.includes("youtube.com") && !lead.ownedChannels.youtube) lead.ownedChannels.youtube = link;
+                else if ((linkLower.includes("linktr.ee") || linkLower.includes("beacons.ai")) && !lead.ownedChannels.linktree) lead.ownedChannels.linktree = link;
+              }
+            }
+
+            if (page.description && lead.description.length < 100) {
+              lead.description = page.description.substring(0, 2000);
+            }
+          }
+        } catch (err: any) {
+          if (err.costUsd) await storage.incrementApifySpend(runId, err.costUsd);
+          await appendAndSave(`[WARN] Meetup Cheerio batch failed: ${err.message}`);
+        }
+      }
+
+      const withOrganizer = leads.filter(l => l.leaderName).length;
+      const withEmail = leads.filter(l => l.email).length;
+      await appendAndSave(`Meetup page scrape: ${withOrganizer}/${leads.length} with organizer name, ${withEmail} with email`);
+    } catch (err: any) {
+      await appendAndSave(`[WARN] Meetup page scraping failed: ${err.message}`);
+    }
+  }
+
+  await appendAndSave(`Meetup discovery complete: ${leads.length} groups from ${googleQueries.length} queries`);
   return leads;
 }
 
@@ -2238,18 +2450,29 @@ async function googleSearchEnrichCreators(
     const idx = leads.indexOf(l);
     const hasRealName = realName && realName !== brandName && isValidApolloCandidate(realName);
 
+    const communityType = l.communityType || "";
+    const nicheQualifier = communityType && communityType !== "unknown"
+      ? communityType.replace(/_/g, " ")
+      : "";
+
     if (hasRealName) {
       queries.push({ term: `"${realName}" email website`, leadIdx: idx });
       queries.push({ term: `site:linkedin.com "${realName}"`, leadIdx: idx });
+      queries.push({ term: `"${realName}" "reach me" OR "contact me" OR "get in touch"`, leadIdx: idx });
+      if (nicheQualifier) {
+        queries.push({ term: `"${realName}" ${nicheQualifier} email`, leadIdx: idx });
+      }
     } else if (isValidApolloCandidate(brandName)) {
       queries.push({ term: `"${brandName}" contact website email`, leadIdx: idx });
       queries.push({ term: `site:linkedin.com "${brandName}"`, leadIdx: idx });
+      queries.push({ term: `"${brandName}" "contact us" OR "about us" OR "reach out"`, leadIdx: idx });
     } else {
       const patreonUrl = l.website || l.ownedChannels?.patreon || "";
       if (patreonUrl.includes("patreon.com/")) {
         const slug = patreonUrl.split("patreon.com/")[1]?.split(/[?#/]/)[0];
         if (slug && slug.length >= 3) {
           queries.push({ term: `"${slug}" email contact website`, leadIdx: idx });
+          queries.push({ term: `"${slug}" "at" "dot" com`, leadIdx: idx });
         }
       } else if (brandName.length >= 3) {
         queries.push({ term: `"${brandName}" contact email`, leadIdx: idx });
@@ -2361,10 +2584,18 @@ async function googleSearchEnrichCreators(
             }
           } catch {}
 
-          const emails = extractEmailsFromText(fullResult);
-          if (emails.length > 0 && !lead.email) {
-            lead.email = emails[0];
-            foundAnything = true;
+          if (!lead.email) {
+            const emails = extractEmailsFromText(fullResult);
+            if (emails.length > 0) {
+              lead.email = emails[0];
+              foundAnything = true;
+            } else {
+              const obfuscated = extractObfuscatedEmails(fullResult);
+              if (obfuscated.length > 0) {
+                lead.email = obfuscated[0];
+                foundAnything = true;
+              }
+            }
           }
         }
 
@@ -2399,16 +2630,16 @@ async function googleBridgeEnrichFacebookGroups(
   leads: PlatformLead[],
   appendAndSave: (msg: string) => Promise<void>,
 ): Promise<void> {
-  const fbLeads = leads.filter(l => l.source === "facebook" && !l.email && !l.ownedChannels?.website && !l.ownedChannels?.linkedin);
-  if (fbLeads.length === 0) {
-    await appendAndSave("Google Bridge: all Facebook leads already have website/LinkedIn or email");
+  const groupLeads = leads.filter(l => (l.source === "facebook" || l.source === "meetup") && !l.email && !l.ownedChannels?.website && !l.ownedChannels?.linkedin);
+  if (groupLeads.length === 0) {
+    await appendAndSave("Google Bridge: all Facebook/Meetup leads already have website/LinkedIn or email");
     return;
   }
 
-  await appendAndSave(`Google Bridge: searching for leaders/orgs behind ${fbLeads.length} Facebook groups...`);
+  await appendAndSave(`Google Bridge: searching for leaders/orgs behind ${groupLeads.length} Facebook/Meetup groups...`);
 
   const queries: { term: string; leadIdx: number }[] = [];
-  for (const l of fbLeads) {
+  for (const l of groupLeads) {
     const groupName = l.communityName || "";
     if (!groupName || groupName.length < 3) continue;
     const idx = leads.indexOf(l);
@@ -2531,10 +2762,18 @@ async function googleBridgeEnrichFacebookGroups(
             }
           } catch {}
 
-          const emails = extractEmailsFromText(fullResult);
-          if (emails.length > 0 && !lead.email) {
-            lead.email = emails[0];
-            foundAnything = true;
+          if (!lead.email) {
+            const emails = extractEmailsFromText(fullResult);
+            if (emails.length > 0) {
+              lead.email = emails[0];
+              foundAnything = true;
+            } else {
+              const obfuscated = extractObfuscatedEmails(fullResult);
+              if (obfuscated.length > 0) {
+                lead.email = obfuscated[0];
+                foundAnything = true;
+              }
+            }
           }
         }
 
