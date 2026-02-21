@@ -249,7 +249,7 @@ export default function Home() {
     setParams((p) => ({ ...p, seedGeos: val.split("\n").filter(Boolean) }));
   };
 
-  const canRun = (platformTab === "patreon" || platformTab === "facebook" || platformTab === "podcast" || platformTab === "substack" || platformTab === "meetup" || platformTab === "mighty") && params.seedKeywords.length > 0;
+  const canRun = (platformTab === "patreon" || platformTab === "facebook" || platformTab === "podcast" || platformTab === "substack" || platformTab === "meetup" || platformTab === "mighty" || platformTab === "linkedin") && params.seedKeywords.length > 0;
 
   const handlePlatformTabChange = (tab: string) => {
     setPlatformTab(tab);
@@ -265,6 +265,8 @@ export default function Home() {
       setParams((p) => ({ ...p, enabledSources: ["meetup"], seedKeywords: [], minMemberCount: 50, maxMemberCount: 0, minPostCount: 0, minEpisodeCount: 0 }));
     } else if (tab === "mighty") {
       setParams((p) => ({ ...p, enabledSources: ["mighty"], seedKeywords: [], minMemberCount: 0, maxMemberCount: 0, minPostCount: 0, minEpisodeCount: 0 }));
+    } else if (tab === "linkedin") {
+      setParams((p) => ({ ...p, enabledSources: ["linkedin"], seedKeywords: [], minMemberCount: 0, maxMemberCount: 0, minPostCount: 0, minEpisodeCount: 0 }));
     }
   };
 
