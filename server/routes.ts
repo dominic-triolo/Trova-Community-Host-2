@@ -633,6 +633,43 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/runs/:id/hubspot-check", async (req, res) => {
+    try {
+      const runId = parseInt(req.params.id);
+      if (!isHubspotConfigured()) {
+        return res.status(400).json({ message: "HubSpot not configured" });
+      }
+      const leads = await storage.listLeadsByRun(runId);
+      const needsHubspot = leads.filter(l =>
+        l.email && l.emailValidation === "valid" && (!l.hubspotStatus || l.hubspotStatus === "")
+      );
+      if (needsHubspot.length === 0) {
+        return res.json({ message: "All valid emails already checked", checked: 0 });
+      }
+      const emailToLeadIds = new Map<string, number[]>();
+      for (const lead of needsHubspot) {
+        const email = lead.email!.toLowerCase();
+        if (!emailToLeadIds.has(email)) emailToLeadIds.set(email, []);
+        emailToLeadIds.get(email)!.push(lead.id);
+      }
+      const hubResults = await checkEmailsInHubspot(Array.from(emailToLeadIds.keys()));
+      let existing = 0, netNew = 0;
+      for (const [email, exists] of Array.from(hubResults.entries())) {
+        const status = exists ? "existing" : "net_new";
+        const leadIds = emailToLeadIds.get(email.toLowerCase()) || [];
+        for (const leadId of leadIds) {
+          await storage.updateLead(leadId, { hubspotStatus: status });
+          if (exists) existing++; else netNew++;
+        }
+      }
+      log(`HubSpot check for run ${runId}: ${existing} existing, ${netNew} net new out of ${needsHubspot.length}`, "hubspot");
+      res.json({ checked: existing + netNew, existing, netNew });
+    } catch (err: any) {
+      log(`HubSpot check error: ${err.message}`, "hubspot");
+      res.status(500).json({ message: err.message });
+    }
+  });
+
   return httpServer;
 }
 

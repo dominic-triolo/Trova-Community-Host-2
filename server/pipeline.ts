@@ -5021,6 +5021,28 @@ export async function runPipeline(runId: number): Promise<void> {
           }
         }
 
+        if (isHubspotConfigured()) {
+          try {
+            const expHubLeads = (await storage.listLeadsByRun(runId)).filter(l => l.email && l.emailValidation === "valid" && !l.hubspotStatus);
+            if (expHubLeads.length > 0) {
+              await appendAndSave(`Expansion: checking ${expHubLeads.length} new valid emails against HubSpot...`);
+              const emailMap = new Map(expHubLeads.map(l => [l.email!.toLowerCase(), l.id]));
+              const hubResults = await checkEmailsInHubspot(Array.from(emailMap.keys()));
+              let existing = 0, netNew = 0;
+              for (const [email, isExisting] of Array.from(hubResults.entries())) {
+                const leadId = emailMap.get(email.toLowerCase());
+                if (leadId) {
+                  await storage.updateLead(leadId, { hubspotStatus: isExisting ? "existing" : "net_new" });
+                  if (isExisting) existing++; else netNew++;
+                }
+              }
+              await appendAndSave(`Expansion HubSpot: ${existing} existing, ${netNew} net new`);
+            }
+          } catch (err: any) {
+            await appendAndSave(`[WARN] Expansion HubSpot check failed: ${err.message}`);
+          }
+        }
+
         const postExpansionValid = await storage.countLeadsByRunWithValidEmail(runId);
         const postExpansionEmail = await storage.countLeadsByRunWithEmail(runId);
         await storage.updateRun(runId, {
@@ -6345,6 +6367,28 @@ async function resumeFromCheckpoint(
           } catch {}
         }
 
+        if (isHubspotConfigured()) {
+          try {
+            const expHubLeads = (await storage.listLeadsByRun(runId)).filter(l => l.email && l.emailValidation === "valid" && !l.hubspotStatus);
+            if (expHubLeads.length > 0) {
+              await appendAndSave(`Resume expansion: checking ${expHubLeads.length} new valid emails against HubSpot...`);
+              const emailMap = new Map(expHubLeads.map(l => [l.email!.toLowerCase(), l.id]));
+              const hubResults = await checkEmailsInHubspot(Array.from(emailMap.keys()));
+              let existing = 0, netNew = 0;
+              for (const [email, isExisting] of Array.from(hubResults.entries())) {
+                const leadId = emailMap.get(email.toLowerCase());
+                if (leadId) {
+                  await storage.updateLead(leadId, { hubspotStatus: isExisting ? "existing" : "net_new" });
+                  if (isExisting) existing++; else netNew++;
+                }
+              }
+              await appendAndSave(`Resume expansion HubSpot: ${existing} existing, ${netNew} net new`);
+            }
+          } catch (err: any) {
+            await appendAndSave(`[WARN] Resume expansion HubSpot check failed: ${err.message}`);
+          }
+        }
+
         const postExpansionValid = await storage.countLeadsByRunWithValidEmail(runId);
         const postExpansionEmail = await storage.countLeadsByRunWithEmail(runId);
         await storage.updateRun(runId, {
@@ -6925,6 +6969,25 @@ export async function resumeRun(runId: number): Promise<void> {
               const emailsV = expValid3.map(l => ({ email: l.email!, leadId: l.id }));
               const vRes = await verifyEmailBatch(emailsV, async () => {});
               for (const [lid, r] of Array.from(vRes.entries())) { await storage.updateLead(lid, { emailValidation: mapResultToValidation(r.result) }); }
+            } catch {}
+          }
+
+          if (isHubspotConfigured()) {
+            try {
+              const dbExpHubLeads = (await storage.listLeadsByRun(runId)).filter(l => l.email && l.emailValidation === "valid" && !l.hubspotStatus);
+              if (dbExpHubLeads.length > 0) {
+                const emailMap = new Map(dbExpHubLeads.map(l => [l.email!.toLowerCase(), l.id]));
+                const hubResults = await checkEmailsInHubspot(Array.from(emailMap.keys()));
+                let existing = 0, netNew = 0;
+                for (const [email, isExisting] of Array.from(hubResults.entries())) {
+                  const leadId = emailMap.get(email.toLowerCase());
+                  if (leadId) {
+                    await storage.updateLead(leadId, { hubspotStatus: isExisting ? "existing" : "net_new" });
+                    if (isExisting) existing++; else netNew++;
+                  }
+                }
+                await appendAndSave(`DB expansion HubSpot: ${existing} existing, ${netNew} net new`);
+              }
             } catch {}
           }
 
