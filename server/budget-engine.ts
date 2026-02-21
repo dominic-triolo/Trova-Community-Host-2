@@ -17,6 +17,7 @@ export interface PlatformStats {
   withEmail: number;
   validEmails: number;
   validRate: number;
+  emailYield: number;
 }
 
 function getValidEmailRate(platform: string, historicalStats?: PlatformStats[]): number {
@@ -29,12 +30,18 @@ function getValidEmailRate(platform: string, historicalStats?: PlatformStats[]):
   return PLATFORM_VALID_EMAIL_RATE[platform] || 0.25;
 }
 
-function getEmailYield(platform: string): number {
+function getEmailYield(platform: string, historicalStats?: PlatformStats[]): number {
+  if (historicalStats && historicalStats.length > 0) {
+    const stat = historicalStats.find(s => s.platform === platform);
+    if (stat && stat.totalLeads >= 20) {
+      return stat.emailYield;
+    }
+  }
   return PLATFORM_EMAIL_YIELD[platform] || 0.2;
 }
 
 function getEffectiveValidEmailYield(platform: string, historicalStats?: PlatformStats[]): number {
-  const baseYield = getEmailYield(platform);
+  const baseYield = getEmailYield(platform, historicalStats);
   const validRate = getValidEmailRate(platform, historicalStats);
   const baseValidYield = baseYield * validRate;
   const enrichmentValidYield = (1 - baseYield) * ENRICHMENT_EMAIL_ADD_RATE * ENRICHMENT_VALID_RATE;
@@ -103,7 +110,7 @@ export function allocateBudget(
   let remainingDiscovery = discoveryBudget;
 
   const emailYieldScored = platforms.map(p => {
-    const emailYield = getEmailYield(p);
+    const emailYield = getEmailYield(p, historicalStats);
     const validRate = getValidEmailRate(p, historicalStats);
     const effectiveValidYield = getEffectiveValidEmailYield(p, historicalStats);
     const cost = PLATFORM_COST_PER_LEAD[p] || 0.02;
@@ -148,7 +155,7 @@ export function allocateBudget(
   const estimatedTotalLeads = platformAllocations.reduce((s, p) => s + p.maxLeads, 0);
 
   const weightedEmailRate = platformAllocations.reduce((s, p) => {
-    const yield_ = getEmailYield(p.platform);
+    const yield_ = getEmailYield(p.platform, historicalStats);
     const enrichedYield = Math.min(0.85, yield_ + (1 - yield_) * ENRICHMENT_EMAIL_ADD_RATE);
     return s + enrichedYield * p.maxLeads;
   }, 0) / Math.max(1, estimatedTotalLeads);

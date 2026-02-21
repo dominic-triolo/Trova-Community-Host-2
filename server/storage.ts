@@ -43,7 +43,7 @@ export interface IStorage {
   countLeadsByRunAndStatus(runId: number, status: string): Promise<number>;
   countLeadsByRunWithEmail(runId: number): Promise<number>;
   countLeadsByRunWithValidEmail(runId: number): Promise<number>;
-  getPlatformValidEmailStats(): Promise<{ platform: string; totalLeads: number; withEmail: number; validEmails: number; validRate: number }[]>;
+  getPlatformValidEmailStats(): Promise<{ platform: string; totalLeads: number; withEmail: number; validEmails: number; validRate: number; emailYield: number }[]>;
   countLeadsByRunWithNetNewValidEmail(runId: number): Promise<number>;
   deleteLeadsByRun(runId: number): Promise<void>;
   deleteSourceUrlsByRun(runId: number): Promise<void>;
@@ -201,7 +201,7 @@ export class DatabaseStorage implements IStorage {
     return result?.count || 0;
   }
 
-  async getPlatformValidEmailStats(): Promise<{ platform: string; totalLeads: number; withEmail: number; validEmails: number; validRate: number }[]> {
+  async getPlatformValidEmailStats(): Promise<{ platform: string; totalLeads: number; withEmail: number; validEmails: number; validRate: number; emailYield: number }[]> {
     const results = await db.execute(sql`
       SELECT 
         l.source as platform,
@@ -220,6 +220,7 @@ export class DatabaseStorage implements IStorage {
       withEmail: Number(row.with_email),
       validEmails: Number(row.valid_emails),
       validRate: Number(row.with_email) > 0 ? Number(row.valid_emails) / Number(row.with_email) : 0,
+      emailYield: Number(row.total_leads) > 0 ? Number(row.with_email) / Number(row.total_leads) : 0,
     }));
   }
 
