@@ -2552,6 +2552,45 @@ async function scrapeSubstackWriters(
   return leads;
 }
 
+function cleanMightyName(raw: string): string {
+  let name = raw
+    .replace(/\s*\|\s*Mighty Networks$/i, "")
+    .replace(/\s*[-–—]\s*Mighty Networks$/i, "")
+    .replace(/\s*Mighty Networks\s*$/i, "")
+    .replace(/\s*[-–—]\s*Join\s+.*$/i, "")
+    .replace(/^(About|Home|Welcome|Events|Feed|Members|Courses?|Posts?)\s*\|\s*/i, "")
+    .replace(/^(About|Home|Welcome to|Join)\s+/i, "")
+    .replace(/\s*\|\s*(About|Home|Feed|Events|Members|Courses?|Posts?)\s*$/i, "")
+    .replace(/\bJoin\b[\s\S]*?Sign\s*In/gi, "")
+    .replace(/\bSign\s*In\b/gi, "")
+    .replace(/\bJoin\s*(Now|Us|Free|Today)?\b/gi, "")
+    .replace(/\bLog\s*In\b/gi, "")
+    .replace(/\bDon'?t?\b\s*$/i, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  if (name.length > 120) name = name.substring(0, 120).trim();
+  return name;
+}
+
+function cleanMightyLeaderName(raw: string): string {
+  if (!raw) return "";
+  let name = raw
+    .replace(/\bJoin\b[\s\S]*?Sign\s*In/gi, "")
+    .replace(/\bSign\s*In\b/gi, "")
+    .replace(/\bJoin\s*(Now|Us|Free|Today)?\b/gi, "")
+    .replace(/\bLog\s*In\b/gi, "")
+    .replace(/\bDon'?t?\b/gi, "")
+    .replace(/\bHosted?\s+by\b/gi, "")
+    .replace(/\bCreated?\s+by\b/gi, "")
+    .replace(/\b(About|Home|Feed|Events|Members|Courses?|Posts?)\b/gi, "")
+    .replace(/[|•·\-–—]/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  if (name.length < 2 || name.length > 80) return "";
+  if (!/[a-zA-Z]{2,}/.test(name)) return "";
+  return name;
+}
+
 async function scrapeMightyNetworks(
   runId: number,
   keywords: string[],
@@ -2662,14 +2701,7 @@ async function scrapeMightyNetworks(
           const snippet = result.description || result.snippet || "";
           const fullText = `${title} ${snippet}`;
 
-          let communityName = title
-            .replace(/\s*\|\s*Mighty Networks$/i, "")
-            .replace(/\s*[-–—]\s*Mighty Networks$/i, "")
-            .replace(/\s*Mighty Networks\s*$/i, "")
-            .replace(/\s*[-–—]\s*Join\s+.*$/i, "")
-            .replace(/^Welcome to\s*/i, "")
-            .replace(/^Join\s*/i, "")
-            .trim();
+          let communityName = cleanMightyName(title);
           if (!communityName) communityName = mightySlug;
 
           const channels: Record<string, string> = { mighty: mightyUrl };
@@ -2737,6 +2769,7 @@ async function scrapeMightyNetworks(
   var url = request.url;
   var text = $('body').text() || '';
   var hostName = '';
+  var communityTitle = '';
   var description = '';
   var memberText = '';
   var emails = [];
@@ -2746,12 +2779,44 @@ async function scrapeMightyNetworks(
   var ogDesc = $('meta[property="og:description"]').attr('content') || '';
   description = metaDesc || ogDesc || '';
 
-  var hostEl = $('[class*="host"], [class*="creator"], [class*="author"], [class*="organizer"]');
-  if (hostEl.length) hostName = hostEl.first().text().trim().substring(0, 100);
+  var ogTitle = $('meta[property="og:title"]').attr('content') || '';
+  var pageTitle = $('title').text() || '';
+  communityTitle = ogTitle || pageTitle || '';
 
+  // Try specific selectors for host/creator name - avoid nav/button elements
+  var hostSelectors = [
+    '.host-name', '.creator-name', '.author-name', '.organizer-name',
+    '[data-testid*="host"]', '[data-testid*="creator"]',
+    '.community-host', '.network-host'
+  ];
+  for (var si = 0; si < hostSelectors.length; si++) {
+    var el = $(hostSelectors[si]);
+    if (el.length) {
+      var elText = el.first().text().trim();
+      if (elText.length > 1 && elText.length < 80 && !/sign\\s*in|join|log\\s*in/i.test(elText)) {
+        hostName = elText.substring(0, 100);
+        break;
+      }
+    }
+  }
+
+  // Fallback: look for "hosted by" / "created by" patterns in body text
   if (!hostName) {
-    var byMatch = text.match(/(?:hosted by|created by|run by|founded by|led by|built by)\\s+([A-Z][a-z]+(?:\\s+[A-Z][a-z]+){0,3})/i);
-    if (byMatch) hostName = byMatch[1].trim();
+    var byMatch = text.match(/(?:hosted by|created by|run by|founded by|led by|built by|managed by|curated by)\\s+([A-Z][a-z]+(?:\\s+[A-Z][a-z]+){0,3})/i);
+    if (byMatch) {
+      var candidate = byMatch[1].trim();
+      if (!/sign\\s*in|join|log\\s*in|mighty|network/i.test(candidate)) {
+        hostName = candidate;
+      }
+    }
+  }
+
+  // Fallback: look for og:site_name which sometimes has the host name
+  if (!hostName) {
+    var siteName = $('meta[property="og:site_name"]').attr('content') || '';
+    if (siteName && siteName.length > 1 && siteName.length < 80 && !/mighty\\s*network|sign\\s*in|join/i.test(siteName)) {
+      hostName = siteName;
+    }
   }
 
   var memberMatch = text.match(/(\\d[\\d,]+)\\s*(?:members?|people|community members)/i);
@@ -2769,7 +2834,7 @@ async function scrapeMightyNetworks(
   var emailMatches = text.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}/g) || [];
   emails = emailMatches.filter(function(e) { return !e.includes('mightynetworks') && !e.includes('mn.co'); }).slice(0, 5);
 
-  return { url: url, hostName: hostName, description: description, memberText: memberText, emails: emails, links: links };
+  return { url: url, hostName: hostName, communityTitle: communityTitle, description: description, memberText: memberText, emails: emails, links: links };
 }`,
         }, 120000);
         await storage.incrementApifySpend(runId, scrapeCost);
@@ -2782,8 +2847,18 @@ async function scrapeMightyNetworks(
           const lead = slugMap.get(slug);
           if (!lead) continue;
 
-          if (page.hostName && !lead.leaderName) {
-            lead.leaderName = page.hostName.substring(0, 100);
+          if (page.communityTitle) {
+            const cleanedTitle = cleanMightyName(page.communityTitle);
+            if (cleanedTitle && cleanedTitle.length > 1) {
+              lead.communityName = cleanedTitle;
+            }
+          }
+
+          if (page.hostName) {
+            const cleanedHost = cleanMightyLeaderName(page.hostName);
+            if (cleanedHost && !lead.leaderName) {
+              lead.leaderName = cleanedHost;
+            }
           }
 
           if (page.description && (!lead.description || lead.description.length < 50)) {
@@ -2827,7 +2902,10 @@ async function scrapeMightyNetworks(
           }
 
           if (!lead.leaderName && lead.communityName) {
-            lead.leaderName = extractRealNameFromAbout(lead.description || "", lead.communityName) || lead.communityName;
+            const extractedName = extractRealNameFromAbout(lead.description || "", lead.communityName);
+            if (extractedName) {
+              lead.leaderName = cleanMightyLeaderName(extractedName) || extractedName;
+            }
           }
         }
       } catch (err: any) {
