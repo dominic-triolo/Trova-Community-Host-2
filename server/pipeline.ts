@@ -3163,29 +3163,43 @@ async function scrapeMightyNetworks(
   return leads;
 }
 
-function expandLinkedInKeywords(keywords: string[], geos: string[], maxQueries: number = 60): string[] {
+function expandLinkedInKeywords(keywords: string[], geos: string[], maxQueries: number = 80): string[] {
   const synonymMap: Record<string, string[]> = {
-    "hiking": ["hiking group", "hiking club", "outdoor hiking", "trail group"],
-    "running": ["run club", "running group", "runners club", "marathon group"],
-    "cycling": ["cycling group", "cycling club", "bike group", "bike club"],
-    "fitness": ["fitness group", "fitness professionals", "workout group", "health fitness"],
-    "yoga": ["yoga group", "yoga community", "yoga professionals"],
-    "travel": ["travel group", "travel professionals", "adventure travel", "group travel"],
-    "outdoor": ["outdoor group", "outdoor recreation", "outdoor adventure", "nature group"],
-    "photography": ["photography group", "photographers network", "photo club"],
-    "book club": ["book club", "reading group", "book lovers"],
-    "alumni": ["alumni group", "alumni network", "alumni association"],
-    "women": ["women professionals", "women leaders", "women's network", "women in business"],
-    "professional": ["professional group", "professional network", "industry professionals"],
-    "coaching": ["coaching group", "executive coaching", "leadership coaching"],
-    "wellness": ["wellness group", "wellness professionals", "holistic health"],
-    "food": ["food lovers", "culinary group", "wine group"],
-    "tech": ["tech group", "technology professionals", "startup community"],
-    "church": ["faith group", "ministry group", "spiritual community"],
-    "social club": ["social group", "networking group", "social networking"],
-    "nonprofit": ["nonprofit group", "social impact", "community leadership"],
-    "climbing": ["climbing group", "mountaineering", "outdoor climbing"],
-    "surf": ["surf group", "water sports group", "surfing community"],
+    "hiking": ["hiking group", "hiking club", "outdoor hiking", "trail group", "hikers"],
+    "hiking group": ["hiking club", "trail hiking", "outdoor hiking", "hikers network"],
+    "running": ["run club", "running group", "runners club", "marathon group", "runners"],
+    "cycling": ["cycling group", "cycling club", "bike group", "bike club", "cyclists"],
+    "fitness": ["fitness group", "fitness professionals", "workout group", "health fitness", "gym community"],
+    "yoga": ["yoga group", "yoga community", "yoga professionals", "yoga teachers"],
+    "travel": ["travel group", "travel professionals", "adventure travel", "group travel", "travelers network"],
+    "outdoor": ["outdoor group", "outdoor recreation", "outdoor adventure", "nature group", "outdoors enthusiasts"],
+    "outdoor adventure": ["outdoor group", "outdoor recreation", "adventure group", "nature lovers"],
+    "photography": ["photography group", "photographers network", "photo club", "photographers"],
+    "book club": ["book club", "reading group", "book lovers", "readers"],
+    "alumni": ["alumni group", "alumni network", "alumni association", "university alumni", "college alumni"],
+    "alumni group": ["alumni network", "alumni association", "university alumni", "school alumni", "graduates network"],
+    "alumni network": ["alumni association", "alumni group", "university alumni", "graduates"],
+    "alumni association": ["alumni network", "alumni group", "university alumni", "college graduates"],
+    "women": ["women professionals", "women leaders", "women's network", "women in business", "women entrepreneurs"],
+    "professional": ["professional group", "professional network", "industry professionals", "professionals community"],
+    "coaching": ["coaching group", "executive coaching", "leadership coaching", "life coaching", "business coaching"],
+    "wellness": ["wellness group", "wellness professionals", "holistic health", "wellness community"],
+    "food": ["food lovers", "culinary group", "wine group", "foodies", "food enthusiasts"],
+    "tech": ["tech group", "technology professionals", "startup community", "tech network", "developers"],
+    "church": ["faith group", "ministry group", "spiritual community", "faith community", "church leaders"],
+    "social club": ["social group", "networking group", "social networking", "social events"],
+    "nonprofit": ["nonprofit group", "social impact", "community leadership", "NGO network", "nonprofit professionals"],
+    "climbing": ["climbing group", "mountaineering", "outdoor climbing", "climbers"],
+    "surf": ["surf group", "water sports group", "surfing community", "surfers"],
+    "leadership": ["leadership group", "leaders network", "executive leadership", "leadership development"],
+    "entrepreneur": ["entrepreneur group", "startup founders", "business owners", "entrepreneurs network"],
+    "marketing": ["marketing group", "marketers network", "digital marketing", "marketing professionals"],
+    "real estate": ["real estate group", "realtors network", "real estate professionals", "property investors"],
+    "healthcare": ["healthcare professionals", "medical professionals", "health workers", "healthcare network"],
+    "education": ["education group", "teachers network", "educators", "education professionals"],
+    "finance": ["finance group", "financial professionals", "investors network", "finance community"],
+    "hr": ["HR professionals", "human resources group", "HR network", "people operations"],
+    "sustainability": ["sustainability group", "green business", "climate action", "environmental"],
   };
 
   const TOP_US_CITIES = [
@@ -3198,24 +3212,40 @@ function expandLinkedInKeywords(keywords: string[], geos: string[], maxQueries: 
   const expanded: string[] = [];
   const seen = new Set<string>();
   const addQuery = (q: string) => {
-    if (!seen.has(q) && expanded.length < maxQueries) {
-      seen.add(q);
+    const normalized = q.toLowerCase().trim();
+    if (!seen.has(normalized) && expanded.length < maxQueries) {
+      seen.add(normalized);
       expanded.push(q);
     }
   };
 
   for (const kw of keywords) {
-    addQuery(`site:linkedin.com/groups "${kw}"`);
+    addQuery(`site:linkedin.com/groups ${kw}`);
+
+    addQuery(`linkedin.com/groups ${kw}`);
 
     const kwLower = kw.toLowerCase().trim();
     const synonyms = synonymMap[kwLower] || [];
-    for (const syn of synonyms) {
-      addQuery(`site:linkedin.com/groups "${syn}"`);
+    for (const syn of synonyms.slice(0, 3)) {
+      addQuery(`site:linkedin.com/groups ${syn}`);
     }
 
     addQuery(`site:linkedin.com/groups ${kw} group`);
     addQuery(`site:linkedin.com/groups ${kw} community`);
     addQuery(`site:linkedin.com/groups ${kw} network`);
+    addQuery(`site:linkedin.com/groups ${kw} club`);
+    addQuery(`site:linkedin.com/groups ${kw} association`);
+
+    addQuery(`linkedin.com/groups ${kw} members`);
+    addQuery(`linkedin group "${kw}"`);
+  }
+
+  for (const kw of keywords) {
+    const kwLower = kw.toLowerCase().trim();
+    const synonyms = synonymMap[kwLower] || [];
+    for (const syn of synonyms) {
+      addQuery(`linkedin.com/groups ${syn}`);
+    }
   }
 
   const allSearchTerms = [...keywords];
@@ -3225,11 +3255,11 @@ function expandLinkedInKeywords(keywords: string[], geos: string[], maxQueries: 
     for (const syn of synonyms) allSearchTerms.push(syn);
   }
 
-  const geoCities = geos.length > 0 ? geos.slice(0, 20) : TOP_US_CITIES;
-  for (const term of allSearchTerms) {
+  const geoCities = geos.length > 0 ? geos.slice(0, 10) : TOP_US_CITIES.slice(0, 8);
+  for (const term of allSearchTerms.slice(0, 6)) {
     if (expanded.length >= maxQueries) break;
     for (const geo of geoCities) {
-      addQuery(`site:linkedin.com/groups "${term}" "${geo}"`);
+      addQuery(`linkedin.com/groups "${term}" ${geo}`);
     }
   }
 
@@ -3345,6 +3375,19 @@ async function scrapeLinkedInGroups(
 
           const descEmails = extractEmailsFromText(snippet);
 
+          let leaderName = "";
+          const leaderPatterns = [
+            /(?:admin|administrator|owner|manager|founder|created by|managed by|run by|led by|organized by)\s*[:\-–]?\s*([A-Z][a-z]+ [A-Z][a-z]+(?:\s[A-Z][a-z]+)?)/i,
+            /([A-Z][a-z]+ [A-Z][a-z]+(?:\s[A-Z][a-z]+)?)\s*(?:is the|,\s*(?:admin|founder|owner|manager|organizer|leader))/i,
+          ];
+          for (const pattern of leaderPatterns) {
+            const leaderMatch = fullText.match(pattern);
+            if (leaderMatch && leaderMatch[1] && leaderMatch[1].length > 4) {
+              leaderName = leaderMatch[1].trim();
+              break;
+            }
+          }
+
           leads.push({
             source: "linkedin",
             communityName: groupName,
@@ -3354,7 +3397,7 @@ async function scrapeLinkedInGroups(
             website: channels.website || groupUrl,
             email: descEmails[0] || "",
             phone: "",
-            leaderName: "",
+            leaderName,
             memberCount,
             subscriberCount: 0,
             ownedChannels: channels,
@@ -3619,6 +3662,14 @@ async function googleBridgeEnrichFacebookGroups(
     } else {
       queries.push({ term: `"${groupName}" organizer OR founder OR leader linkedin`, leadIdx: idx });
     }
+
+    if (l.source === "linkedin") {
+      queries.push({ term: `"${groupName}" linkedin group admin OR owner OR manager`, leadIdx: idx });
+      queries.push({ term: `"${groupName}" linkedin group site:linkedin.com/in/`, leadIdx: idx });
+      if (l.ownedChannels?.linkedin_group) {
+        queries.push({ term: `"${groupName}" created OR founded OR managed by`, leadIdx: idx });
+      }
+    }
   }
 
   const batchSize = 20;
@@ -3729,10 +3780,43 @@ async function googleBridgeEnrichFacebookGroups(
               foundAnything = true;
             }
 
-            const nameMatch = title.match(/^([A-Z][a-z]+ [A-Z][a-z]+(?:\s[A-Z][a-z]+)?)\s*[-|–·]/);
-            if (nameMatch && !lead.leaderName && nameMatch[1].length > 4) {
-              lead.leaderName = nameMatch[1].trim();
-              foundAnything = true;
+            if (!lead.leaderName) {
+              const nameMatch = title.match(/^([A-Z][a-z]+ [A-Z][a-z]+(?:\s[A-Z][a-z]+)?)\s*[-|–·,]/);
+              if (nameMatch && nameMatch[1].length > 4) {
+                lead.leaderName = nameMatch[1].trim();
+                foundAnything = true;
+              }
+
+              if (!lead.leaderName && host.includes("linkedin.com") && url.includes("/in/")) {
+                const slugMatch = url.match(/\/in\/([^/?&#]+)/);
+                if (slugMatch) {
+                  const slug = slugMatch[1].replace(/-/g, " ").replace(/\d+/g, "").trim();
+                  const parts = slug.split(/\s+/).filter(p => p.length > 1);
+                  if (parts.length >= 2 && parts.length <= 4) {
+                    const name = parts.map(p => p.charAt(0).toUpperCase() + p.slice(1).toLowerCase()).join(" ");
+                    if (name.length > 4) {
+                      lead.leaderName = name;
+                      foundAnything = true;
+                    }
+                  }
+                }
+              }
+
+              if (!lead.leaderName) {
+                const contextPatterns = [
+                  /(?:admin|administrator|owner|manager|founder|created by|managed by|run by|led by|organized by)\s*[:\-–]?\s*([A-Z][a-z]+ [A-Z][a-z]+(?:\s[A-Z][a-z]+)?)/i,
+                  /([A-Z][a-z]+ [A-Z][a-z]+(?:\s[A-Z][a-z]+)?)\s*(?:is the|,\s*(?:admin|founder|owner|manager|organizer|leader))/i,
+                ];
+                const searchText = `${title} ${description}`;
+                for (const pattern of contextPatterns) {
+                  const ctxMatch = searchText.match(pattern);
+                  if (ctxMatch && ctxMatch[1] && ctxMatch[1].length > 4) {
+                    lead.leaderName = ctxMatch[1].trim();
+                    foundAnything = true;
+                    break;
+                  }
+                }
+              }
             }
           } catch {}
 
