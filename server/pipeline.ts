@@ -661,7 +661,7 @@ async function scrapeMeetupGroups(
 
   const googleQueries = expandMeetupKeywords(keywords, geos);
   await appendAndSave(`Meetup: expanded ${keywords.length} keyword(s) into ${googleQueries.length} Google queries (target: ${maxItems} groups)`);
-  const batchSize = 5;
+  const batchSize = 10;
 
   for (let i = 0; i < googleQueries.length; i += batchSize) {
     if (leads.length >= maxItems) break;
@@ -776,7 +776,7 @@ async function scrapeMeetupGroups(
     try {
       const aboutUrls = meetupUrls.map(u => u.replace(/\/$/, "") + "/");
       const cheerioUrls = aboutUrls.map(u => ({ url: u }));
-      const batchSize = 20;
+      const batchSize = 40;
       for (let b = 0; b < cheerioUrls.length; b += batchSize) {
         const urlBatch = cheerioUrls.slice(b, b + batchSize);
         try {
@@ -801,7 +801,7 @@ async function scrapeMeetupGroups(
               return { url: request.url, organizerName, memberText, description, links, emails: emails.slice(0, 5) };
             }`,
             maxRequestsPerCrawl: urlBatch.length,
-            maxConcurrency: 5,
+            maxConcurrency: 32,
             proxyConfiguration: { useApifyProxy: true },
           }, 120000);
           await storage.incrementApifySpend(runId, cheerioCost);
@@ -1634,7 +1634,7 @@ async function scrapeFacebookGroups(
 
   const googleQueries = expandFacebookKeywords(keywords, filters.geos || []);
   await appendAndSave(`Facebook: expanded ${keywords.length} keyword(s) into ${googleQueries.length} Google queries (target: ${maxItems} groups)`);
-  const batchSize = 5;
+  const batchSize = 10;
 
   for (let i = 0; i < googleQueries.length; i += batchSize) {
     if (leads.length >= maxItems) break;
@@ -1884,7 +1884,7 @@ async function scrapeApplePodcasts(
       if (batchLeadsWithRss.length > 0) {
         await appendAndSave(`RSS inline: scraping ${batchLeadsWithRss.length} feeds for emails... [${totalEmailsFound}/${emailTarget} emails]`);
 
-        const RSS_SUB_BATCH_SIZE = 30;
+        const RSS_SUB_BATCH_SIZE = 60;
         let rssEmailsFound = 0;
 
         for (let subIdx = 0; subIdx < batchLeadsWithRss.length; subIdx += RSS_SUB_BATCH_SIZE) {
@@ -1895,7 +1895,7 @@ async function scrapeApplePodcasts(
             const { items: rssResults, costUsd: rssCost } = await runActorAndGetResults("apify~cheerio-scraper", {
               startUrls,
               maxCrawlPages: subBatch.length,
-              maxConcurrency: 10,
+              maxConcurrency: 32,
               requestTimeoutSecs: 30,
               pageFunction: `async function pageFunction(context) {
   const { body, request } = context;
@@ -2038,7 +2038,7 @@ async function enrichFromRssFeeds(
     const { items: results, costUsd: actorCost } = await runActorAndGetResults("apify~cheerio-scraper", {
       startUrls,
       maxCrawlPages: leadsWithRss.length,
-      maxConcurrency: 5,
+      maxConcurrency: 32,
       pageFunction: `async function pageFunction(context) {
   const { body, request } = context;
   const text = typeof body === 'string' ? body : body.toString('utf8');
@@ -2171,7 +2171,7 @@ async function scrapeSubstackWriters(
     `site:substack.com "${kw}" newsletter writer`,
     `site:substack.com "${kw}" inurl:about`,
   ]);
-  const batchSize = 5;
+  const batchSize = 10;
 
   for (let i = 0; i < googleQueries.length; i += batchSize) {
     if (leads.length >= maxItems) break;
@@ -2293,7 +2293,7 @@ async function scrapeSubstackWriters(
         const { items: pageResults, costUsd: scrapeCost } = await runActorAndGetResults("apify~cheerio-scraper", {
           startUrls: scrapeUrls,
           maxCrawlPages: scrapeUrls.length,
-          maxConcurrency: 10,
+          maxConcurrency: 32,
           requestTimeoutSecs: 30,
           pageFunction: `async function pageFunction(context) {
   const { $, request, body } = context;
@@ -2609,7 +2609,7 @@ async function googleSearchEnrichCreators(
   }
 
   const batchSize = 20;
-  const concurrentSearchBatches = 5;
+  const concurrentSearchBatches = 10;
   const enrichedLeadIndices = new Set<number>();
   const CIRCUIT_BREAKER_THRESHOLD = 5;
   let consecutiveSearchFailures = 0;
@@ -2791,7 +2791,7 @@ async function googleBridgeEnrichFacebookGroups(
   }
 
   const batchSize = 20;
-  const concurrentBridgeBatches = 5;
+  const concurrentBridgeBatches = 10;
   const enrichedLeadIndices = new Set<number>();
   const CIRCUIT_BREAKER_THRESHOLD = 5;
   let consecutiveFailures = 0;
@@ -2970,7 +2970,7 @@ async function enrichFromLinkAggregators(
     const { items: results, costUsd: actorCost } = await runActorWithWallClockTimeout("apify~cheerio-scraper", {
       startUrls,
       maxCrawlPages: leadsWithAggregator.length,
-      maxConcurrency: 10,
+      maxConcurrency: 32,
       pageFunction: `async function pageFunction(context) {
   const { $, request } = context;
   const text = $('body').text();
@@ -3073,7 +3073,7 @@ async function enrichFromYouTubeAboutPages(
     const { items: results, costUsd: actorCost } = await runActorWithWallClockTimeout("apify~cheerio-scraper", {
       startUrls,
       maxCrawlPages: leadsWithYouTube.length,
-      maxConcurrency: 10,
+      maxConcurrency: 32,
       pageFunction: `async function pageFunction(context) {
   const { $, request } = context;
   const text = $('body').text();
@@ -3475,8 +3475,8 @@ async function crawlCreatorWebsitesForEmails(
 
   await appendAndSave(`Website crawl: found ${websiteEntries.length} unique personal websites to crawl`);
 
-  const batchSize = 5;
-  const concurrentBatches = 3;
+  const batchSize = 15;
+  const concurrentBatches = 5;
   const allBatches: { entries: [string, string][]; batchNum: number }[] = [];
   const totalBatches = Math.ceil(websiteEntries.length / batchSize);
 
@@ -3515,7 +3515,7 @@ async function crawlCreatorWebsitesForEmails(
         startUrls,
         globs,
         maxCrawlPages: 8 * batch.entries.length,
-        maxConcurrency: 5,
+        maxConcurrency: 32,
         pageFunction: `async function pageFunction(context) {
   const { $, request } = context;
   const text = $('body').text();
@@ -3966,7 +3966,7 @@ export async function runPipeline(runId: number): Promise<void> {
           const { items, costUsd: actorCost } = await runActorAndGetResults("apify~cheerio-scraper", {
             startUrls: batch.map((u) => ({ url: u })),
             maxRequestsPerCrawl: batch.length * 4,
-            maxConcurrency: 10,
+            maxConcurrency: 32,
             maxRequestRetries: 1,
             linkSelector: "a[href]",
             pseudoUrls: batch.map((baseUrl) => {
