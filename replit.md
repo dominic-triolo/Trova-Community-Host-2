@@ -62,7 +62,7 @@ shared/
 2f. **Slug Domain Probe** - Try Patreon slug as .com domain (e.g., patreon.com/britchida → britchida.com) for creators without websites
 3. **Website Contact Crawl** - Crawl personal websites + slug-probed domains for emails (Cheerio scraper on contact/about pages, uncapped, email-domain validation)
 4. **Create & Score** - ICP scoring (0-100) with 6 pillars + audience size bonus + contact info bonus
-5. **Apollo.io Enrichment** - Contact lookup by name + domain + LinkedIn URL (toggleable, uncapped, min score 15, deduped across runs via apolloEnrichedAt, skips pseudonyms via isValidApolloCandidate)
+5. **Apollo.io Enrichment** - Contact lookup by name + domain + LinkedIn URL (toggleable, uncapped, no score minimum, deduped across runs via apolloEnrichedAt, skips pseudonyms via isValidApolloCandidate)
 6. **Leads Finder Enrichment** - Apify `code_crafter~leads-finder` actor as fallback for leads still missing email after Apollo (uncapped, batched by domain)
 7. **Email Validation** - MillionVerifier validates all discovered emails as valid/invalid/catch-all/unknown
 7a. **HubSpot CRM Check** - Read-only contact search via Private App token (crm.objects.contacts.read scope). Batch checks valid emails against HubSpot contacts, marks each lead as "existing" or "net_new". Runs after email validation. Results shown in UI (filter + badges) and CSV export. Uses Search API (`POST /crm/v3/objects/contacts/search`), rate-limited with 110ms delay between batches.

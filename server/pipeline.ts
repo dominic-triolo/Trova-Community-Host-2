@@ -4207,17 +4207,14 @@ export async function runPipeline(runId: number): Promise<void> {
     await clearCheckpoint(runId);
 
     const runLeads = await storage.listLeadsByRun(runId);
-    const APOLLO_MIN_SCORE = 15;
     const leadsToEnrich = runLeads
-      .filter((l) => !l.email && (l.score || 0) >= APOLLO_MIN_SCORE)
+      .filter((l) => !l.email)
       .sort((a, b) => (b.score || 0) - (a.score || 0));
     let enrichedCount = 0;
 
     if (params.enableApollo !== false) {
       if (isApolloAvailable() && leadsToEnrich.length > 0) {
-        const totalWithoutEmail = runLeads.filter((l) => !l.email).length;
-        const skippedLowScore = totalWithoutEmail - leadsToEnrich.length;
-        await appendAndSave(`Apollo.io: enriching ${leadsToEnrich.length} of ${totalWithoutEmail} leads without email (${skippedLowScore} below score ${APOLLO_MIN_SCORE})...`);
+        await appendAndSave(`Apollo.io: enriching ${leadsToEnrich.length} leads without email...`);
 
         let apolloSkipped = 0;
         let apolloCalls = 0;
@@ -4857,10 +4854,9 @@ export async function runPipeline(runId: number): Promise<void> {
 
         // --- Apollo enrichment on newly created DB leads ---
         if (params.enableApollo !== false && isApolloAvailable() && !(await isBudgetExhausted(runId, 0.10))) {
-          const APOLLO_MIN_SCORE = 15;
           const expDbLeads = await storage.listLeadsByRun(runId);
           const expApolloLeads = expDbLeads
-            .filter(l => !l.email && (l.score || 0) >= APOLLO_MIN_SCORE && !l.apolloEnrichedAt)
+            .filter(l => !l.email && !l.apolloEnrichedAt)
             .sort((a, b) => (b.score || 0) - (a.score || 0));
 
           if (expApolloLeads.length > 0) {
@@ -5193,13 +5189,11 @@ export async function reEnrichRun(runId: number): Promise<void> {
 
     if (params.enableApollo !== false) {
       const refreshedLeads = await storage.listLeadsByRun(runId);
-      const RE_APOLLO_MIN_SCORE = 15;
       const leadsToEnrich = refreshedLeads
-        .filter((l) => (!l.email || l.email === "") && (l.score || 0) >= RE_APOLLO_MIN_SCORE)
+        .filter((l) => (!l.email || l.email === ""))
         .sort((a, b) => (b.score || 0) - (a.score || 0));
-      const totalWithoutEmail = refreshedLeads.filter((l) => !l.email || l.email === "").length;
 
-      await appendAndSave(`Step 2: Apollo enrichment for ${leadsToEnrich.length} of ${totalWithoutEmail} leads without email...`, 50, "Re-enrichment: Apollo enrichment");
+      await appendAndSave(`Step 2: Apollo enrichment for ${leadsToEnrich.length} leads without email...`, 50, "Re-enrichment: Apollo enrichment");
 
       let enrichedCount = 0;
       if (isApolloAvailable() && leadsToEnrich.length > 0) {
@@ -5819,17 +5813,14 @@ async function resumeFromCheckpoint(
     await clearCheckpoint(runId);
 
     const runLeads = await storage.listLeadsByRun(runId);
-    const APOLLO_MIN_SCORE = 15;
 
     if (params.enableApollo !== false) {
       const leadsToEnrich = runLeads
-        .filter((l) => !l.email && (l.score || 0) >= APOLLO_MIN_SCORE)
+        .filter((l) => !l.email)
         .sort((a, b) => (b.score || 0) - (a.score || 0));
 
       if (isApolloAvailable() && leadsToEnrich.length > 0) {
-        const totalWithoutEmail = runLeads.filter((l) => !l.email).length;
-        const skippedLowScore = totalWithoutEmail - leadsToEnrich.length;
-        await appendAndSave(`Resume: Apollo.io enriching ${leadsToEnrich.length} leads (${skippedLowScore} below score ${APOLLO_MIN_SCORE})...`, 75, "Resume: Apollo enrichment");
+        await appendAndSave(`Resume: Apollo.io enriching ${leadsToEnrich.length} leads without email...`, 75, "Resume: Apollo enrichment");
 
         let enrichedCount = 0, apolloSkipped = 0, apolloCalls = 0, apolloDeduped = 0;
         for (const lead of leadsToEnrich) {
@@ -6278,7 +6269,7 @@ async function resumeFromCheckpoint(
 
         if (params.enableApollo !== false && isApolloAvailable() && !(await isBudgetExhausted(runId, 0.10))) {
           const expDbLeads = await storage.listLeadsByRun(runId);
-          const expApolloLeads = expDbLeads.filter(l => !l.email && (l.score || 0) >= 15 && !l.apolloEnrichedAt).sort((a, b) => (b.score || 0) - (a.score || 0));
+          const expApolloLeads = expDbLeads.filter(l => !l.email && !l.apolloEnrichedAt).sort((a, b) => (b.score || 0) - (a.score || 0));
           if (expApolloLeads.length > 0) {
             await appendAndSave(`Resume expansion: Apollo enrichment for ${expApolloLeads.length} leads...`);
             let expApolloEnriched = 0;
@@ -6527,15 +6518,12 @@ export async function resumeRun(runId: number): Promise<void> {
     if (shouldRunStep(lastCompleted, PIPELINE_STEPS.APOLLO)) {
       if (params.enableApollo !== false) {
         const runLeads = await storage.listLeadsByRun(runId);
-        const APOLLO_MIN_SCORE = 15;
         const leadsToEnrich = runLeads
-          .filter((l) => !l.email && (l.score || 0) >= APOLLO_MIN_SCORE)
+          .filter((l) => !l.email)
           .sort((a, b) => (b.score || 0) - (a.score || 0));
 
         if (isApolloAvailable() && leadsToEnrich.length > 0) {
-          const totalWithoutEmail = runLeads.filter((l) => !l.email).length;
-          const skippedLowScore = totalWithoutEmail - leadsToEnrich.length;
-          await appendAndSave(`Apollo.io: enriching ${leadsToEnrich.length} of ${totalWithoutEmail} leads without email (${skippedLowScore} below score ${APOLLO_MIN_SCORE})...`, 60, "Resume: Apollo enrichment");
+          await appendAndSave(`Apollo.io: enriching ${leadsToEnrich.length} leads without email...`, 60, "Resume: Apollo enrichment");
 
           let enrichedCount = 0;
           let apolloSkipped = 0;
@@ -6902,7 +6890,7 @@ export async function resumeRun(runId: number): Promise<void> {
 
           if (params.enableApollo !== false && isApolloAvailable() && !(await isBudgetExhausted(runId, 0.10))) {
             const dbLeads3 = await storage.listLeadsByRun(runId);
-            const apolloLeads3 = dbLeads3.filter(l => !l.email && (l.score || 0) >= 15 && !l.apolloEnrichedAt);
+            const apolloLeads3 = dbLeads3.filter(l => !l.email && !l.apolloEnrichedAt);
             for (const lead of apolloLeads3) {
               try {
                 if (await isBudgetExhausted(runId, 0.05)) break;
