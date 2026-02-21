@@ -2552,8 +2552,260 @@ async function scrapeSubstackWriters(
   return leads;
 }
 
+async function scrapeMightyNetworks(
+  runId: number,
+  keywords: string[],
+  maxItems: number,
+  appendAndSave: (msg: string) => Promise<void>,
+): Promise<PlatformLead[]> {
+  const leads: PlatformLead[] = [];
+  const seenSlugs = new Set<string>();
+  const MIGHTY_SYSTEM_SLUGS = ["community", "www", "api", "app", "help", "support", "faq", "docs", "blog", "status"];
+
+  const googleQueries = keywords.flatMap(kw => [
+    `site:mn.co "${kw}"`,
+    `site:mightynetworks.com "${kw}" community`,
+    `"mn.co" "${kw}" community join`,
+  ]);
+  const batchSize = 10;
+
+  for (let i = 0; i < googleQueries.length; i += batchSize) {
+    if (leads.length >= maxItems) break;
+    const batch = googleQueries.slice(i, i + batchSize);
+
+    try {
+      await appendAndSave(`Mighty Networks (via Google): batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(googleQueries.length / batchSize)} (${leads.length}/${maxItems} found)...`);
+      const { items, costUsd: actorCost } = await runActorAndGetResults("apify~google-search-scraper", {
+        queries: batch.join("\n"),
+        maxPagesPerQuery: 3,
+        resultsPerPage: 20,
+        countryCode: "us",
+        languageCode: "en",
+        mobileResults: false,
+      }, 120000);
+      await storage.incrementApifySpend(runId, actorCost);
+
+      for (const item of items) {
+        if (leads.length >= maxItems) break;
+        const organicResults = item.organicResults || [];
+        for (const result of organicResults) {
+          if (leads.length >= maxItems) break;
+
+          const rawUrl = result.url || result.link || "";
+          let mightySlug = "";
+          const mnCoMatch = rawUrl.match(/https?:\/\/([a-zA-Z0-9-]+)\.mn\.co/);
+          if (mnCoMatch) {
+            mightySlug = mnCoMatch[1];
+          }
+          const mightyMatch = rawUrl.match(/https?:\/\/([a-zA-Z0-9-]+)\.mightynetworks\.com/);
+          if (!mightySlug && mightyMatch) {
+            mightySlug = mightyMatch[1];
+          }
+          if (!mightySlug) continue;
+          if (MIGHTY_SYSTEM_SLUGS.includes(mightySlug)) continue;
+
+          if (seenSlugs.has(mightySlug)) continue;
+          seenSlugs.add(mightySlug);
+
+          const mightyUrl = `https://${mightySlug}.mn.co`;
+
+          const title = result.title || "";
+          const snippet = result.description || result.snippet || "";
+          const fullText = `${title} ${snippet}`;
+
+          let communityName = title
+            .replace(/\s*\|\s*Mighty Networks$/i, "")
+            .replace(/\s*[-–—]\s*Mighty Networks$/i, "")
+            .replace(/\s*Mighty Networks\s*$/i, "")
+            .replace(/\s*[-–—]\s*Join\s+.*$/i, "")
+            .replace(/^Welcome to\s*/i, "")
+            .replace(/^Join\s*/i, "")
+            .trim();
+          if (!communityName) communityName = mightySlug;
+
+          const channels: Record<string, string> = { mighty: mightyUrl };
+          const descUrls = extractUrlsFromText(snippet);
+          const socialFromDesc = extractSocialChannelsFromUrls(descUrls);
+          Object.assign(channels, socialFromDesc);
+
+          const descEmails = extractEmailsFromText(snippet);
+
+          leads.push({
+            source: "mighty",
+            communityName: communityName,
+            communityType: detectCommunityType(fullText),
+            description: snippet.substring(0, 2000),
+            location: "",
+            website: mightyUrl,
+            email: descEmails[0] || "",
+            phone: "",
+            leaderName: "",
+            memberCount: 0,
+            subscriberCount: 0,
+            ownedChannels: channels,
+            monetizationSignals: { ...detectMonetization(snippet), membership: true, paid_community: true },
+            engagementSignals: detectEngagement(snippet),
+            tripFitSignals: detectTripFit(fullText),
+            raw: result,
+          });
+        }
+      }
+
+      await appendAndSave(`Mighty Networks: found ${leads.length} unique communities so far`);
+    } catch (err: any) {
+      if (err.costUsd) {
+        await storage.incrementApifySpend(runId, err.costUsd);
+      }
+      await appendAndSave(`[WARN] Mighty Networks Google search batch failed: ${err.message}`);
+    }
+  }
+
+  if (leads.length > 0) {
+    await appendAndSave(`Mighty Networks: scraping ${leads.length} community landing pages for host info...`);
+    const SUB_BATCH = 20;
+    let enrichedCount = 0;
+
+    for (let i = 0; i < leads.length; i += SUB_BATCH) {
+      const subBatch = leads.slice(i, i + SUB_BATCH);
+      const slugMap = new Map<string, PlatformLead>();
+      const scrapeUrls: { url: string }[] = [];
+      for (const l of subBatch) {
+        const slug = l.ownedChannels?.mighty?.match(/https?:\/\/([a-zA-Z0-9-]+)\.mn\.co/)?.[1] || "";
+        if (!slug) continue;
+        slugMap.set(slug, l);
+        scrapeUrls.push({ url: `https://${slug}.mn.co/landing` });
+      }
+      if (scrapeUrls.length === 0) continue;
+
+      try {
+        const { items: pageResults, costUsd: scrapeCost } = await runActorAndGetResults("apify~cheerio-scraper", {
+          startUrls: scrapeUrls,
+          maxCrawlPages: scrapeUrls.length,
+          maxConcurrency: 30,
+          requestTimeoutSecs: 30,
+          pageFunction: `async function pageFunction(context) {
+  const { $, request } = context;
+  var url = request.url;
+  var text = $('body').text() || '';
+  var hostName = '';
+  var description = '';
+  var memberText = '';
+  var emails = [];
+  var links = [];
+
+  var metaDesc = $('meta[name="description"]').attr('content') || '';
+  var ogDesc = $('meta[property="og:description"]').attr('content') || '';
+  description = metaDesc || ogDesc || '';
+
+  var hostEl = $('[class*="host"], [class*="creator"], [class*="author"], [class*="organizer"]');
+  if (hostEl.length) hostName = hostEl.first().text().trim().substring(0, 100);
+
+  if (!hostName) {
+    var byMatch = text.match(/(?:hosted by|created by|run by|founded by|led by|built by)\\s+([A-Z][a-z]+(?:\\s+[A-Z][a-z]+){0,3})/i);
+    if (byMatch) hostName = byMatch[1].trim();
+  }
+
+  var memberMatch = text.match(/(\\d[\\d,]+)\\s*(?:members?|people|community members)/i);
+  if (memberMatch) memberText = memberMatch[0];
+
+  var allLinks = [];
+  $('a[href]').each(function() {
+    var href = $(this).attr('href') || '';
+    if (href.startsWith('http') && !href.includes('mn.co') && !href.includes('mightynetworks.com') && !href.includes('apple.com/app') && !href.includes('play.google.com')) {
+      allLinks.push(href);
+    }
+  });
+  links = allLinks.slice(0, 20);
+
+  var emailMatches = text.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}/g) || [];
+  emails = emailMatches.filter(function(e) { return !e.includes('mightynetworks') && !e.includes('mn.co'); }).slice(0, 5);
+
+  return { url: url, hostName: hostName, description: description, memberText: memberText, emails: emails, links: links };
+}`,
+        }, 120000);
+        await storage.incrementApifySpend(runId, scrapeCost);
+
+        for (const page of pageResults) {
+          const pageUrl = page.url || "";
+          const slugMatch = pageUrl.match(/https?:\/\/([a-zA-Z0-9-]+)\.mn\.co/);
+          if (!slugMatch) continue;
+          const slug = slugMatch[1];
+          const lead = slugMap.get(slug);
+          if (!lead) continue;
+
+          if (page.hostName && !lead.leaderName) {
+            lead.leaderName = page.hostName.substring(0, 100);
+          }
+
+          if (page.description && (!lead.description || lead.description.length < 50)) {
+            lead.description = page.description.substring(0, 2000);
+          }
+
+          if (page.memberText) {
+            const memberMatch = page.memberText.match(/[\d,]+/);
+            if (memberMatch) {
+              const parsed = parseInt(memberMatch[0].replace(/,/g, "")) || 0;
+              if (parsed > 0) {
+                lead.memberCount = parsed;
+                lead.engagementSignals = { ...lead.engagementSignals, member_count: parsed };
+              }
+            }
+          }
+
+          if (page.emails && page.emails.length > 0) {
+            if (!lead.email) {
+              lead.email = page.emails[0];
+              enrichedCount++;
+            }
+          }
+
+          if (page.links && page.links.length > 0) {
+            const socialLinks = extractSocialChannelsFromUrls(page.links);
+            lead.ownedChannels = { ...lead.ownedChannels, ...socialLinks };
+            const personalWebsite = page.links.find((l: string) => {
+              try {
+                const domain = new URL(l).hostname.replace("www.", "");
+                return !["youtube.com", "instagram.com", "twitter.com", "x.com", "facebook.com",
+                  "linkedin.com", "tiktok.com", "discord.gg", "discord.com", "linktr.ee",
+                  "beacons.ai", "mn.co", "mightynetworks.com", "apple.com", "google.com",
+                  "play.google.com", "apps.apple.com"].some(s => domain.includes(s));
+              } catch { return false; }
+            });
+            if (personalWebsite) {
+              lead.ownedChannels = { ...lead.ownedChannels, website: personalWebsite };
+              lead.website = personalWebsite;
+            }
+          }
+
+          if (!lead.leaderName && lead.communityName) {
+            lead.leaderName = extractRealNameFromAbout(lead.description || "", lead.communityName) || lead.communityName;
+          }
+        }
+      } catch (err: any) {
+        if (err.costUsd) {
+          await storage.incrementApifySpend(runId, err.costUsd);
+        }
+        await appendAndSave(`[WARN] Mighty Networks page scrape batch failed: ${err.message}`);
+      }
+    }
+
+    for (const lead of leads) {
+      if (lead.website && (lead.website.includes("mn.co") || lead.website.includes("mightynetworks.com"))) {
+        if (lead.ownedChannels?.website) {
+          lead.website = lead.ownedChannels.website;
+        }
+      }
+    }
+
+    await appendAndSave(`Mighty Networks scrape: ${enrichedCount} emails from landing pages, scraped ${leads.length} communities`);
+  }
+
+  await appendAndSave(`Mighty Networks discovery complete: ${leads.length} communities found`);
+  return leads;
+}
+
 const GOOGLE_ENRICHMENT_MAX = Infinity;
-const GOOGLE_ENRICHMENT_SOCIAL_HOSTS = ["youtube.com", "youtu.be", "instagram.com", "twitter.com", "x.com", "discord.gg", "discord.com", "facebook.com", "tiktok.com", "twitch.tv", "linkedin.com", "patreon.com", "google.com", "apple.com", "spotify.com", "amazon.com", "reddit.com", "tumblr.com", "pinterest.com", "github.com", "medium.com", "wordpress.com", "linktr.ee", "beacons.ai", "ko-fi.com", "buymeacoffee.com", "gumroad.com", "substack.com", "bit.ly", "apify.com", "meetup.com", "eventbrite.com", "yelp.com", "tripadvisor.com", "bbb.org"];
+const GOOGLE_ENRICHMENT_SOCIAL_HOSTS = ["youtube.com", "youtu.be", "instagram.com", "twitter.com", "x.com", "discord.gg", "discord.com", "facebook.com", "tiktok.com", "twitch.tv", "linkedin.com", "patreon.com", "google.com", "apple.com", "spotify.com", "amazon.com", "reddit.com", "tumblr.com", "pinterest.com", "github.com", "medium.com", "wordpress.com", "linktr.ee", "beacons.ai", "ko-fi.com", "buymeacoffee.com", "gumroad.com", "substack.com", "bit.ly", "apify.com", "meetup.com", "eventbrite.com", "yelp.com", "tripadvisor.com", "bbb.org", "mn.co", "mightynetworks.com"];
 
 async function googleSearchEnrichCreators(
   runId: number,
@@ -3655,6 +3907,9 @@ export async function runPipeline(runId: number): Promise<void> {
     if (enabledSources.includes("substack")) {
       platformTasks.push({ name: "Substack", promise: scrapeSubstackWriters(runId, keywords, getMaxForPlatform("substack"), (msg) => appendAndSave(msg)) });
     }
+    if (enabledSources.includes("mighty")) {
+      platformTasks.push({ name: "Mighty Networks", promise: scrapeMightyNetworks(runId, keywords, getMaxForPlatform("mighty"), (msg) => appendAndSave(msg)) });
+    }
 
     if (platformTasks.length === 0) {
       await appendAndSave("No platform sources selected, skipping platform discovery");
@@ -3869,6 +4124,7 @@ export async function runPipeline(runId: number): Promise<void> {
     if (enabledSources.includes("eventbrite")) skipDomains.push("eventbrite.com");
     if (enabledSources.includes("facebook")) skipDomains.push("facebook.com");
     if (enabledSources.includes("patreon")) skipDomains.push("patreon.com");
+    if (enabledSources.includes("mighty")) skipDomains.push("mn.co", "mightynetworks.com");
 
     const batchSize = 20;
     const queryBatches = [];
@@ -4770,6 +5026,10 @@ export async function runPipeline(runId: number): Promise<void> {
             } else if (platform === "substack") {
               await appendAndSave(`Expansion: deeper Substack search (${uniqueExpKws.length} queries)...`);
               const results = await scrapeSubstackWriters(runId, uniqueExpKws, maxExpLeads, (msg) => appendAndSave(msg));
+              newPlatformLeads.push(...results);
+            } else if (platform === "mighty") {
+              await appendAndSave(`Expansion: deeper Mighty Networks search (${uniqueExpKws.length} queries)...`);
+              const results = await scrapeMightyNetworks(runId, uniqueExpKws, maxExpLeads, (msg) => appendAndSave(msg));
               newPlatformLeads.push(...results);
             } else if (platform === "podcast" && run.podcastEnabled !== false) {
               await appendAndSave(`Expansion: deeper podcast search (${uniqueExpKws.length} queries)...`);
@@ -6310,6 +6570,10 @@ async function resumeFromCheckpoint(
               await appendAndSave(`Resume expansion: deeper Substack search (${uniqueExpKws.length} queries)...`);
               const results = await scrapeSubstackWriters(runId, uniqueExpKws, maxExpLeads, (msg) => appendAndSave(msg));
               newPlatformLeads.push(...results);
+            } else if (platform === "mighty") {
+              await appendAndSave(`Resume expansion: deeper Mighty Networks search (${uniqueExpKws.length} queries)...`);
+              const results = await scrapeMightyNetworks(runId, uniqueExpKws, maxExpLeads, (msg) => appendAndSave(msg));
+              newPlatformLeads.push(...results);
             } else if (platform === "podcast" && run2?.podcastEnabled !== false) {
               await appendAndSave(`Resume expansion: deeper podcast search (${uniqueExpKws.length} queries)...`);
               const results = await scrapeApplePodcasts(runId, uniqueExpKws, maxExpLeads, (msg) => appendAndSave(msg), {
@@ -7020,6 +7284,9 @@ export async function resumeRun(runId: number): Promise<void> {
                 newPlatformLeads.push(...results);
               } else if (platform === "substack") {
                 const results = await scrapeSubstackWriters(runId, uniqueKws, maxExpLeads, (msg) => appendAndSave(msg));
+                newPlatformLeads.push(...results);
+              } else if (platform === "mighty") {
+                const results = await scrapeMightyNetworks(runId, uniqueKws, maxExpLeads, (msg) => appendAndSave(msg));
                 newPlatformLeads.push(...results);
               } else if (platform === "podcast" && dbRun2?.podcastEnabled !== false) {
                 const results = await scrapeApplePodcasts(runId, uniqueKws, maxExpLeads, (msg) => appendAndSave(msg), { minEpisodeCount: params.minEpisodeCount || 0, podcastCountry: params.podcastCountry || "US" });

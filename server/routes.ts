@@ -89,7 +89,7 @@ export async function registerRoutes(
   app.get("/api/stats/platforms", async (_req, res) => {
     try {
       const historicalStats = await storage.getPlatformValidEmailStats();
-      const allPlatforms: SourceId[] = ["patreon", "facebook", "podcast", "substack"];
+      const allPlatforms: SourceId[] = ["patreon", "facebook", "podcast", "substack", "meetup", "mighty"];
       const stats = allPlatforms.map(p => {
         const hist = historicalStats.find(s => s.platform === p);
         const costPerLead = PLATFORM_COST_PER_LEAD[p] || 0.02;

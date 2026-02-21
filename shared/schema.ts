@@ -151,10 +151,11 @@ export const AVAILABLE_SOURCES = [
   { id: "patreon", label: "Patreon Creators", description: "Creators with patron counts & tiers" },
   { id: "podcast", label: "Podcasters", description: "Podcast hosts with episode counts & RSS emails" },
   { id: "substack", label: "Substack Writers", description: "Newsletter writers with subscriber bases & public emails" },
+  { id: "mighty", label: "Mighty Networks", description: "Community builders with engaged, paying members" },
   { id: "google", label: "Google Search + Websites", description: "Generic website discovery" },
 ] as const;
 
-export type SourceId = "meetup" | "youtube" | "reddit" | "eventbrite" | "facebook" | "patreon" | "podcast" | "substack" | "google";
+export type SourceId = "meetup" | "youtube" | "reddit" | "eventbrite" | "facebook" | "patreon" | "podcast" | "substack" | "mighty" | "google";
 export const DEFAULT_ENABLED_SOURCES: SourceId[] = ["patreon"];
 
 export const TEMPORARILY_DISABLED_SOURCES: SourceId[] = ["youtube", "reddit", "eventbrite", "google"];
@@ -170,7 +171,7 @@ export const runParamsSchema = z.object({
   seedGeos: z.array(z.string()).default([]),
   maxDiscoveredUrls: z.number().min(1).max(500).default(200),
   maxGoogleResultsPerQuery: z.number().min(1).max(100).default(10),
-  enabledSources: z.array(z.enum(["meetup", "youtube", "reddit", "eventbrite", "facebook", "patreon", "podcast", "substack", "google"])).min(1, "At least one source must be selected").default(DEFAULT_ENABLED_SOURCES),
+  enabledSources: z.array(z.enum(["meetup", "youtube", "reddit", "eventbrite", "facebook", "patreon", "podcast", "substack", "mighty", "google"])).min(1, "At least one source must be selected").default(DEFAULT_ENABLED_SOURCES),
   minMemberCount: z.number().min(0).default(0),
   maxMemberCount: z.number().min(0).default(0),
   minPostCount: z.number().min(0).default(0),
@@ -213,6 +214,7 @@ export const PLATFORM_COST_PER_LEAD: Record<string, number> = {
   podcast: 0.03,
   substack: 0.01,
   meetup: 0.01,
+  mighty: 0.01,
 };
 
 export const PLATFORM_EMAIL_YIELD: Record<string, number> = {
@@ -221,6 +223,7 @@ export const PLATFORM_EMAIL_YIELD: Record<string, number> = {
   podcast: 0.55,
   substack: 0.40,
   meetup: 0.20,
+  mighty: 0.30,
 };
 
 export const PLATFORM_VALID_EMAIL_RATE: Record<string, number> = {
@@ -229,6 +232,7 @@ export const PLATFORM_VALID_EMAIL_RATE: Record<string, number> = {
   podcast: 0.45,
   substack: 0.21,
   meetup: 0.40,
+  mighty: 0.35,
 };
 
 export const KEYWORD_PLATFORM_MAP: Record<string, SourceId[]> = {
@@ -248,13 +252,18 @@ export const KEYWORD_PLATFORM_MAP: Record<string, SourceId[]> = {
   "alumni": ["facebook", "meetup"],
   "social club": ["facebook", "meetup"],
   "meetup": ["meetup"],
-  "yoga": ["patreon", "meetup", "podcast"],
-  "fitness": ["patreon", "meetup", "podcast"],
-  "outdoor": ["facebook", "meetup", "patreon"],
+  "yoga": ["patreon", "meetup", "podcast", "mighty"],
+  "fitness": ["patreon", "meetup", "podcast", "mighty"],
+  "outdoor": ["facebook", "meetup", "patreon", "mighty"],
   "photography": ["meetup", "patreon", "podcast"],
-  "book club": ["meetup", "facebook"],
-  "tech": ["meetup"],
-  "networking": ["meetup", "facebook"],
+  "book club": ["meetup", "facebook", "mighty"],
+  "tech": ["meetup", "mighty"],
+  "networking": ["meetup", "facebook", "mighty"],
+  "community": ["mighty", "facebook", "meetup"],
+  "coaching": ["mighty", "patreon", "podcast"],
+  "wellness": ["mighty", "patreon", "podcast"],
+  "leadership": ["mighty", "facebook"],
+  "membership": ["mighty", "patreon"],
 };
 
 export const autonomousParamsSchema = z.object({
@@ -451,6 +460,24 @@ export const SUBSTACK_RECOMMENDED_KEYWORDS = [
   { label: "Nature & wildlife", keywords: ["nature", "wildlife", "birdwatching"] },
   { label: "Surf & water sports", keywords: ["surfing", "diving", "water sports"] },
   { label: "Art & creativity", keywords: ["art", "creative writing", "painting"] },
+] as const;
+
+export const MIGHTY_RECOMMENDED_KEYWORDS = [
+  { label: "Yoga & wellness", keywords: ["yoga community", "wellness coaching", "mindfulness group"] },
+  { label: "Fitness coaching", keywords: ["fitness community", "personal training", "workout group"] },
+  { label: "Travel & adventure", keywords: ["travel community", "adventure group", "group travel"] },
+  { label: "Women's community", keywords: ["women community", "sisterhood", "women empowerment"] },
+  { label: "Running & endurance", keywords: ["running community", "marathon", "endurance"] },
+  { label: "Hiking & outdoors", keywords: ["hiking community", "outdoor adventure", "nature group"] },
+  { label: "Coaching & leadership", keywords: ["coaching", "leadership", "mentorship"] },
+  { label: "Health & nutrition", keywords: ["health community", "nutrition", "plant-based"] },
+  { label: "Photography", keywords: ["photography community", "photo club", "camera"] },
+  { label: "Faith & spiritual", keywords: ["faith community", "spiritual", "church group"] },
+  { label: "Cycling", keywords: ["cycling community", "bike group", "cycling club"] },
+  { label: "Book clubs", keywords: ["book club", "reading community", "literary group"] },
+  { label: "Creative arts", keywords: ["art community", "creative", "painting"] },
+  { label: "Membership community", keywords: ["membership", "paid community", "online community"] },
+  { label: "Surfing & water sports", keywords: ["surf community", "diving", "water sports"] },
 ] as const;
 
 export const MEETUP_RECOMMENDED_KEYWORDS = [
