@@ -1,15 +1,24 @@
 import type { SourceId, BudgetAllocation, PlatformAllocation } from "@shared/schema";
 import { PLATFORM_COST_PER_LEAD, PLATFORM_EMAIL_YIELD, PLATFORM_VALID_EMAIL_RATE, KEYWORD_PLATFORM_MAP } from "@shared/schema";
 
-const ENRICHMENT_COST_PER_LEAD = 0.005;
 const MIN_LEADS_PER_PLATFORM = 10;
 const DISCOVERY_BUDGET_RATIO = 0.65;
 const ENRICHMENT_BUDGET_RATIO = 0.35;
 const PODCAST_MIN_BUDGET = 3;
 const ENRICHMENT_EMAIL_ADD_RATE = 0.25;
 const ENRICHMENT_VALID_RATE = 0.55;
+const MIN_LEADS_FOR_LEARNING = 20;
 
 const ACTIVE_PLATFORMS: SourceId[] = ["patreon", "facebook", "podcast", "substack", "meetup"];
+
+const DEFAULT_VALID_EMAIL_YIELD: Record<string, number> = {};
+for (const p of ACTIVE_PLATFORMS) {
+  const rawYield = PLATFORM_EMAIL_YIELD[p] || 0.2;
+  const validRate = PLATFORM_VALID_EMAIL_RATE[p] || 0.25;
+  const baseValid = rawYield * validRate;
+  const enrichmentValid = (1 - rawYield) * ENRICHMENT_EMAIL_ADD_RATE * ENRICHMENT_VALID_RATE;
+  DEFAULT_VALID_EMAIL_YIELD[p] = baseValid + enrichmentValid;
+}
 
 export interface PlatformStats {
   platform: string;
@@ -18,34 +27,27 @@ export interface PlatformStats {
   validEmails: number;
   validRate: number;
   emailYield: number;
+  validEmailYield: number;
 }
 
-function getValidEmailRate(platform: string, historicalStats?: PlatformStats[]): number {
+function getValidEmailYield(platform: string, historicalStats?: PlatformStats[]): number {
   if (historicalStats && historicalStats.length > 0) {
     const stat = historicalStats.find(s => s.platform === platform);
-    if (stat && stat.withEmail >= 10) {
-      return stat.validRate;
+    if (stat && stat.totalLeads >= MIN_LEADS_FOR_LEARNING) {
+      return stat.validEmailYield;
     }
   }
-  return PLATFORM_VALID_EMAIL_RATE[platform] || 0.25;
+  return DEFAULT_VALID_EMAIL_YIELD[platform] || 0.1;
 }
 
-function getEmailYield(platform: string, historicalStats?: PlatformStats[]): number {
+function getRawEmailYield(platform: string, historicalStats?: PlatformStats[]): number {
   if (historicalStats && historicalStats.length > 0) {
     const stat = historicalStats.find(s => s.platform === platform);
-    if (stat && stat.totalLeads >= 20) {
+    if (stat && stat.totalLeads >= MIN_LEADS_FOR_LEARNING) {
       return stat.emailYield;
     }
   }
   return PLATFORM_EMAIL_YIELD[platform] || 0.2;
-}
-
-function getEffectiveValidEmailYield(platform: string, historicalStats?: PlatformStats[]): number {
-  const baseYield = getEmailYield(platform, historicalStats);
-  const validRate = getValidEmailRate(platform, historicalStats);
-  const baseValidYield = baseYield * validRate;
-  const enrichmentValidYield = (1 - baseYield) * ENRICHMENT_EMAIL_ADD_RATE * ENRICHMENT_VALID_RATE;
-  return baseValidYield + enrichmentValidYield;
 }
 
 export function selectPlatformsForKeywords(
@@ -109,33 +111,29 @@ export function allocateBudget(
   const platformAllocations: PlatformAllocation[] = [];
   let remainingDiscovery = discoveryBudget;
 
-  const emailYieldScored = platforms.map(p => {
-    const emailYield = getEmailYield(p, historicalStats);
-    const validRate = getValidEmailRate(p, historicalStats);
-    const effectiveValidYield = getEffectiveValidEmailYield(p, historicalStats);
+  const platformMetrics = platforms.map(p => {
+    const validEmailYield = getValidEmailYield(p, historicalStats);
     const cost = PLATFORM_COST_PER_LEAD[p] || 0.02;
     return {
       platform: p,
-      yield: emailYield,
-      validRate,
-      effectiveValidYield,
+      validEmailYield,
       cost,
-      efficiency: effectiveValidYield / cost,
+      efficiency: validEmailYield / cost,
     };
   }).sort((a, b) => b.efficiency - a.efficiency);
 
-  const totalEfficiency = emailYieldScored.reduce((s, p) => s + p.efficiency, 0) || 1;
+  const totalEfficiency = platformMetrics.reduce((s, p) => s + p.efficiency, 0) || 1;
 
   let leadsNeededForTarget = Infinity;
   if (emailTarget && emailTarget > 0) {
-    const weightedValidYield = emailYieldScored.reduce((s, p) => {
+    const weightedValidYield = platformMetrics.reduce((s, p) => {
       const share = p.efficiency / totalEfficiency;
-      return s + p.effectiveValidYield * share;
+      return s + p.validEmailYield * share;
     }, 0);
     leadsNeededForTarget = Math.ceil(emailTarget / Math.max(0.05, weightedValidYield));
   }
 
-  for (const p of emailYieldScored) {
+  for (const p of platformMetrics) {
     if (remainingDiscovery <= 0) break;
     const share = p.efficiency / totalEfficiency;
     const platformBudget = Math.min(remainingDiscovery, discoveryBudget * share);
@@ -155,15 +153,15 @@ export function allocateBudget(
   const estimatedTotalLeads = platformAllocations.reduce((s, p) => s + p.maxLeads, 0);
 
   const weightedEmailRate = platformAllocations.reduce((s, p) => {
-    const yield_ = getEmailYield(p.platform, historicalStats);
-    const enrichedYield = Math.min(0.85, yield_ + (1 - yield_) * ENRICHMENT_EMAIL_ADD_RATE);
+    const rawYield = getRawEmailYield(p.platform, historicalStats);
+    const enrichedYield = Math.min(0.85, rawYield + (1 - rawYield) * ENRICHMENT_EMAIL_ADD_RATE);
     return s + enrichedYield * p.maxLeads;
   }, 0) / Math.max(1, estimatedTotalLeads);
 
   const estimatedEmails = Math.round(estimatedTotalLeads * weightedEmailRate);
 
   const weightedValidEmailYield = platformAllocations.reduce((s, p) => {
-    return s + getEffectiveValidEmailYield(p.platform, historicalStats) * p.maxLeads;
+    return s + getValidEmailYield(p.platform, historicalStats) * p.maxLeads;
   }, 0) / Math.max(1, estimatedTotalLeads);
 
   const estimatedValidEmails = Math.round(estimatedTotalLeads * weightedValidEmailYield);
