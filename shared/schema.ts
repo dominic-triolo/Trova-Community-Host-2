@@ -192,6 +192,7 @@ export interface PipelineCheckpoint {
   platformLeads: any[];
   completedSubSteps: string[];
   apifySpendAtCheckpoint: number;
+  intraStepProgress?: Record<string, number[]>;
 }
 
 export interface BudgetAllocation {

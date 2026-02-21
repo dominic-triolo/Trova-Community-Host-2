@@ -87,6 +87,31 @@ async function clearCheckpoint(runId: number): Promise<void> {
   await storage.updateRun(runId, { checkpoint: null, completedSubSteps: [] });
 }
 
+async function saveIntraStepProgress(runId: number, stepName: string, completedBatchNums: number[]): Promise<void> {
+  try {
+    const run = await storage.getRun(runId);
+    const checkpoint = (run?.checkpoint as PipelineCheckpoint) || null;
+    if (!checkpoint) return;
+    const progress = checkpoint.intraStepProgress || {};
+    progress[stepName] = completedBatchNums;
+    checkpoint.intraStepProgress = progress;
+    await storage.updateRun(runId, { checkpoint });
+  } catch (err: any) {
+    log(`[WARN] Failed to save intra-step progress for ${stepName}: ${err.message}`, "pipeline");
+  }
+}
+
+async function loadIntraStepProgress(runId: number, stepName: string): Promise<Set<number>> {
+  try {
+    const run = await storage.getRun(runId);
+    const checkpoint = (run?.checkpoint as PipelineCheckpoint) || null;
+    if (!checkpoint?.intraStepProgress?.[stepName]) return new Set();
+    return new Set(checkpoint.intraStepProgress[stepName]);
+  } catch {
+    return new Set();
+  }
+}
+
 class RunCancelledError extends Error {
   constructor(runId: number) {
     super(`Run ${runId} was cancelled by user`);
@@ -2480,13 +2505,14 @@ async function googleSearchEnrichCreators(
     }
   }
 
-  const batchSize = 10;
-  const concurrentSearchBatches = 3;
+  const batchSize = 20;
+  const concurrentSearchBatches = 5;
   const enrichedLeadIndices = new Set<number>();
   const CIRCUIT_BREAKER_THRESHOLD = 5;
   let consecutiveSearchFailures = 0;
   let searchCircuitBroken = false;
 
+  const completedSearchBatchNums = await loadIntraStepProgress(runId, "google_contact_search");
   const allSearchBatches: { queries: { term: string; leadIdx: number }[]; batchNum: number }[] = [];
   const totalBatches = Math.ceil(queries.length / batchSize);
   for (let i = 0; i < queries.length; i += batchSize) {
@@ -2496,8 +2522,13 @@ async function googleSearchEnrichCreators(
     });
   }
 
+  if (completedSearchBatchNums.size > 0) {
+    await appendAndSave(`Google enrichment: resuming — ${completedSearchBatchNums.size}/${totalBatches} batches already completed, skipping`);
+  }
+
   async function processSearchBatch(batchInfo: { queries: { term: string; leadIdx: number }[]; batchNum: number }): Promise<void> {
     if (searchCircuitBroken) return;
+    if (completedSearchBatchNums.has(batchInfo.batchNum)) return;
     const batch = batchInfo.queries;
     await appendAndSave(`Google enrichment: batch ${batchInfo.batchNum}/${totalBatches} (${batch.length} searches)...`);
 
@@ -2601,6 +2632,9 @@ async function googleSearchEnrichCreators(
 
         if (foundAnything) enrichedLeadIndices.add(batch[j].leadIdx);
       }
+
+      completedSearchBatchNums.add(batchInfo.batchNum);
+      await saveIntraStepProgress(runId, "google_contact_search", Array.from(completedSearchBatchNums));
     } catch (err: any) {
       if (err.costUsd) {
         await storage.incrementApifySpend(runId, err.costUsd);
@@ -2618,7 +2652,7 @@ async function googleSearchEnrichCreators(
     if (searchCircuitBroken) break;
     const concurrentSlice = allSearchBatches.slice(i, i + concurrentSearchBatches);
     await Promise.allSettled(concurrentSlice.map((b, idx) =>
-      new Promise<void>(resolve => setTimeout(() => processSearchBatch(b).then(resolve).catch(resolve), idx * 2000))
+      new Promise<void>(resolve => setTimeout(() => processSearchBatch(b).then(resolve).catch(resolve), idx * 1000))
     ));
   }
 
@@ -2653,13 +2687,14 @@ async function googleBridgeEnrichFacebookGroups(
     }
   }
 
-  const batchSize = 10;
-  const concurrentBridgeBatches = 3;
+  const batchSize = 20;
+  const concurrentBridgeBatches = 5;
   const enrichedLeadIndices = new Set<number>();
   const CIRCUIT_BREAKER_THRESHOLD = 5;
   let consecutiveFailures = 0;
   let circuitBroken = false;
 
+  const completedBatchNums = await loadIntraStepProgress(runId, "google_bridge");
   const allBridgeBatches: { queries: typeof queries; batchNum: number }[] = [];
   const totalBatches = Math.ceil(queries.length / batchSize);
   for (let i = 0; i < queries.length; i += batchSize) {
@@ -2669,8 +2704,13 @@ async function googleBridgeEnrichFacebookGroups(
     });
   }
 
+  if (completedBatchNums.size > 0) {
+    await appendAndSave(`Google Bridge: resuming — ${completedBatchNums.size}/${totalBatches} batches already completed, skipping`);
+  }
+
   async function processBridgeBatch(batchInfo: { queries: typeof queries; batchNum: number }): Promise<void> {
     if (circuitBroken) return;
+    if (completedBatchNums.has(batchInfo.batchNum)) return;
     const batch = batchInfo.queries;
     await appendAndSave(`Google Bridge: batch ${batchInfo.batchNum}/${totalBatches} (${batch.length} searches)...`);
 
@@ -2779,6 +2819,9 @@ async function googleBridgeEnrichFacebookGroups(
 
         if (foundAnything) enrichedLeadIndices.add(batch[j].leadIdx);
       }
+
+      completedBatchNums.add(batchInfo.batchNum);
+      await saveIntraStepProgress(runId, "google_bridge", Array.from(completedBatchNums));
     } catch (err: any) {
       if (err.costUsd) {
         await storage.incrementApifySpend(runId, err.costUsd);
@@ -2796,11 +2839,11 @@ async function googleBridgeEnrichFacebookGroups(
     if (circuitBroken) break;
     const concurrentSlice = allBridgeBatches.slice(i, i + concurrentBridgeBatches);
     await Promise.allSettled(concurrentSlice.map((b, idx) =>
-      new Promise<void>(resolve => setTimeout(() => processBridgeBatch(b).then(resolve).catch(resolve), idx * 2000))
+      new Promise<void>(resolve => setTimeout(() => processBridgeBatch(b).then(resolve).catch(resolve), idx * 1000))
     ));
   }
 
-  await appendAndSave(`Google Bridge: found new data for ${enrichedLeadIndices.size}/${fbLeads.length} Facebook groups`);
+  await appendAndSave(`Google Bridge: found new data for ${enrichedLeadIndices.size}/${groupLeads.length} Facebook/Meetup groups`);
 }
 
 const LINK_AGGREGATOR_MAX = Infinity;
@@ -3508,11 +3551,11 @@ export async function runPipeline(runId: number): Promise<void> {
 
     const enrichGroup1: { name: string; promise: Promise<void> }[] = [];
 
-    const hasFacebookLeads = allPlatformLeads.some(l => l.source === "facebook");
-    if (hasFacebookLeads) {
-      const fbLeadsNeedingEnrich = allPlatformLeads.filter(l => l.source === "facebook" && !l.email && !l.ownedChannels?.website && !l.ownedChannels?.linkedin);
-      if (fbLeadsNeedingEnrich.length > 0) {
-        await appendAndSave(`Google Bridge: ${fbLeadsNeedingEnrich.length} Facebook groups need leader/org lookup`, 29, "Step 1b: Parallel enrichment group 1");
+    const hasFbOrMeetupLeads = allPlatformLeads.some(l => l.source === "facebook" || l.source === "meetup");
+    if (hasFbOrMeetupLeads) {
+      const groupLeadsNeedingEnrich = allPlatformLeads.filter(l => (l.source === "facebook" || l.source === "meetup") && !l.email && !l.ownedChannels?.website && !l.ownedChannels?.linkedin);
+      if (groupLeadsNeedingEnrich.length > 0) {
+        await appendAndSave(`Google Bridge: ${groupLeadsNeedingEnrich.length} Facebook/Meetup groups need leader/org lookup`, 29, "Step 1b: Parallel enrichment group 1");
         enrichGroup1.push({ name: "Google Bridge", promise: googleBridgeEnrichFacebookGroups(runId, allPlatformLeads, appendAndSave) });
       }
     }
@@ -5543,11 +5586,11 @@ async function resumeFromCheckpoint(
     if (!completedSubs.has("fb_google_bridge")) {
       const enrichGroup1: { name: string; promise: Promise<void> }[] = [];
 
-      const hasFacebookLeads = allPlatformLeads.some(l => l.source === "facebook");
-      if (hasFacebookLeads) {
-        const fbLeadsNeedingEnrich = allPlatformLeads.filter(l => l.source === "facebook" && !l.email && !l.ownedChannels?.website && !l.ownedChannels?.linkedin);
-        if (fbLeadsNeedingEnrich.length > 0) {
-          await appendAndSave(`Resume: Google Bridge for ${fbLeadsNeedingEnrich.length} Facebook groups`, 32, "Resume: Google Bridge + Link Aggregators");
+      const hasFbOrMeetupLeads = allPlatformLeads.some(l => l.source === "facebook" || l.source === "meetup");
+      if (hasFbOrMeetupLeads) {
+        const groupLeadsNeedingEnrich = allPlatformLeads.filter(l => (l.source === "facebook" || l.source === "meetup") && !l.email && !l.ownedChannels?.website && !l.ownedChannels?.linkedin);
+        if (groupLeadsNeedingEnrich.length > 0) {
+          await appendAndSave(`Resume: Google Bridge for ${groupLeadsNeedingEnrich.length} Facebook/Meetup groups`, 32, "Resume: Google Bridge + Link Aggregators");
           enrichGroup1.push({ name: "Google Bridge", promise: googleBridgeEnrichFacebookGroups(runId, allPlatformLeads, appendAndSave) });
         }
       }
