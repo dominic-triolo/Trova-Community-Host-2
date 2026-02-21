@@ -3398,7 +3398,7 @@ function cleanLinkedInGroupName(title: string): string {
     .trim();
 }
 
-async function scrapeLinkedInGroups(
+async function scrapeLinkedInGroupsViaActor(
   runId: number,
   keywords: string[],
   maxItems: number,
@@ -3409,24 +3409,175 @@ async function scrapeLinkedInGroups(
   const seenGroupIds = new Set<string>();
   const minMembers = filters.minMemberCount || 0;
   const maxMembers = filters.maxMemberCount || 0;
+  const dedupedKeywords = deduplicateLinkedInKeywords(keywords);
+
+  const allSearchTerms: string[] = [];
+  for (const kw of dedupedKeywords) {
+    allSearchTerms.push(kw);
+    const diversifiers = getContextualDiversifiers(kw.toLowerCase().trim());
+    for (const div of diversifiers.slice(0, 6)) {
+      allSearchTerms.push(div);
+    }
+  }
+
+  const seenTerms = new Set<string>();
+  const uniqueTerms: string[] = [];
+  for (const t of allSearchTerms) {
+    const norm = t.toLowerCase().trim();
+    if (!seenTerms.has(norm)) {
+      seenTerms.add(norm);
+      uniqueTerms.push(t);
+    }
+  }
+  await appendAndSave(`LinkedIn Groups: searching ${uniqueTerms.length} keywords via LinkedIn actor (deduped roots: ${dedupedKeywords.join(", ")}, target: ${maxItems} groups)`);
+
+  const itemsPerKeyword = Math.max(10, Math.ceil((maxItems * 1.5) / uniqueTerms.length));
+
+  for (const keyword of uniqueTerms) {
+    if (leads.length >= maxItems) break;
+
+    try {
+      await appendAndSave(`LinkedIn Groups: searching "${keyword}" (${leads.length}/${maxItems} found)...`);
+      const { items, costUsd: actorCost } = await runActorAndGetResults(
+        "contactminerlabs/linkedin-groups-search-scraper---cheap",
+        {
+          KEYWORD: keyword,
+          TIME_FILTER: "any",
+          MAX_ITEMS: itemsPerKeyword,
+        },
+        120000,
+      );
+      await storage.incrementApifySpend(runId, actorCost);
+
+      let newInBatch = 0;
+      let filteredOut = 0;
+      for (const item of items) {
+        if (leads.length >= maxItems) break;
+
+        const rawGroupId = String(item.groupId || "");
+        const rawGroupUrl = item.groupUrl || "";
+        const groupId = rawGroupId || extractLinkedInGroupId(rawGroupUrl) || "";
+        if (!groupId) continue;
+
+        const effectiveId = groupId;
+        if (seenGroupIds.has(effectiveId)) continue;
+        seenGroupIds.add(effectiveId);
+
+        const groupName = item.groupName || `LinkedIn Group ${effectiveId}`;
+        const memberCount = typeof item.membersCount === "number" ? item.membersCount : (parseInt(String(item.membersCount || "0").replace(/[^0-9]/g, ""), 10) || 0);
+
+        if (minMembers > 0 && memberCount > 0 && memberCount < minMembers) { filteredOut++; continue; }
+        if (maxMembers > 0 && memberCount > 0 && memberCount > maxMembers) { filteredOut++; continue; }
+
+        const description = item.description || item.snippet || "";
+        const fullText = `${groupName} ${description}`;
+        const canonicalUrl = `https://www.linkedin.com/groups/${effectiveId}/`;
+        const channels: Record<string, string> = { linkedin_group: canonicalUrl };
+
+        const descUrls = extractUrlsFromText(description);
+        const socialFromDesc = extractSocialChannelsFromUrls(descUrls);
+        Object.assign(channels, socialFromDesc);
+
+        const descEmails = extractEmailsFromText(description);
+
+        let leaderName = "";
+        const leaderPatterns = [
+          /(?:admin|administrator|owner|manager|founder|created by|managed by|run by|led by|organized by)\s*[:\-–]?\s*([A-Z][a-z]+ [A-Z][a-z]+(?:\s[A-Z][a-z]+)?)/i,
+          /([A-Z][a-z]+ [A-Z][a-z]+(?:\s[A-Z][a-z]+)?)\s*(?:is the|,\s*(?:admin|founder|owner|manager|organizer|leader))/i,
+        ];
+        for (const pattern of leaderPatterns) {
+          const leaderMatch = fullText.match(pattern);
+          if (leaderMatch && leaderMatch[1] && leaderMatch[1].length > 4) {
+            leaderName = leaderMatch[1].trim();
+            break;
+          }
+        }
+
+        leads.push({
+          source: "linkedin",
+          communityName: groupName,
+          communityType: item.category ? (item.category.toLowerCase().includes("travel") ? "travel" : detectCommunityType(fullText)) : detectCommunityType(fullText),
+          description: description.substring(0, 2000),
+          location: "",
+          website: channels.website || canonicalUrl,
+          email: descEmails[0] || "",
+          phone: "",
+          leaderName,
+          memberCount,
+          subscriberCount: 0,
+          ownedChannels: channels,
+          monetizationSignals: detectMonetization(description),
+          engagementSignals: {
+            member_count: memberCount,
+            attendance_proxy: memberCount,
+            activity_level: item.activity || "",
+            ...detectEngagement(description),
+          },
+          tripFitSignals: detectTripFit(fullText),
+          raw: item,
+        });
+        newInBatch++;
+      }
+
+      await appendAndSave(`LinkedIn Groups: "${keyword}" → ${items.length} results, ${newInBatch} new unique groups${filteredOut > 0 ? ` (${filteredOut} filtered)` : ""}`);
+    } catch (err: any) {
+      if (err.costUsd) {
+        await storage.incrementApifySpend(runId, err.costUsd);
+      }
+      const errorMsg = err.message || String(err);
+      if (errorMsg.includes("actor-is-not-rented") || errorMsg.includes("not found") || errorMsg.includes("404")) {
+        await appendAndSave(`[WARN] LinkedIn Groups actor not available: ${errorMsg.substring(0, 200)}. Falling back to Google search...`);
+        return scrapeLinkedInGroupsViaGoogle(runId, keywords, maxItems - leads.length, appendAndSave, filters, leads, seenGroupIds);
+      }
+      await appendAndSave(`[WARN] LinkedIn Groups search failed for "${keyword}": ${errorMsg.substring(0, 200)}`);
+    }
+  }
+
+  if (leads.length === 0 && uniqueTerms.length > 0) {
+    await appendAndSave(`LinkedIn Groups: actor returned 0 groups across ${uniqueTerms.length} keywords. Falling back to Google search...`);
+    return scrapeLinkedInGroupsViaGoogle(runId, keywords, maxItems, appendAndSave, filters, leads, seenGroupIds);
+  }
+
+  if (leads.length < Math.min(maxItems, 3) && uniqueTerms.length >= 3) {
+    await appendAndSave(`LinkedIn Groups: actor found only ${leads.length} groups (low yield). Supplementing with Google search...`);
+    return scrapeLinkedInGroupsViaGoogle(runId, keywords, maxItems - leads.length, appendAndSave, filters, leads, seenGroupIds);
+  }
+
+  await appendAndSave(`LinkedIn Groups discovery complete: ${leads.length} groups from ${uniqueTerms.length} keyword searches`);
+  return leads;
+}
+
+async function scrapeLinkedInGroupsViaGoogle(
+  runId: number,
+  keywords: string[],
+  maxItems: number,
+  appendAndSave: (msg: string) => Promise<void>,
+  filters: { minMemberCount?: number; maxMemberCount?: number; geos?: string[] } = {},
+  existingLeads: PlatformLead[] = [],
+  existingIds: Set<string> = new Set(),
+): Promise<PlatformLead[]> {
+  const leads: PlatformLead[] = [...existingLeads];
+  const seenGroupIds = new Set<string>(existingIds);
+  const minMembers = filters.minMemberCount || 0;
+  const maxMembers = filters.maxMemberCount || 0;
 
   const googleQueries = expandLinkedInKeywords(keywords, filters.geos || []);
-  await appendAndSave(`LinkedIn Groups: expanded ${keywords.length} keyword(s) → ${googleQueries.length} Google queries (deduped roots: ${deduplicateLinkedInKeywords(keywords).join(", ")}, target: ${maxItems} groups)`);
+  await appendAndSave(`LinkedIn Groups (Google fallback): ${googleQueries.length} queries, target: ${maxItems + existingLeads.length} groups`);
   const batchSize = 10;
   let consecutiveZeroBatches = 0;
 
   for (let i = 0; i < googleQueries.length; i += batchSize) {
-    if (leads.length >= maxItems) break;
+    if (leads.length >= maxItems + existingLeads.length) break;
 
     if (consecutiveZeroBatches >= 3) {
-      await appendAndSave(`LinkedIn Groups: stopping early — ${consecutiveZeroBatches} consecutive batches with 0 new LinkedIn group URLs. Found ${leads.length} groups so far.`);
+      await appendAndSave(`LinkedIn Groups (Google): stopping early — ${consecutiveZeroBatches} zero-yield batches. Found ${leads.length} groups.`);
       break;
     }
 
     const batch = googleQueries.slice(i, i + batchSize);
 
     try {
-      await appendAndSave(`LinkedIn Groups (via Google): batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(googleQueries.length / batchSize)} (${leads.length}/${maxItems} found so far)...`);
+      await appendAndSave(`LinkedIn Groups (Google): batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(googleQueries.length / batchSize)} (${leads.length} found)...`);
       const { items, costUsd: actorCost } = await runActorAndGetResults("apify~google-search-scraper", {
         queries: batch.join("\n"),
         maxPagesPerQuery: 3,
@@ -3441,12 +3592,12 @@ async function scrapeLinkedInGroups(
       let totalOrganic = 0;
       let linkedinUrlCount = 0;
       for (const item of items) {
-        if (leads.length >= maxItems) break;
+        if (leads.length >= maxItems + existingLeads.length) break;
 
         const organicResults = item.organicResults || [];
         totalOrganic += organicResults.length;
         for (const result of organicResults) {
-          if (leads.length >= maxItems) break;
+          if (leads.length >= maxItems + existingLeads.length) break;
 
           const rawUrl = result.url || result.link || "";
           if (!rawUrl.includes("linkedin.com/groups/")) continue;
@@ -3461,9 +3612,7 @@ async function scrapeLinkedInGroups(
 
           const title = result.title || "";
           const snippet = result.description || result.snippet || "";
-          const sitelinks = result.sitelinks || result.siteLinks || [];
           const fullText = `${title} ${snippet}`;
-
           const groupName = cleanLinkedInGroupName(title) || `LinkedIn Group ${groupId}`;
           const memberCount = parseLinkedInMembersFromSnippet(fullText);
 
@@ -3479,6 +3628,7 @@ async function scrapeLinkedInGroups(
 
           const descEmails = extractEmailsFromText(snippet);
 
+          const sitelinks = result.sitelinks || result.siteLinks || [];
           for (const sl of (Array.isArray(sitelinks) ? sitelinks : [])) {
             const slUrl = sl?.url || sl?.link || "";
             const slTitle = sl?.title || "";
@@ -3549,17 +3699,25 @@ async function scrapeLinkedInGroups(
         consecutiveZeroBatches = 0;
       }
 
-      await appendAndSave(`LinkedIn Groups: ${totalOrganic} Google results, ${linkedinUrlCount} LinkedIn URLs, ${leads.length} unique groups so far${filteredOut > 0 ? ` (${filteredOut} filtered by member count)` : ""}${consecutiveZeroBatches > 0 ? ` (${consecutiveZeroBatches} zero-yield batch streak)` : ""}`);
+      await appendAndSave(`LinkedIn Groups (Google): ${totalOrganic} results, ${linkedinUrlCount} LinkedIn URLs, ${leads.length} groups${filteredOut > 0 ? ` (${filteredOut} filtered)` : ""}`);
     } catch (err: any) {
-      if (err.costUsd) {
-        await storage.incrementApifySpend(runId, err.costUsd);
-      }
-      await appendAndSave(`[WARN] LinkedIn Groups Google search batch failed: ${err.message}`);
+      if (err.costUsd) await storage.incrementApifySpend(runId, err.costUsd);
+      await appendAndSave(`[WARN] LinkedIn Groups Google batch failed: ${err.message}`);
     }
   }
 
-  await appendAndSave(`LinkedIn Groups discovery complete: ${leads.length} groups from ${googleQueries.length} queries`);
+  await appendAndSave(`LinkedIn Groups (Google fallback) complete: ${leads.length} groups`);
   return leads;
+}
+
+async function scrapeLinkedInGroups(
+  runId: number,
+  keywords: string[],
+  maxItems: number,
+  appendAndSave: (msg: string) => Promise<void>,
+  filters: { minMemberCount?: number; maxMemberCount?: number; geos?: string[] } = {},
+): Promise<PlatformLead[]> {
+  return scrapeLinkedInGroupsViaActor(runId, keywords, maxItems, appendAndSave, filters);
 }
 
 async function enrichLinkedInGroupPages(
