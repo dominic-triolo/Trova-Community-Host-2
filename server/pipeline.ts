@@ -3312,28 +3312,25 @@ function expandLinkedInKeywords(keywords: string[], geos: string[], maxQueries: 
   const dedupedKeywords = deduplicateLinkedInKeywords(keywords);
 
   for (const kw of dedupedKeywords) {
-    addQuery(`inurl:linkedin.com/groups "${kw}"`);
-    addQuery(`site:linkedin.com/groups "${kw}"`);
-    addQuery(`inurl:linkedin.com/groups ${kw}`);
+    addQuery(`site:linkedin.com/groups/ "${kw}" "members"`);
+    addQuery(`"linkedin.com/groups/" "${kw}" members`);
+    addQuery(`site:linkedin.com/groups/ ${kw}`);
 
     const kwLower = kw.toLowerCase().trim();
     const synonyms = synonymMap[kwLower] || [];
     for (const syn of synonyms.slice(0, 4)) {
-      addQuery(`inurl:linkedin.com/groups "${syn}"`);
+      addQuery(`site:linkedin.com/groups/ "${syn}" "members"`);
     }
 
-    addQuery(`inurl:linkedin.com/groups ${kw} group`);
-    addQuery(`inurl:linkedin.com/groups ${kw} community`);
-    addQuery(`inurl:linkedin.com/groups ${kw} network`);
-    addQuery(`inurl:linkedin.com/groups ${kw} club`);
-    addQuery(`inurl:linkedin.com/groups ${kw} association`);
-
-    addQuery(`"linkedin.com/groups" "${kw}"`);
-    addQuery(`"linkedin.com/groups" ${kw} members`);
+    addQuery(`site:linkedin.com/groups/ ${kw} group`);
+    addQuery(`site:linkedin.com/groups/ ${kw} community`);
+    addQuery(`site:linkedin.com/groups/ ${kw} network`);
+    addQuery(`site:linkedin.com/groups/ ${kw} club`);
+    addQuery(`site:linkedin.com/groups/ ${kw} association`);
 
     const diversifiers = getContextualDiversifiers(kwLower);
     for (const div of diversifiers.slice(0, 12)) {
-      addQuery(`inurl:linkedin.com/groups "${div}"`);
+      addQuery(`site:linkedin.com/groups/ "${div}"`);
     }
   }
 
@@ -3341,7 +3338,7 @@ function expandLinkedInKeywords(keywords: string[], geos: string[], maxQueries: 
     const kwLower = kw.toLowerCase().trim();
     const synonyms = synonymMap[kwLower] || [];
     for (const syn of synonyms) {
-      addQuery(`inurl:linkedin.com/groups "${syn}"`);
+      addQuery(`site:linkedin.com/groups/ "${syn}"`);
     }
   }
 
@@ -3356,7 +3353,7 @@ function expandLinkedInKeywords(keywords: string[], geos: string[], maxQueries: 
   for (const term of allSearchTerms.slice(0, 4)) {
     if (expanded.length >= maxQueries) break;
     for (const geo of geoCities) {
-      addQuery(`inurl:linkedin.com/groups "${term}" "${geo}"`);
+      addQuery(`site:linkedin.com/groups/ "${term}" "${geo}"`);
     }
   }
 
@@ -3421,8 +3418,8 @@ async function scrapeLinkedInGroups(
   for (let i = 0; i < googleQueries.length; i += batchSize) {
     if (leads.length >= maxItems) break;
 
-    if (consecutiveZeroBatches >= 2) {
-      await appendAndSave(`LinkedIn Groups: stopping early — ${consecutiveZeroBatches} consecutive batches with 0 new LinkedIn URLs. Found ${leads.length} groups so far.`);
+    if (consecutiveZeroBatches >= 3) {
+      await appendAndSave(`LinkedIn Groups: stopping early — ${consecutiveZeroBatches} consecutive batches with 0 new LinkedIn group URLs. Found ${leads.length} groups so far.`);
       break;
     }
 
@@ -3452,7 +3449,9 @@ async function scrapeLinkedInGroups(
           if (leads.length >= maxItems) break;
 
           const rawUrl = result.url || result.link || "";
-          if (!rawUrl.includes("linkedin.com/groups")) continue;
+          if (!rawUrl.includes("linkedin.com/groups/")) continue;
+          if (/linkedin\.com\/groups\/(discover|you-may-like|mygroups|home|groups-directory|search|settings|create|requests|suggested|browse|feed|manage|invitations)\b/i.test(rawUrl)) continue;
+          if (rawUrl.includes("/posts/") || rawUrl.includes("/about/rules") || rawUrl.includes("/members/")) continue;
           linkedinUrlCount++;
 
           const groupId = extractLinkedInGroupId(rawUrl);
@@ -3462,6 +3461,7 @@ async function scrapeLinkedInGroups(
 
           const title = result.title || "";
           const snippet = result.description || result.snippet || "";
+          const sitelinks = result.sitelinks || result.siteLinks || [];
           const fullText = `${title} ${snippet}`;
 
           const groupName = cleanLinkedInGroupName(title) || `LinkedIn Group ${groupId}`;
@@ -3479,6 +3479,28 @@ async function scrapeLinkedInGroups(
 
           const descEmails = extractEmailsFromText(snippet);
 
+          for (const sl of (Array.isArray(sitelinks) ? sitelinks : [])) {
+            const slUrl = sl?.url || sl?.link || "";
+            const slTitle = sl?.title || "";
+            const slSnippet = sl?.snippet || sl?.description || "";
+            if (slUrl && slUrl.includes("linkedin.com/in/")) {
+              if (!channels.linkedin) channels.linkedin = slUrl.split("?")[0];
+              const slugMatch = slUrl.match(/linkedin\.com\/in\/([^/?&#]+)/);
+              if (slugMatch) {
+                const nameFromSlug = slugMatch[1].replace(/-/g, " ").replace(/\d+$/g, "").trim();
+                if (nameFromSlug.split(" ").length >= 2) {
+                  const parts = nameFromSlug.split(" ");
+                  const formatted = parts.map((p: string) => p.charAt(0).toUpperCase() + p.slice(1)).join(" ");
+                  if (!channels._sitelinkLeaderName) channels._sitelinkLeaderName = formatted;
+                }
+              }
+            }
+            const slEmails = extractEmailsFromText(`${slTitle} ${slSnippet}`);
+            if (slEmails.length > 0 && !descEmails.includes(slEmails[0])) {
+              descEmails.push(slEmails[0]);
+            }
+          }
+
           let leaderName = "";
           const leaderPatterns = [
             /(?:admin|administrator|owner|manager|founder|created by|managed by|run by|led by|organized by)\s*[:\-–]?\s*([A-Z][a-z]+ [A-Z][a-z]+(?:\s[A-Z][a-z]+)?)/i,
@@ -3491,6 +3513,10 @@ async function scrapeLinkedInGroups(
               break;
             }
           }
+          if (!leaderName && channels._sitelinkLeaderName) {
+            leaderName = channels._sitelinkLeaderName;
+          }
+          delete channels._sitelinkLeaderName;
 
           leads.push({
             source: "linkedin",
@@ -3561,13 +3587,30 @@ async function enrichLinkedInGroupPages(
         const title = $('title').text() || '';
         const description = $('meta[name="description"]').attr('content') || '';
         const ogDescription = $('meta[property="og:description"]').attr('content') || '';
-        const bodyText = $('body').text().substring(0, 5000) || '';
+        const ogTitle = $('meta[property="og:title"]').attr('content') || '';
+        const twitterTitle = $('meta[name="twitter:title"]').attr('content') || '';
+        const twitterDesc = $('meta[name="twitter:description"]').attr('content') || '';
+        const canonical = $('link[rel="canonical"]').attr('href') || '';
+        const jsonLd = $('script[type="application/ld+json"]').text() || '';
+        const profileLinks = [];
+        $('a[href*="linkedin.com/in/"]').each(function() {
+          profileLinks.push($(this).attr('href') || '');
+        });
+        const bodySnippet = $('body').text().substring(0, 8000) || '';
+        const isAuthWall = bodySnippet.includes('Sign in') && bodySnippet.includes('Join now') && bodySnippet.length < 2000;
         return {
           url: request.url,
           title,
           description,
           ogDescription,
-          bodyText,
+          ogTitle,
+          twitterTitle,
+          twitterDesc,
+          canonical,
+          jsonLd: jsonLd.substring(0, 3000),
+          profileLinks: profileLinks.slice(0, 10),
+          bodySnippet,
+          isAuthWall,
         };
       }`,
     }, 120000);
@@ -3575,12 +3618,42 @@ async function enrichLinkedInGroupPages(
 
     let namesFound = 0;
     let emailsFound = 0;
+    let authWallCount = 0;
     for (const item of items) {
       const pageUrl = item.url || "";
       const lead = linkedInLeads.find(l => l.ownedChannels?.linkedin_group && pageUrl.includes(extractLinkedInGroupId(l.ownedChannels.linkedin_group)));
       if (!lead) continue;
 
-      const fullText = `${item.title || ""} ${item.description || ""} ${item.ogDescription || ""} ${item.bodyText || ""}`;
+      if (item.isAuthWall) {
+        authWallCount++;
+      }
+
+      const allText = [item.title, item.description, item.ogDescription, item.ogTitle, item.twitterTitle, item.twitterDesc, item.bodySnippet].filter(Boolean).join(" ");
+
+      if (item.ogTitle && !lead.communityName.includes(item.ogTitle.replace(/\s*\|\s*LinkedIn$/, "").trim())) {
+        const betterName = (item.ogTitle || "").replace(/\s*\|\s*LinkedIn$/, "").trim();
+        if (betterName.length > lead.communityName.length && betterName.length < 200) {
+          lead.communityName = betterName;
+        }
+      }
+
+      const profileLinks = (item.profileLinks || []) as string[];
+      if (!lead.leaderName && profileLinks.length > 0) {
+        for (const pLink of profileLinks) {
+          const slugMatch = pLink.match(/linkedin\.com\/in\/([^/?&#]+)/);
+          if (slugMatch) {
+            const slug = slugMatch[1].replace(/-/g, " ").replace(/\d+$/g, "").trim();
+            const parts = slug.split(/\s+/).filter((p: string) => p.length > 1);
+            if (parts.length >= 2 && parts.length <= 4) {
+              lead.leaderName = parts.map((p: string) => p.charAt(0).toUpperCase() + p.slice(1).toLowerCase()).join(" ");
+              if (!lead.ownedChannels) lead.ownedChannels = {};
+              lead.ownedChannels.linkedin = pLink.split("?")[0];
+              namesFound++;
+              break;
+            }
+          }
+        }
+      }
 
       if (!lead.leaderName) {
         const namePatterns = [
@@ -3589,7 +3662,7 @@ async function enrichLinkedInGroupPages(
           /(?:about|group|community)\s+(?:by|from)\s+([A-Z][a-z]+ [A-Z][a-z]+)/i,
         ];
         for (const pattern of namePatterns) {
-          const nameMatch = fullText.match(pattern);
+          const nameMatch = allText.match(pattern);
           if (nameMatch && nameMatch[1] && nameMatch[1].length > 4) {
             lead.leaderName = nameMatch[1].trim();
             namesFound++;
@@ -3598,8 +3671,21 @@ async function enrichLinkedInGroupPages(
         }
       }
 
+      if (item.jsonLd) {
+        try {
+          const ld = JSON.parse(item.jsonLd);
+          if (ld && !lead.leaderName) {
+            const author = ld.author?.name || ld.creator?.name || ld.founder?.name || "";
+            if (author && author.split(" ").length >= 2 && author.length > 4) {
+              lead.leaderName = author;
+              namesFound++;
+            }
+          }
+        } catch {}
+      }
+
       if (!lead.email) {
-        const emails = extractEmailsFromText(fullText);
+        const emails = extractEmailsFromText(allText);
         if (emails.length > 0) {
           lead.email = emails[0];
           emailsFound++;
@@ -3607,7 +3693,7 @@ async function enrichLinkedInGroupPages(
       }
 
       if (!lead.ownedChannels?.website) {
-        const websiteUrls = extractUrlsFromText(fullText);
+        const websiteUrls = extractUrlsFromText(allText);
         for (const wu of websiteUrls) {
           try {
             const host = new URL(wu).hostname.replace(/^www\./, "");
@@ -3620,15 +3706,13 @@ async function enrichLinkedInGroupPages(
         }
       }
 
-      if (item.description || item.ogDescription) {
-        const desc = (item.description || item.ogDescription || "").substring(0, 2000);
-        if (desc.length > lead.description.length) {
-          lead.description = desc;
-        }
+      const desc = (item.description || item.ogDescription || item.twitterDesc || "").substring(0, 2000);
+      if (desc.length > lead.description.length) {
+        lead.description = desc;
       }
     }
 
-    await appendAndSave(`LinkedIn group page scrape: found ${namesFound} leader names, ${emailsFound} emails from ${items.length} pages`);
+    await appendAndSave(`LinkedIn group page scrape: found ${namesFound} leader names, ${emailsFound} emails from ${items.length} pages${authWallCount > 0 ? ` (${authWallCount} pages blocked by auth wall)` : ""}`);
   } catch (err: any) {
     if (err.costUsd) {
       await storage.incrementApifySpend(runId, err.costUsd);
@@ -3875,10 +3959,14 @@ async function googleBridgeEnrichFacebookGroups(
     }
 
     if (l.source === "linkedin") {
-      queries.push({ term: `"${groupName}" linkedin group admin OR owner OR manager`, leadIdx: idx });
-      queries.push({ term: `"${groupName}" linkedin group site:linkedin.com/in/`, leadIdx: idx });
-      if (l.ownedChannels?.linkedin_group) {
-        queries.push({ term: `"${groupName}" created OR founded OR managed by`, leadIdx: idx });
+      queries.push({ term: `"${groupName}" admin OR owner OR manager linkedin`, leadIdx: idx });
+      queries.push({ term: `"${groupName}" president OR director OR chairman contact`, leadIdx: idx });
+      queries.push({ term: `site:linkedin.com/in/ "${groupName}"`, leadIdx: idx });
+      if (!l.leaderName) {
+        const shortName = groupName.replace(/\s*(linkedin|group|network|association|community|club)\s*/gi, " ").trim();
+        if (shortName.length > 3 && shortName !== groupName) {
+          queries.push({ term: `"${shortName}" founder OR president OR executive director email`, leadIdx: idx });
+        }
       }
     }
   }
