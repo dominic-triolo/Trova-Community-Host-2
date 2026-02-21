@@ -3163,103 +3163,200 @@ async function scrapeMightyNetworks(
   return leads;
 }
 
-function expandLinkedInKeywords(keywords: string[], geos: string[], maxQueries: number = 80): string[] {
+function deduplicateLinkedInKeywords(keywords: string[]): string[] {
+  const rootMap: Record<string, string[]> = {
+    "alumni": ["alumni group", "alumni network", "alumni association", "alumni groups", "alumni organizations", "alumni chapter", "alumni society"],
+    "hiking": ["hiking group", "hiking club", "hiking groups", "hiking clubs", "hikers group", "hikers club"],
+    "running": ["run club", "running group", "runners club", "running clubs", "run clubs", "runners group"],
+    "church": ["church group", "faith group", "ministry group", "church groups", "faith groups", "ministry groups"],
+    "fitness": ["fitness group", "fitness club", "fitness groups", "fitness clubs", "gym group", "workout group"],
+    "travel": ["travel group", "travel club", "travel groups", "travel clubs", "adventure group"],
+    "outdoor": ["outdoor group", "outdoor club", "outdoor groups", "outdoor clubs", "outdoor adventure"],
+    "cycling": ["cycling group", "cycling club", "bike group", "bike club"],
+    "yoga": ["yoga group", "yoga club", "yoga community"],
+    "photography": ["photography group", "photography club", "photo group", "photo club"],
+    "book": ["book club", "book group", "reading group", "reading club"],
+    "women": ["women group", "women network", "women's group", "women's network", "women professionals"],
+    "professional": ["professional group", "professional network", "professionals group"],
+    "nonprofit": ["nonprofit group", "nonprofit network", "ngo group"],
+    "tech": ["tech group", "tech network", "technology group", "developer group"],
+    "wellness": ["wellness group", "wellness club", "wellness community"],
+  };
+
+  const normalized = keywords.map(k => k.toLowerCase().trim());
+  const rootConcepts = new Set<string>();
+  const dedupedRoots: string[] = [];
+
+  for (const kw of normalized) {
+    let foundRoot = false;
+    for (const [root, variants] of Object.entries(rootMap)) {
+      if (kw === root || kw.includes(root) || variants.some(v => kw === v || kw.includes(v))) {
+        if (!rootConcepts.has(root)) {
+          rootConcepts.add(root);
+          dedupedRoots.push(root);
+        }
+        foundRoot = true;
+        break;
+      }
+    }
+    if (!foundRoot && !rootConcepts.has(kw)) {
+      rootConcepts.add(kw);
+      dedupedRoots.push(kw);
+    }
+  }
+
+  return dedupedRoots;
+}
+
+function getContextualDiversifiers(rootConcept: string): string[] {
+  const diversifiers: Record<string, string[]> = {
+    "alumni": [
+      "Harvard alumni", "Stanford alumni", "MIT alumni", "UCLA alumni", "NYU alumni",
+      "Columbia alumni", "Michigan alumni", "USC alumni", "Georgetown alumni", "Duke alumni",
+      "Penn alumni", "Yale alumni", "Princeton alumni", "Cornell alumni", "Northwestern alumni",
+      "Berkeley alumni", "UVA alumni", "Emory alumni", "Vanderbilt alumni", "Texas alumni",
+      "Ohio State alumni", "Florida alumni", "Georgia Tech alumni", "Boston University alumni",
+    ],
+    "church": [
+      "Baptist church", "Methodist church", "Presbyterian church", "Catholic parish",
+      "nondenominational church", "Pentecostal church", "Lutheran church",
+      "church community", "faith community", "Bible study group",
+    ],
+    "hiking": [
+      "Sierra Club", "trail runners", "mountain hiking", "national park hikers",
+      "backpacking group", "day hikers", "Appalachian trail",
+    ],
+    "running": [
+      "marathon training", "5K running", "trail running", "road runners",
+      "half marathon group", "track club",
+    ],
+    "fitness": [
+      "CrossFit community", "personal trainers", "bodybuilding", "strength training",
+      "wellness coaching", "group fitness",
+    ],
+    "travel": [
+      "group travel", "adventure travel", "backpackers", "travel bloggers",
+      "solo travelers", "luxury travel", "travel photographers",
+    ],
+    "outdoor": [
+      "outdoor adventure", "camping group", "kayaking club", "rock climbing",
+      "wilderness exploration", "outdoor fitness",
+    ],
+    "women": [
+      "women in tech", "women entrepreneurs", "executive women", "women in finance",
+      "women's leadership", "professional women",
+    ],
+    "professional": [
+      "business networking", "executive networking", "industry leaders",
+      "young professionals", "entrepreneurs network",
+    ],
+    "tech": [
+      "software engineers", "data science", "product managers", "tech founders",
+      "AI professionals", "cybersecurity",
+    ],
+  };
+  return diversifiers[rootConcept] || [];
+}
+
+function expandLinkedInKeywords(keywords: string[], geos: string[], maxQueries: number = 100): string[] {
   const synonymMap: Record<string, string[]> = {
-    "hiking": ["hiking group", "hiking club", "outdoor hiking", "trail group", "hikers"],
-    "hiking group": ["hiking club", "trail hiking", "outdoor hiking", "hikers network"],
-    "running": ["run club", "running group", "runners club", "marathon group", "runners"],
-    "cycling": ["cycling group", "cycling club", "bike group", "bike club", "cyclists"],
-    "fitness": ["fitness group", "fitness professionals", "workout group", "health fitness", "gym community"],
-    "yoga": ["yoga group", "yoga community", "yoga professionals", "yoga teachers"],
-    "travel": ["travel group", "travel professionals", "adventure travel", "group travel", "travelers network"],
-    "outdoor": ["outdoor group", "outdoor recreation", "outdoor adventure", "nature group", "outdoors enthusiasts"],
-    "outdoor adventure": ["outdoor group", "outdoor recreation", "adventure group", "nature lovers"],
-    "photography": ["photography group", "photographers network", "photo club", "photographers"],
-    "book club": ["book club", "reading group", "book lovers", "readers"],
-    "alumni": ["alumni group", "alumni network", "alumni association", "university alumni", "college alumni"],
-    "alumni group": ["alumni network", "alumni association", "university alumni", "school alumni", "graduates network"],
-    "alumni network": ["alumni association", "alumni group", "university alumni", "graduates"],
-    "alumni association": ["alumni network", "alumni group", "university alumni", "college graduates"],
-    "women": ["women professionals", "women leaders", "women's network", "women in business", "women entrepreneurs"],
-    "professional": ["professional group", "professional network", "industry professionals", "professionals community"],
-    "coaching": ["coaching group", "executive coaching", "leadership coaching", "life coaching", "business coaching"],
-    "wellness": ["wellness group", "wellness professionals", "holistic health", "wellness community"],
+    "hiking": ["hiking club", "trail group", "hikers", "outdoor hiking"],
+    "running": ["run club", "runners club", "marathon group", "runners", "running club"],
+    "cycling": ["cycling club", "bike group", "bike club", "cyclists"],
+    "fitness": ["fitness club", "workout group", "gym community", "fitness professionals"],
+    "yoga": ["yoga community", "yoga professionals", "yoga teachers", "yoga studio"],
+    "travel": ["travel club", "adventure travel", "group travel", "travelers network"],
+    "outdoor": ["outdoor recreation", "outdoor adventure", "nature group", "outdoors enthusiasts"],
+    "photography": ["photographers network", "photo club", "photographers", "camera club"],
+    "book": ["book club", "reading group", "book lovers", "readers", "literary group"],
+    "alumni": ["alumni association", "graduates network", "university alumni", "college alumni", "alumni chapter"],
+    "women": ["women leaders", "women's network", "women in business", "women entrepreneurs", "women professionals"],
+    "professional": ["professional network", "industry professionals", "business professionals", "professionals community"],
+    "coaching": ["executive coaching", "leadership coaching", "life coaching", "business coaching"],
+    "wellness": ["wellness professionals", "holistic health", "wellness community", "health wellness"],
     "food": ["food lovers", "culinary group", "wine group", "foodies", "food enthusiasts"],
-    "tech": ["tech group", "technology professionals", "startup community", "tech network", "developers"],
-    "church": ["faith group", "ministry group", "spiritual community", "faith community", "church leaders"],
+    "tech": ["technology professionals", "startup community", "tech network", "developers", "software engineers"],
+    "church": ["faith community", "ministry group", "spiritual community", "church leaders", "Bible study"],
     "social club": ["social group", "networking group", "social networking", "social events"],
-    "nonprofit": ["nonprofit group", "social impact", "community leadership", "NGO network", "nonprofit professionals"],
-    "climbing": ["climbing group", "mountaineering", "outdoor climbing", "climbers"],
-    "surf": ["surf group", "water sports group", "surfing community", "surfers"],
-    "leadership": ["leadership group", "leaders network", "executive leadership", "leadership development"],
-    "entrepreneur": ["entrepreneur group", "startup founders", "business owners", "entrepreneurs network"],
-    "marketing": ["marketing group", "marketers network", "digital marketing", "marketing professionals"],
-    "real estate": ["real estate group", "realtors network", "real estate professionals", "property investors"],
-    "healthcare": ["healthcare professionals", "medical professionals", "health workers", "healthcare network"],
-    "education": ["education group", "teachers network", "educators", "education professionals"],
-    "finance": ["finance group", "financial professionals", "investors network", "finance community"],
-    "hr": ["HR professionals", "human resources group", "HR network", "people operations"],
-    "sustainability": ["sustainability group", "green business", "climate action", "environmental"],
+    "nonprofit": ["social impact", "community leadership", "NGO network", "nonprofit professionals"],
+    "climbing": ["mountaineering", "outdoor climbing", "climbers", "rock climbing"],
+    "surf": ["water sports group", "surfing community", "surfers"],
+    "leadership": ["leaders network", "executive leadership", "leadership development"],
+    "entrepreneur": ["startup founders", "business owners", "entrepreneurs network", "small business"],
+    "marketing": ["marketers network", "digital marketing", "marketing professionals", "growth marketing"],
+    "real estate": ["realtors network", "real estate professionals", "property investors"],
+    "healthcare": ["medical professionals", "health workers", "healthcare network", "nurses group"],
+    "education": ["teachers network", "educators", "education professionals", "school administrators"],
+    "finance": ["financial professionals", "investors network", "finance community", "fintech"],
+    "hr": ["HR professionals", "human resources", "HR network", "people operations", "talent acquisition"],
+    "sustainability": ["green business", "climate action", "environmental", "ESG professionals"],
   };
 
   const TOP_US_CITIES = [
     "New York", "Los Angeles", "Chicago", "Houston", "Phoenix",
-    "Philadelphia", "San Antonio", "San Diego", "Dallas", "Austin",
+    "Philadelphia", "San Diego", "Dallas", "Austin",
     "Denver", "Seattle", "Portland", "Nashville", "Atlanta",
-    "Miami", "Boston", "Minneapolis", "Charlotte", "San Francisco",
+    "Miami", "Boston", "San Francisco",
   ];
 
   const expanded: string[] = [];
   const seen = new Set<string>();
   const addQuery = (q: string) => {
-    const normalized = q.toLowerCase().trim();
+    const normalized = q.toLowerCase().trim().replace(/\s+/g, " ");
     if (!seen.has(normalized) && expanded.length < maxQueries) {
       seen.add(normalized);
       expanded.push(q);
     }
   };
 
-  for (const kw of keywords) {
-    addQuery(`site:linkedin.com/groups ${kw}`);
+  const dedupedKeywords = deduplicateLinkedInKeywords(keywords);
 
-    addQuery(`linkedin.com/groups ${kw}`);
+  for (const kw of dedupedKeywords) {
+    addQuery(`inurl:linkedin.com/groups "${kw}"`);
+    addQuery(`site:linkedin.com/groups "${kw}"`);
+    addQuery(`inurl:linkedin.com/groups ${kw}`);
 
     const kwLower = kw.toLowerCase().trim();
     const synonyms = synonymMap[kwLower] || [];
-    for (const syn of synonyms.slice(0, 3)) {
-      addQuery(`site:linkedin.com/groups ${syn}`);
+    for (const syn of synonyms.slice(0, 4)) {
+      addQuery(`inurl:linkedin.com/groups "${syn}"`);
     }
 
-    addQuery(`site:linkedin.com/groups ${kw} group`);
-    addQuery(`site:linkedin.com/groups ${kw} community`);
-    addQuery(`site:linkedin.com/groups ${kw} network`);
-    addQuery(`site:linkedin.com/groups ${kw} club`);
-    addQuery(`site:linkedin.com/groups ${kw} association`);
+    addQuery(`inurl:linkedin.com/groups ${kw} group`);
+    addQuery(`inurl:linkedin.com/groups ${kw} community`);
+    addQuery(`inurl:linkedin.com/groups ${kw} network`);
+    addQuery(`inurl:linkedin.com/groups ${kw} club`);
+    addQuery(`inurl:linkedin.com/groups ${kw} association`);
 
-    addQuery(`linkedin.com/groups ${kw} members`);
-    addQuery(`linkedin group "${kw}"`);
+    addQuery(`"linkedin.com/groups" "${kw}"`);
+    addQuery(`"linkedin.com/groups" ${kw} members`);
+
+    const diversifiers = getContextualDiversifiers(kwLower);
+    for (const div of diversifiers.slice(0, 12)) {
+      addQuery(`inurl:linkedin.com/groups "${div}"`);
+    }
   }
 
-  for (const kw of keywords) {
+  for (const kw of dedupedKeywords) {
     const kwLower = kw.toLowerCase().trim();
     const synonyms = synonymMap[kwLower] || [];
     for (const syn of synonyms) {
-      addQuery(`linkedin.com/groups ${syn}`);
+      addQuery(`inurl:linkedin.com/groups "${syn}"`);
     }
   }
 
-  const allSearchTerms = [...keywords];
-  for (const kw of keywords) {
+  const allSearchTerms = [...dedupedKeywords];
+  for (const kw of dedupedKeywords) {
     const kwLower = kw.toLowerCase().trim();
     const synonyms = synonymMap[kwLower] || [];
-    for (const syn of synonyms) allSearchTerms.push(syn);
+    for (const syn of synonyms.slice(0, 3)) allSearchTerms.push(syn);
   }
 
-  const geoCities = geos.length > 0 ? geos.slice(0, 10) : TOP_US_CITIES.slice(0, 8);
-  for (const term of allSearchTerms.slice(0, 6)) {
+  const geoCities = geos.length > 0 ? geos.slice(0, 10) : TOP_US_CITIES.slice(0, 10);
+  for (const term of allSearchTerms.slice(0, 4)) {
     if (expanded.length >= maxQueries) break;
     for (const geo of geoCities) {
-      addQuery(`linkedin.com/groups "${term}" ${geo}`);
+      addQuery(`inurl:linkedin.com/groups "${term}" "${geo}"`);
     }
   }
 
@@ -3317,19 +3414,26 @@ async function scrapeLinkedInGroups(
   const maxMembers = filters.maxMemberCount || 0;
 
   const googleQueries = expandLinkedInKeywords(keywords, filters.geos || []);
-  await appendAndSave(`LinkedIn Groups: expanded ${keywords.length} keyword(s) into ${googleQueries.length} Google queries (target: ${maxItems} groups)`);
+  await appendAndSave(`LinkedIn Groups: expanded ${keywords.length} keyword(s) → ${googleQueries.length} Google queries (deduped roots: ${deduplicateLinkedInKeywords(keywords).join(", ")}, target: ${maxItems} groups)`);
   const batchSize = 10;
+  let consecutiveZeroBatches = 0;
 
   for (let i = 0; i < googleQueries.length; i += batchSize) {
     if (leads.length >= maxItems) break;
+
+    if (consecutiveZeroBatches >= 2) {
+      await appendAndSave(`LinkedIn Groups: stopping early — ${consecutiveZeroBatches} consecutive batches with 0 new LinkedIn URLs. Found ${leads.length} groups so far.`);
+      break;
+    }
+
     const batch = googleQueries.slice(i, i + batchSize);
 
     try {
       await appendAndSave(`LinkedIn Groups (via Google): batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(googleQueries.length / batchSize)} (${leads.length}/${maxItems} found so far)...`);
       const { items, costUsd: actorCost } = await runActorAndGetResults("apify~google-search-scraper", {
         queries: batch.join("\n"),
-        maxPagesPerQuery: 5,
-        resultsPerPage: 20,
+        maxPagesPerQuery: 3,
+        resultsPerPage: 50,
         countryCode: "us",
         languageCode: "en",
         mobileResults: false,
@@ -3413,7 +3517,13 @@ async function scrapeLinkedInGroups(
         }
       }
 
-      await appendAndSave(`LinkedIn Groups: ${totalOrganic} Google results, ${linkedinUrlCount} LinkedIn URLs, ${leads.length} unique groups so far${filteredOut > 0 ? ` (${filteredOut} filtered by member count)` : ""}`);
+      if (linkedinUrlCount === 0) {
+        consecutiveZeroBatches++;
+      } else {
+        consecutiveZeroBatches = 0;
+      }
+
+      await appendAndSave(`LinkedIn Groups: ${totalOrganic} Google results, ${linkedinUrlCount} LinkedIn URLs, ${leads.length} unique groups so far${filteredOut > 0 ? ` (${filteredOut} filtered by member count)` : ""}${consecutiveZeroBatches > 0 ? ` (${consecutiveZeroBatches} zero-yield batch streak)` : ""}`);
     } catch (err: any) {
       if (err.costUsd) {
         await storage.incrementApifySpend(runId, err.costUsd);
@@ -3424,6 +3534,107 @@ async function scrapeLinkedInGroups(
 
   await appendAndSave(`LinkedIn Groups discovery complete: ${leads.length} groups from ${googleQueries.length} queries`);
   return leads;
+}
+
+async function enrichLinkedInGroupPages(
+  runId: number,
+  leads: PlatformLead[],
+  appendAndSave: (msg: string) => Promise<void>,
+): Promise<void> {
+  const linkedInLeads = leads.filter(l => l.source === "linkedin" && !l.leaderName && l.ownedChannels?.linkedin_group);
+  if (linkedInLeads.length === 0) {
+    await appendAndSave("LinkedIn group page scrape: all leads already have leader names or no group URLs");
+    return;
+  }
+
+  await appendAndSave(`LinkedIn group page scrape: scraping ${linkedInLeads.length} group pages for admin/about info...`);
+
+  const urls = linkedInLeads.map(l => l.ownedChannels!.linkedin_group!);
+
+  try {
+    const { items, costUsd: actorCost } = await runActorWithWallClockTimeout("apify~cheerio-scraper", {
+      startUrls: urls.map(u => ({ url: u })),
+      maxRequestsPerCrawl: linkedInLeads.length,
+      maxConcurrency: 5,
+      pageFunction: `async function pageFunction(context) {
+        const { $, request } = context;
+        const title = $('title').text() || '';
+        const description = $('meta[name="description"]').attr('content') || '';
+        const ogDescription = $('meta[property="og:description"]').attr('content') || '';
+        const bodyText = $('body').text().substring(0, 5000) || '';
+        return {
+          url: request.url,
+          title,
+          description,
+          ogDescription,
+          bodyText,
+        };
+      }`,
+    }, 120000);
+    await storage.incrementApifySpend(runId, actorCost);
+
+    let namesFound = 0;
+    let emailsFound = 0;
+    for (const item of items) {
+      const pageUrl = item.url || "";
+      const lead = linkedInLeads.find(l => l.ownedChannels?.linkedin_group && pageUrl.includes(extractLinkedInGroupId(l.ownedChannels.linkedin_group)));
+      if (!lead) continue;
+
+      const fullText = `${item.title || ""} ${item.description || ""} ${item.ogDescription || ""} ${item.bodyText || ""}`;
+
+      if (!lead.leaderName) {
+        const namePatterns = [
+          /(?:admin|administrator|owner|manager|founder|created by|managed by|run by|led by|organized by)\s*[:\-–]?\s*([A-Z][a-z]+ [A-Z][a-z]+(?:\s[A-Z][a-z]+)?)/i,
+          /([A-Z][a-z]+ [A-Z][a-z]+(?:\s[A-Z][a-z]+)?)\s*(?:is the|,\s*(?:admin|founder|owner|manager|organizer|leader))/i,
+          /(?:about|group|community)\s+(?:by|from)\s+([A-Z][a-z]+ [A-Z][a-z]+)/i,
+        ];
+        for (const pattern of namePatterns) {
+          const nameMatch = fullText.match(pattern);
+          if (nameMatch && nameMatch[1] && nameMatch[1].length > 4) {
+            lead.leaderName = nameMatch[1].trim();
+            namesFound++;
+            break;
+          }
+        }
+      }
+
+      if (!lead.email) {
+        const emails = extractEmailsFromText(fullText);
+        if (emails.length > 0) {
+          lead.email = emails[0];
+          emailsFound++;
+        }
+      }
+
+      if (!lead.ownedChannels?.website) {
+        const websiteUrls = extractUrlsFromText(fullText);
+        for (const wu of websiteUrls) {
+          try {
+            const host = new URL(wu).hostname.replace(/^www\./, "");
+            if (!["linkedin.com", "facebook.com", "twitter.com", "x.com", "instagram.com", "youtube.com", "google.com"].some(s => host.includes(s))) {
+              if (!lead.ownedChannels) lead.ownedChannels = {};
+              lead.ownedChannels.website = wu.split("?")[0];
+              break;
+            }
+          } catch {}
+        }
+      }
+
+      if (item.description || item.ogDescription) {
+        const desc = (item.description || item.ogDescription || "").substring(0, 2000);
+        if (desc.length > lead.description.length) {
+          lead.description = desc;
+        }
+      }
+    }
+
+    await appendAndSave(`LinkedIn group page scrape: found ${namesFound} leader names, ${emailsFound} emails from ${items.length} pages`);
+  } catch (err: any) {
+    if (err.costUsd) {
+      await storage.incrementApifySpend(runId, err.costUsd);
+    }
+    await appendAndSave(`[WARN] LinkedIn group page scrape failed: ${err.message}`);
+  }
 }
 
 const GOOGLE_ENRICHMENT_MAX = Infinity;
@@ -3791,9 +4002,9 @@ async function googleBridgeEnrichFacebookGroups(
                 const slugMatch = url.match(/\/in\/([^/?&#]+)/);
                 if (slugMatch) {
                   const slug = slugMatch[1].replace(/-/g, " ").replace(/\d+/g, "").trim();
-                  const parts = slug.split(/\s+/).filter(p => p.length > 1);
+                  const parts = slug.split(/\s+/).filter((p: string) => p.length > 1);
                   if (parts.length >= 2 && parts.length <= 4) {
-                    const name = parts.map(p => p.charAt(0).toUpperCase() + p.slice(1).toLowerCase()).join(" ");
+                    const name = parts.map((p: string) => p.charAt(0).toUpperCase() + p.slice(1).toLowerCase()).join(" ");
                     if (name.length > 4) {
                       lead.leaderName = name;
                       foundAnything = true;
@@ -4616,6 +4827,11 @@ export async function runPipeline(runId: number): Promise<void> {
     }
 
     const enrichGroup1: { name: string; promise: Promise<void> }[] = [];
+
+    const hasLinkedInLeads = allPlatformLeads.some(l => l.source === "linkedin" && !l.leaderName && l.ownedChannels?.linkedin_group);
+    if (hasLinkedInLeads) {
+      enrichGroup1.push({ name: "LinkedIn Group Pages", promise: enrichLinkedInGroupPages(runId, allPlatformLeads, appendAndSave) });
+    }
 
     const hasGroupLeads = allPlatformLeads.some(l => l.source === "facebook" || l.source === "meetup" || l.source === "linkedin");
     if (hasGroupLeads) {
@@ -5736,6 +5952,12 @@ export async function runPipeline(runId: number): Promise<void> {
 
         // --- Enrichment chain on PlatformLead[] before creating DB leads ---
 
+        // Step E0.5: LinkedIn group page scrape for admin names
+        const expLinkedInNoName = newPlatformLeads.filter(l => l.source === "linkedin" && !l.leaderName && l.ownedChannels?.linkedin_group);
+        if (expLinkedInNoName.length > 0 && !(await isBudgetExhausted(runId, 0.05))) {
+          try { await enrichLinkedInGroupPages(runId, newPlatformLeads, appendAndSave); } catch {}
+        }
+
         // Step E1: Google Bridge for Facebook/LinkedIn groups
         const expFbLeads = newPlatformLeads.filter(l => (l.source === "facebook" || l.source === "linkedin") && !l.email && !l.ownedChannels?.website && !l.ownedChannels?.linkedin);
         if (expFbLeads.length > 0 && !(await isBudgetExhausted(runId, 0.10))) {
@@ -6689,6 +6911,11 @@ async function resumeFromCheckpoint(
 
     if (!completedSubs.has("fb_google_bridge")) {
       const enrichGroup1: { name: string; promise: Promise<void> }[] = [];
+
+      const hasLinkedInLeadsAuto = allPlatformLeads.some(l => l.source === "linkedin" && !l.leaderName && l.ownedChannels?.linkedin_group);
+      if (hasLinkedInLeadsAuto) {
+        enrichGroup1.push({ name: "LinkedIn Group Pages", promise: enrichLinkedInGroupPages(runId, allPlatformLeads, appendAndSave) });
+      }
 
       const hasFbOrMeetupLeads = allPlatformLeads.some(l => l.source === "facebook" || l.source === "meetup" || l.source === "linkedin");
       if (hasFbOrMeetupLeads) {
