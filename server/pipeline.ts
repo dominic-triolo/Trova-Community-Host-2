@@ -3252,8 +3252,16 @@ function parseLinkedInMembersFromSnippet(text: string): number {
 }
 
 function extractLinkedInGroupId(url: string): string {
-  const match = url.match(/linkedin\.com\/groups\/(\d+)/);
-  return match ? match[1] : "";
+  const match = url.match(/linkedin\.com\/groups\/([^/?&#]+)/);
+  if (!match) return "";
+  const slug = match[1].replace(/\/$/, "").toLowerCase();
+  const blockedSlugs = new Set([
+    "discover", "you-may-like", "mygroups", "home", "groups-directory",
+    "your-profile", "search", "settings", "create", "requests",
+    "suggested", "browse", "feed", "manage", "invitations",
+  ]);
+  if (!slug || blockedSlugs.has(slug)) return "";
+  return slug;
 }
 
 function cleanLinkedInGroupName(title: string): string {
@@ -3299,15 +3307,19 @@ async function scrapeLinkedInGroups(
       await storage.incrementApifySpend(runId, actorCost);
 
       let filteredOut = 0;
+      let totalOrganic = 0;
+      let linkedinUrlCount = 0;
       for (const item of items) {
         if (leads.length >= maxItems) break;
 
         const organicResults = item.organicResults || [];
+        totalOrganic += organicResults.length;
         for (const result of organicResults) {
           if (leads.length >= maxItems) break;
 
           const rawUrl = result.url || result.link || "";
-          if (!rawUrl.includes("linkedin.com/groups/")) continue;
+          if (!rawUrl.includes("linkedin.com/groups")) continue;
+          linkedinUrlCount++;
 
           const groupId = extractLinkedInGroupId(rawUrl);
           if (!groupId) continue;
@@ -3358,7 +3370,7 @@ async function scrapeLinkedInGroups(
         }
       }
 
-      await appendAndSave(`LinkedIn Groups: found ${leads.length} unique groups so far${filteredOut > 0 ? ` (${filteredOut} filtered by member count)` : ""}`);
+      await appendAndSave(`LinkedIn Groups: ${totalOrganic} Google results, ${linkedinUrlCount} LinkedIn URLs, ${leads.length} unique groups so far${filteredOut > 0 ? ` (${filteredOut} filtered by member count)` : ""}`);
     } catch (err: any) {
       if (err.costUsd) {
         await storage.incrementApifySpend(runId, err.costUsd);
