@@ -326,14 +326,21 @@ function extractObfuscatedEmails(text: string): string[] {
     /([a-zA-Z0-9._%+-]+)\s+at\s+([a-zA-Z0-9.-]+)\s+dot\s+([a-zA-Z]{2,})\b/gi,
     /([a-zA-Z0-9._%+-]+)\s*\[at\]\s*([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/gi,
     /([a-zA-Z0-9._%+-]+)\s*\(at\)\s*([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/gi,
+    /([a-zA-Z0-9._%+-]+)\s*@\s+([a-zA-Z0-9.-]+)\s*\.\s*([a-zA-Z]{2,})/gi,
+    /([a-zA-Z0-9._%+-]+)\s+@\s*([a-zA-Z0-9.-]+)\s*\.\s*([a-zA-Z]{2,})/gi,
+    /([a-zA-Z0-9._%+-]+)\s*\[\s*@\s*\]\s*([a-zA-Z0-9.-]+)\s*\.\s*([a-zA-Z]{2,})/gi,
+    /([a-zA-Z0-9._%+-]+)\s*AT\s*([a-zA-Z0-9.-]+)\s*DOT\s*([a-zA-Z]{2,})/g,
+    /([a-zA-Z0-9._%+-]+)\s*(?:\/at\/|_at_|-at-)\s*([a-zA-Z0-9.-]+)\s*(?:\/dot\/|_dot_|-dot-)\s*([a-zA-Z]{2,})/gi,
   ];
   for (const pattern of patterns) {
     let match;
     while ((match = pattern.exec(text)) !== null) {
       if (match[3]) {
-        results.push(`${match[1]}@${match[2]}.${match[3]}`);
+        const email = `${match[1].trim()}@${match[2].trim()}.${match[3].trim()}`.toLowerCase();
+        if (!isBlockedEmail(email)) results.push(email);
       } else if (match[2]) {
-        results.push(`${match[1]}@${match[2]}`);
+        const email = `${match[1].trim()}@${match[2].trim()}`.toLowerCase();
+        if (!isBlockedEmail(email)) results.push(email);
       }
     }
   }
@@ -458,6 +465,102 @@ interface PlatformLead {
   engagementSignals: Record<string, any>;
   tripFitSignals: Record<string, any>;
   raw: Record<string, any>;
+}
+
+function mergeCrossPlatformLeads(leads: PlatformLead[]): number {
+  let mergedCount = 0;
+  const toRemove = new Set<number>();
+
+  function normalizeForMatch(s: string): string {
+    return s.toLowerCase().replace(/[^a-z0-9]/g, "").trim();
+  }
+
+  function extractSlug(url: string, platform: string): string {
+    try {
+      const u = new URL(url);
+      const path = u.pathname.replace(/\/+$/, "").split("/").filter(Boolean);
+      return path[path.length - 1]?.toLowerCase() || "";
+    } catch { return ""; }
+  }
+
+  for (let i = 0; i < leads.length; i++) {
+    if (toRemove.has(i)) continue;
+    const primary = leads[i];
+
+    for (let j = i + 1; j < leads.length; j++) {
+      if (toRemove.has(j)) continue;
+      const candidate = leads[j];
+      if (primary.source === candidate.source) continue;
+
+      let isMatch = false;
+
+      if (primary.email && candidate.email && primary.email.toLowerCase() === candidate.email.toLowerCase()) {
+        isMatch = true;
+      }
+
+      if (!isMatch && primary.leaderName && candidate.leaderName) {
+        const n1 = normalizeForMatch(primary.leaderName);
+        const n2 = normalizeForMatch(candidate.leaderName);
+        if (n1.length >= 4 && n1 === n2) isMatch = true;
+      }
+
+      if (!isMatch && primary.website && candidate.website) {
+        const d1 = extractDomain(primary.website)?.toLowerCase();
+        const d2 = extractDomain(candidate.website)?.toLowerCase();
+        if (d1 && d2 && d1 === d2) isMatch = true;
+      }
+
+      if (!isMatch) {
+        const channels1 = primary.ownedChannels || {};
+        const channels2 = candidate.ownedChannels || {};
+        for (const platform of ["youtube", "instagram", "twitter", "linkedin", "patreon"]) {
+          const url1 = channels1[platform];
+          const url2 = channels2[platform];
+          if (url1 && url2) {
+            const slug1 = extractSlug(url1, platform);
+            const slug2 = extractSlug(url2, platform);
+            if (slug1 && slug2 && slug1 === slug2) { isMatch = true; break; }
+          }
+        }
+      }
+
+      if (isMatch) {
+        if (!primary.email && candidate.email) primary.email = candidate.email;
+        if (!primary.leaderName && candidate.leaderName) primary.leaderName = candidate.leaderName;
+        if (!primary.website && candidate.website) primary.website = candidate.website;
+        if (!primary.phone && candidate.phone) primary.phone = candidate.phone;
+        if (!primary.location && candidate.location) primary.location = candidate.location;
+        if (!primary.description && candidate.description) primary.description = candidate.description;
+
+        if (candidate.memberCount > (primary.memberCount || 0)) primary.memberCount = candidate.memberCount;
+        if (candidate.subscriberCount > (primary.subscriberCount || 0)) primary.subscriberCount = candidate.subscriberCount;
+
+        const mergedChannels = { ...primary.ownedChannels };
+        for (const [key, val] of Object.entries(candidate.ownedChannels || {})) {
+          if (!mergedChannels[key] && val) mergedChannels[key] = val;
+        }
+        primary.ownedChannels = mergedChannels;
+
+        primary.engagementSignals = { ...candidate.engagementSignals, ...primary.engagementSignals };
+        primary.monetizationSignals = { ...candidate.monetizationSignals, ...primary.monetizationSignals };
+        primary.tripFitSignals = { ...candidate.tripFitSignals, ...primary.tripFitSignals };
+
+        primary.source = `${primary.source}+${candidate.source}`;
+
+        toRemove.add(j);
+        mergedCount++;
+      }
+    }
+  }
+
+  if (toRemove.size > 0) {
+    const indices = Array.from(toRemove).sort((a, b) => b - a);
+    for (const idx of indices) {
+      leads.splice(idx, 1);
+    }
+  }
+
+  return mergedCount;
 }
 
 function expandMeetupKeywords(keywords: string[], geos: string[], maxQueries: number = 100): string[] {
@@ -3039,6 +3142,14 @@ async function enrichFromYouTubeAboutPages(
         } catch {}
       }
 
+      if (!matchLead.leaderName) {
+        const extractedName = extractRealNameFromAbout(pageText, matchLead.communityName || "");
+        if (extractedName) {
+          matchLead.leaderName = extractedName;
+          foundAnything = true;
+        }
+      }
+
       if (foundAnything) enrichedCount++;
     }
 
@@ -3110,6 +3221,16 @@ async function enrichFromInstagramBios(
         foundAnything = true;
       }
 
+      if (!matchLead.ownedChannels?.website) {
+        const bareDomains = extractBareDomainUrls(bio);
+        if (bareDomains.length > 0) {
+          if (!matchLead.ownedChannels) matchLead.ownedChannels = {};
+          matchLead.ownedChannels.website = bareDomains[0];
+          if (!matchLead.website) matchLead.website = bareDomains[0];
+          foundAnything = true;
+        }
+      }
+
       const externalUrl = result.externalUrl || "";
       const externalUrls: Array<{ url?: string }> = result.externalUrls || [];
       const allExternalUrls = [externalUrl, ...externalUrls.map(u => u.url || "")].filter(Boolean);
@@ -3143,7 +3264,7 @@ async function enrichFromInstagramBios(
       const fullName = result.fullName || "";
       if (fullName && !matchLead.leaderName) {
         const words = fullName.trim().split(/\s+/);
-        if (words.length >= 2 && words.every((w: string) => /^[A-Z][a-z]+$/.test(w))) {
+        if (words.length >= 2 && words[0].length > 1 && /^[A-Z]/.test(words[0])) {
           matchLead.leaderName = fullName.trim();
           foundAnything = true;
         }
@@ -3242,6 +3363,16 @@ async function enrichFromTwitterBios(
         foundAnything = true;
       }
 
+      if (!matchLead.ownedChannels?.website) {
+        const bareDomains = extractBareDomainUrls(bio);
+        if (bareDomains.length > 0) {
+          if (!matchLead.ownedChannels) matchLead.ownedChannels = {};
+          matchLead.ownedChannels.website = bareDomains[0];
+          if (!matchLead.website) matchLead.website = bareDomains[0];
+          foundAnything = true;
+        }
+      }
+
       const websiteUrls: string[] = [];
       if (result.entities?.url?.urls) {
         for (const u of result.entities.url.urls) {
@@ -3284,7 +3415,7 @@ async function enrichFromTwitterBios(
       const displayName = result.name || "";
       if (displayName && !matchLead.leaderName) {
         const words = displayName.trim().split(/\s+/);
-        if (words.length >= 2 && words.every((w: string) => /^[A-Z][a-z]+$/.test(w))) {
+        if (words.length >= 2 && words[0].length > 1 && /^[A-Z]/.test(words[0])) {
           matchLead.leaderName = displayName.trim();
           foundAnything = true;
         }
@@ -3365,21 +3496,25 @@ async function crawlCreatorWebsitesForEmails(
     for (const [domain, url] of batch.entries) {
       const baseUrl = url.replace(/\/+$/, "");
       startUrls.push({ url: baseUrl });
-      const subpages = ["/contact", "/about", "/about-us", "/contact-us", "/team"];
+      const subpages = ["/contact", "/about", "/about-us", "/contact-us", "/team", "/staff", "/bio", "/press", "/people", "/our-team", "/meet-the-team", "/leadership"];
       for (const page of subpages) {
         startUrls.push({ url: `${baseUrl}${page}` });
       }
       globs.push({ glob: `https://${domain}/contact*` });
       globs.push({ glob: `https://${domain}/about*` });
+      globs.push({ glob: `https://${domain}/team*` });
+      globs.push({ glob: `https://${domain}/staff*` });
+      globs.push({ glob: `https://${domain}/people*` });
       globs.push({ glob: `https://www.${domain}/contact*` });
       globs.push({ glob: `https://www.${domain}/about*` });
+      globs.push({ glob: `https://www.${domain}/team*` });
     }
 
     try {
       const { items: results, costUsd: actorCost } = await runActorWithWallClockTimeout("apify~cheerio-scraper", {
         startUrls,
         globs,
-        maxCrawlPages: 5 * batch.entries.length,
+        maxCrawlPages: 8 * batch.entries.length,
         maxConcurrency: 5,
         pageFunction: `async function pageFunction(context) {
   const { $, request } = context;
@@ -3539,6 +3674,12 @@ export async function runPipeline(runId: number): Promise<void> {
     }
 
     await markStepComplete(runId, PIPELINE_STEPS.DISCOVERY);
+
+    const mergedCount = mergeCrossPlatformLeads(allPlatformLeads);
+    if (mergedCount > 0) {
+      await appendAndSave(`Cross-platform merge: merged ${mergedCount} duplicate leads, ${allPlatformLeads.length} remaining`);
+    }
+
     await saveCheckpoint(runId, allPlatformLeads, "discovery");
 
     const realNameCount = allPlatformLeads.filter(l => {
@@ -4020,7 +4161,7 @@ export async function runPipeline(runId: number): Promise<void> {
           website: pl.website,
           email: pl.email,
           phone: pl.phone,
-          linkedin: "",
+          linkedin: pl.ownedChannels?.linkedin || "",
           ownedChannels: pl.ownedChannels,
           monetizationSignals: pl.monetizationSignals,
           engagementSignals: pl.engagementSignals,
@@ -4042,6 +4183,7 @@ export async function runPipeline(runId: number): Promise<void> {
           website: pl.website,
           email: pl.email,
           phone: pl.phone,
+          linkedin: pl.ownedChannels?.linkedin || "",
           ownedChannels: pl.ownedChannels,
           monetizationSignals: pl.monetizationSignals,
           engagementSignals: pl.engagementSignals,
