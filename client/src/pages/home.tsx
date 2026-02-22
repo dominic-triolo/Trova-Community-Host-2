@@ -10,7 +10,8 @@ import {
   SUBSTACK_RECOMMENDED_KEYWORDS,
   MEETUP_RECOMMENDED_KEYWORDS,
   MIGHTY_RECOMMENDED_KEYWORDS,
-  LINKEDIN_RECOMMENDED_KEYWORDS,
+  GOOGLE_RECOMMENDED_KEYWORDS,
+
   DEFAULT_RUN_PARAMS,
   AVAILABLE_ENRICHMENTS,
   type RunParams,
@@ -49,7 +50,7 @@ import {
   Network,
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
-import { SiPatreon, SiFacebook, SiApplepodcasts, SiSubstack, SiMeetup, SiLinkedin } from "react-icons/si";
+import { SiPatreon, SiFacebook, SiApplepodcasts, SiSubstack, SiMeetup } from "react-icons/si";
 
 function UsedKeywordsSuggestions({
   usedKeywords,
@@ -105,7 +106,7 @@ export default function Home() {
   const [mode, setMode] = useState<"manual" | "autonomous">("manual");
   const [autoBudget, setAutoBudget] = useState<number | "">(10);
   const [autoEmailTarget, setAutoEmailTarget] = useState<number | "">(50);
-  const [autoEnabledPlatforms, setAutoEnabledPlatforms] = useState<string[]>(["patreon", "facebook", "podcast", "substack", "meetup"]);
+  const [autoEnabledPlatforms, setAutoEnabledPlatforms] = useState<string[]>(["patreon", "facebook", "podcast", "substack", "meetup", "google"]);
   const autoPodcastEnabled = autoEnabledPlatforms.includes("podcast");
   const [autoKeywords, setAutoKeywords] = useState<string[]>([]);
   const [autoCustomKeyword, setAutoCustomKeyword] = useState("");
@@ -249,7 +250,7 @@ export default function Home() {
     setParams((p) => ({ ...p, seedGeos: val.split("\n").filter(Boolean) }));
   };
 
-  const canRun = (platformTab === "patreon" || platformTab === "facebook" || platformTab === "podcast" || platformTab === "substack" || platformTab === "meetup" || platformTab === "mighty" || platformTab === "linkedin") && params.seedKeywords.length > 0;
+  const canRun = (platformTab === "patreon" || platformTab === "facebook" || platformTab === "podcast" || platformTab === "substack" || platformTab === "meetup" || platformTab === "mighty" || platformTab === "google") && params.seedKeywords.length > 0;
 
   const handlePlatformTabChange = (tab: string) => {
     setPlatformTab(tab);
@@ -265,8 +266,8 @@ export default function Home() {
       setParams((p) => ({ ...p, enabledSources: ["meetup"], seedKeywords: [], minMemberCount: 50, maxMemberCount: 0, minPostCount: 0, minEpisodeCount: 0 }));
     } else if (tab === "mighty") {
       setParams((p) => ({ ...p, enabledSources: ["mighty"], seedKeywords: [], minMemberCount: 0, maxMemberCount: 0, minPostCount: 0, minEpisodeCount: 0 }));
-    } else if (tab === "linkedin") {
-      setParams((p) => ({ ...p, enabledSources: ["linkedin"], seedKeywords: [], minMemberCount: 0, maxMemberCount: 0, minPostCount: 0, minEpisodeCount: 0 }));
+    } else if (tab === "google") {
+      setParams((p) => ({ ...p, enabledSources: ["google"], seedKeywords: [], minMemberCount: 0, maxMemberCount: 0, minPostCount: 0, minEpisodeCount: 0 }));
     }
   };
 
@@ -424,7 +425,7 @@ export default function Home() {
                   { id: "substack", label: "Substack", icon: SiSubstack },
                   { id: "meetup", label: "Meetup Groups", icon: SiMeetup },
                   { id: "mighty", label: "Mighty Networks", icon: Network },
-                  { id: "linkedin", label: "LinkedIn Groups", icon: SiLinkedin },
+                  { id: "google", label: "Google Search", icon: Globe },
                 ] as const).map(({ id, label, icon: Icon }) => {
                   const isEnabled = autoEnabledPlatforms.includes(id);
                   const isLastEnabled = isEnabled && autoEnabledPlatforms.length === 1;
@@ -596,9 +597,9 @@ export default function Home() {
               <Network className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">Mighty</span> <span className="sm:hidden">MN</span><span className="hidden sm:inline">Networks</span>
             </TabsTrigger>
-            <TabsTrigger value="linkedin" className="gap-1.5" data-testid="tab-linkedin">
-              <SiLinkedin className="w-3.5 h-3.5" />
-              LinkedIn
+            <TabsTrigger value="google" className="gap-1.5" data-testid="tab-google">
+              <Globe className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Google</span> Search
             </TabsTrigger>
           </TabsList>
 
@@ -1580,12 +1581,14 @@ export default function Home() {
             </Card>
           </TabsContent>
 
-          <TabsContent value="linkedin" className="mt-4 space-y-6">
+          <TabsContent value="google" className="mt-4 space-y-6">
             <Card className="p-4 space-y-4">
               <div className="flex items-center gap-2">
                 <Search className="w-4 h-4 text-muted-foreground" />
                 <Label className="text-sm font-medium">Search Keywords</Label>
               </div>
+
+              <p className="text-xs text-muted-foreground">Search Google for community, club, and group websites. Discovers contact pages, leader info, and emails directly from organization websites.</p>
 
               {params.seedKeywords.length > 0 && (
                 <div className="flex flex-wrap gap-1.5">
@@ -1594,13 +1597,13 @@ export default function Home() {
                       key={kw}
                       variant="secondary"
                       className="gap-1 cursor-pointer select-none"
-                      data-testid={`badge-linkedin-keyword-active-${kw.replace(/\s+/g, "-")}`}
+                      data-testid={`badge-google-keyword-active-${kw.replace(/\s+/g, "-")}`}
                     >
                       {kw}
                       <X
                         className="w-3 h-3"
                         onClick={() => removeKeyword(kw)}
-                        data-testid={`button-linkedin-remove-keyword-${kw.replace(/\s+/g, "-")}`}
+                        data-testid={`button-google-remove-keyword-${kw.replace(/\s+/g, "-")}`}
                       />
                     </Badge>
                   ))}
@@ -1612,7 +1615,7 @@ export default function Home() {
               <div>
                 <p className="text-xs text-muted-foreground mb-2">Click to add recommended searches:</p>
                 <div className="flex flex-wrap gap-1.5">
-                  {LINKEDIN_RECOMMENDED_KEYWORDS.map((rec) => {
+                  {GOOGLE_RECOMMENDED_KEYWORDS.map((rec) => {
                     const isActive = rec.keywords.every((kw) => params.seedKeywords.includes(kw));
                     const isPartial = !isActive && rec.keywords.some((kw) => params.seedKeywords.includes(kw));
                     return (
@@ -1621,7 +1624,7 @@ export default function Home() {
                         variant={isActive ? "default" : "outline"}
                         className={`cursor-pointer select-none toggle-elevate ${isActive ? "toggle-elevated" : ""} ${isPartial ? "border-primary/50" : ""}`}
                         onClick={() => isActive ? removeKeywordGroup(rec.keywords) : addKeywordGroup(rec.keywords)}
-                        data-testid={`badge-linkedin-rec-${rec.label.replace(/\s+/g, "-")}`}
+                        data-testid={`badge-google-rec-${rec.label.replace(/\s+/g, "-")}`}
                       >
                         {rec.label}
                         <span className="text-[10px] opacity-60 ml-0.5">({rec.keywords.length})</span>
@@ -1635,7 +1638,7 @@ export default function Home() {
 
               <form onSubmit={handleCustomKeywordSubmit} className="flex gap-2">
                 <Input
-                  data-testid="input-linkedin-custom-keyword"
+                  data-testid="input-google-custom-keyword"
                   placeholder="Add a custom keyword..."
                   value={customKeyword}
                   onChange={(e) => setCustomKeyword(e.target.value)}
@@ -1646,7 +1649,7 @@ export default function Home() {
                   size="icon"
                   variant="outline"
                   disabled={!customKeyword.trim()}
-                  data-testid="button-linkedin-add-keyword"
+                  data-testid="button-google-add-keyword"
                 >
                   <Plus className="w-4 h-4" />
                 </Button>
@@ -1655,10 +1658,25 @@ export default function Home() {
 
             <Card className="p-4 space-y-4">
               <div className="flex items-center gap-2">
+                <Globe className="w-4 h-4 text-muted-foreground" />
+                <Label className="text-sm font-medium">Geographic Targeting</Label>
+              </div>
+              <p className="text-xs text-muted-foreground">Add locations to find local community organizations. Each keyword will be combined with each location for targeted search.</p>
+              <Textarea
+                data-testid="input-google-geos"
+                placeholder={"Denver, CO\nPortland, OR\nAustin, TX"}
+                value={params.seedGeos.join("\n")}
+                onChange={(e) => updateGeos(e.target.value)}
+                className="text-sm min-h-[80px]"
+              />
+            </Card>
+
+            <Card className="p-4 space-y-4">
+              <div className="flex items-center gap-2">
                 <Mail className="w-4 h-4 text-muted-foreground" />
                 <Label className="text-sm font-medium">Enrichment Methods</Label>
               </div>
-              <p className="text-xs text-muted-foreground">LinkedIn Groups are discovered via Google search. Group admins and organizers are identified through Google Bridge enrichment. Choose additional methods below.</p>
+              <p className="text-xs text-muted-foreground">Google Community Search crawls organization websites for emails, social links, and leader names. Choose additional enrichment methods below.</p>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {AVAILABLE_ENRICHMENTS.map((enr) => {
                   const paramKey = "enableApollo" as const;
@@ -1667,7 +1685,7 @@ export default function Home() {
                     <label
                       key={enr.id}
                       className="flex items-start gap-3 p-2.5 rounded-md cursor-pointer hover-elevate"
-                      data-testid={`linkedin-enrichment-toggle-${enr.id}`}
+                      data-testid={`google-enrichment-toggle-${enr.id}`}
                     >
                       <Checkbox
                         checked={isEnabled}
@@ -1692,7 +1710,7 @@ export default function Home() {
                 <Label className="text-sm font-medium">Settings</Label>
               </div>
               <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">Max Groups to Discover</Label>
+                <Label className="text-xs text-muted-foreground">Max Communities to Discover</Label>
                 <Input
                   type="number"
                   value={params.maxDiscoveredUrls}
@@ -1702,12 +1720,13 @@ export default function Home() {
                     const val = parseInt(e.target.value) || 200;
                     setParams((p) => ({ ...p, maxDiscoveredUrls: Math.min(200, Math.max(1, val)) }));
                   }}
-                  data-testid="input-linkedin-max-urls"
+                  data-testid="input-google-max-urls"
                 />
-                <p className="text-[11px] text-muted-foreground">Maximum 200 groups per run</p>
+                <p className="text-[11px] text-muted-foreground">Maximum 200 communities per run</p>
               </div>
             </Card>
           </TabsContent>
+
 
         </Tabs>
 

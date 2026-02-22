@@ -9,7 +9,7 @@ const ENRICHMENT_EMAIL_ADD_RATE = 0.25;
 const ENRICHMENT_VALID_RATE = 0.55;
 const MIN_LEADS_FOR_LEARNING = 20;
 
-const ACTIVE_PLATFORMS: SourceId[] = ["patreon", "facebook", "podcast", "substack", "meetup", "mighty", "linkedin"];
+const ACTIVE_PLATFORMS: SourceId[] = ["patreon", "facebook", "podcast", "substack", "meetup", "mighty"];
 
 const DEFAULT_VALID_EMAIL_YIELD: Record<string, number> = {};
 for (const p of ACTIVE_PLATFORMS) {

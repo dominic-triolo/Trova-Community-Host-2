@@ -926,8 +926,12 @@ async function scrapeMeetupGroups(
   if (meetupUrls.length > 0) {
     await appendAndSave(`Meetup: scraping ${meetupUrls.length} group pages for organizer info...`);
     try {
-      const aboutUrls = meetupUrls.map(u => u.replace(/\/$/, "") + "/");
-      const cheerioUrls = aboutUrls.map(u => ({ url: u }));
+      const cheerioUrls: { url: string }[] = [];
+      for (const u of meetupUrls) {
+        const base = u.replace(/\/$/, "");
+        cheerioUrls.push({ url: base + "/" });
+        cheerioUrls.push({ url: base + "/members/?op=leaders" });
+      }
       const batchSize = 30;
       for (let b = 0; b < cheerioUrls.length; b += batchSize) {
         const urlBatch = cheerioUrls.slice(b, b + batchSize);
@@ -937,20 +941,50 @@ async function scrapeMeetupGroups(
             pageFunction: `async function pageFunction(context) {
               const { $, request } = context;
               const text = $('body').text() || '';
-              const organizerEl = $('[class*="organizer"], [data-testid*="organizer"], .organizers-list a, .groupHome-organizers a');
-              const organizerName = organizerEl.first().text().trim() || '';
-              const memberEl = $('[class*="member"] span, [data-testid*="member-count"]');
-              const memberText = memberEl.first().text().trim() || '';
-              const description = $('meta[name="description"]').attr('content') || $('meta[property="og:description"]').attr('content') || '';
-              const links = [];
+              var organizerName = '';
+              var selectors = [
+                '[class*="organizer"]', '[data-testid*="organizer"]',
+                '.organizers-list a', '.groupHome-organizers a',
+                '[class*="Organizer"] a', '[class*="organizer"] a',
+                '[data-testid="group-organizer-name"]',
+                '[class*="hostInfo"] a', '[data-testid*="host"]',
+                'a[href*="/members/"][class*="name"]',
+                '[class*="GroupLeader"] a', '[class*="groupLeader"] a',
+              ];
+              for (var s = 0; s < selectors.length; s++) {
+                var el = $(selectors[s]).first();
+                var n = el.text().trim();
+                if (n && n.length > 2 && n.length < 60 && n.indexOf('\\n') === -1 && /[A-Z]/.test(n.charAt(0))) {
+                  organizerName = n.replace(/\\s+/g, ' ').trim();
+                  break;
+                }
+              }
+              if (!organizerName) {
+                var orgPatterns = [/[Oo]rganized\\s+by\\s+([A-Z][a-z]+(?:\\s+[A-Z][a-z]+){0,2})/, /[Hh]osted\\s+by\\s+([A-Z][a-z]+(?:\\s+[A-Z][a-z]+){0,2})/, /[Ll]ed\\s+by\\s+([A-Z][a-z]+(?:\\s+[A-Z][a-z]+){0,2})/, /[Ff]ounded\\s+by\\s+([A-Z][a-z]+(?:\\s+[A-Z][a-z]+){0,2})/];
+                for (var p = 0; p < orgPatterns.length; p++) {
+                  var m = text.match(orgPatterns[p]);
+                  if (m && m[1] && m[1].length > 3) { organizerName = m[1].trim(); break; }
+                }
+              }
+              var memberEl = $('[class*="member"] span, [data-testid*="member-count"], [class*="Members"] span, [class*="groupMembers"]');
+              var memberText = memberEl.first().text().trim() || '';
+              if (!memberText) {
+                var memMatch = text.match(/(\\d[\\d,]+)\\s*members/i);
+                if (memMatch) memberText = memMatch[1];
+              }
+              var description = $('meta[name="description"]').attr('content') || $('meta[property="og:description"]').attr('content') || '';
+              var links = [];
               $('a[href]').each(function() {
-                const href = $(this).attr('href') || '';
+                var href = $(this).attr('href') || '';
                 if (href.includes('linkedin.com') || href.includes('instagram.com') || href.includes('facebook.com') || href.includes('twitter.com') || href.includes('youtube.com') || href.includes('linktr.ee') || href.includes('beacons.ai')) {
                   links.push(href);
                 }
               });
-              const emails = text.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}/g) || [];
-              return { url: request.url, organizerName, memberText, description, links, emails: emails.slice(0, 5) };
+              var mailtos = [];
+              $('a[href^="mailto:"]').each(function() { var h = $(this).attr('href'); if (h) mailtos.push(h.replace('mailto:', '').split('?')[0].trim()); });
+              var emails = text.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}/g) || [];
+              var allEmails = mailtos.concat(emails);
+              return { url: request.url, organizerName: organizerName, memberText: memberText, description: description, links: links, emails: allEmails.slice(0, 10) };
             }`,
             maxRequestsPerCrawl: urlBatch.length,
             maxConcurrency: 30,
@@ -1855,6 +1889,20 @@ async function scrapeFacebookGroups(
 
           const descEmails = extractEmailsFromText(snippet);
 
+          let fbLeaderName = "";
+          const fbNamePatterns = [
+            /(?:admin|administrator|owner|manager|founder|created by|managed by|run by|led by|organized by|hosted by)\s*[:\-–]?\s*([A-Z][a-z]+\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/i,
+            /([A-Z][a-z]+\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s*(?:is the|,\s*(?:admin|founder|owner|manager|organizer|leader|host))/i,
+            /(?:by|from)\s+([A-Z][a-z]+\s+[A-Z][a-z]+)\s/,
+          ];
+          for (const pattern of fbNamePatterns) {
+            const fbNameMatch = fullText.match(pattern);
+            if (fbNameMatch && fbNameMatch[1] && fbNameMatch[1].length > 4 && fbNameMatch[1].length < 40) {
+              fbLeaderName = fbNameMatch[1].trim();
+              break;
+            }
+          }
+
           leads.push({
             source: "facebook",
             communityName: groupName,
@@ -1864,7 +1912,7 @@ async function scrapeFacebookGroups(
             website: channels.website || url,
             email: descEmails[0] || "",
             phone: "",
-            leaderName: "",
+            leaderName: fbLeaderName,
             memberCount,
             subscriberCount: 0,
             ownedChannels: channels,
@@ -1890,6 +1938,245 @@ async function scrapeFacebookGroups(
   }
 
   await appendAndSave(`Facebook discovery complete: ${leads.length} groups from ${googleQueries.length} queries`);
+  return leads;
+}
+
+async function scrapeGoogleCommunitySearch(
+  runId: number,
+  keywords: string[],
+  geos: string[],
+  maxItems: number,
+  appendAndSave: (msg: string) => Promise<void>,
+): Promise<PlatformLead[]> {
+  const leads: PlatformLead[] = [];
+  const seenDomains = new Set<string>();
+  const socialHosts = ["youtube.com", "youtu.be", "instagram.com", "twitter.com", "x.com", "discord.gg", "discord.com", "facebook.com", "tiktok.com", "twitch.tv", "linkedin.com", "patreon.com", "google.com", "apple.com", "spotify.com", "amazon.com", "reddit.com", "tumblr.com", "pinterest.com", "github.com", "medium.com", "wordpress.com", "linktr.ee", "beacons.ai", "ko-fi.com", "buymeacoffee.com", "gumroad.com", "substack.com", "bit.ly", "meetup.com", "eventbrite.com", "yelp.com", "tripadvisor.com", "wikipedia.org", "wix.com", "squarespace.com"];
+
+  const queryTemplates = [
+    (kw: string, geo: string) => `"${kw}" ${geo ? `"${geo}" ` : ""}club OR group OR community website contact email`,
+    (kw: string, geo: string) => `"${kw}" ${geo ? `"${geo}" ` : ""}organization OR association OR society contact "about us"`,
+    (kw: string, geo: string) => `"${kw}" ${geo ? `"${geo}" ` : ""}community leader OR founder OR organizer email`,
+    (kw: string, geo: string) => `"${kw}" ${geo ? `"${geo}" ` : ""}"join us" OR "become a member" club contact`,
+  ];
+
+  const googleQueries: string[] = [];
+  for (const kw of keywords) {
+    if (geos.length > 0) {
+      for (const geo of geos) {
+        for (const tmpl of queryTemplates) {
+          googleQueries.push(tmpl(kw, geo));
+        }
+      }
+    } else {
+      for (const tmpl of queryTemplates) {
+        googleQueries.push(tmpl(kw, ""));
+      }
+    }
+  }
+
+  await appendAndSave(`Google Community Search: expanded ${keywords.length} keyword(s) into ${googleQueries.length} queries (target: ${maxItems} leads)`);
+  const batchSize = 10;
+
+  for (let i = 0; i < googleQueries.length; i += batchSize) {
+    if (leads.length >= maxItems) break;
+    const batch = googleQueries.slice(i, i + batchSize);
+
+    try {
+      await appendAndSave(`Google Community Search: batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(googleQueries.length / batchSize)} (${leads.length}/${maxItems} found so far)...`);
+      const { items, costUsd: actorCost } = await runActorAndGetResults("apify~google-search-scraper", {
+        queries: batch.join("\n"),
+        maxPagesPerQuery: 2,
+        resultsPerPage: 10,
+        countryCode: "us",
+        languageCode: "en",
+        mobileResults: false,
+      }, 120000);
+      await storage.incrementApifySpend(runId, actorCost);
+
+      for (const item of items) {
+        if (leads.length >= maxItems) break;
+        const organicResults = item.organicResults || [];
+
+        for (const result of organicResults) {
+          if (leads.length >= maxItems) break;
+
+          const rawUrl = result.url || result.link || "";
+          if (!rawUrl) continue;
+          const domain = extractDomain(rawUrl);
+          if (!domain) continue;
+          if (socialHosts.some(s => domain.includes(s))) continue;
+          if (seenDomains.has(domain)) continue;
+          seenDomains.add(domain);
+
+          const title = result.title || "";
+          const snippet = result.description || result.snippet || "";
+          const fullText = `${title} ${snippet}`;
+
+          const communityName = title
+            .replace(/\s*[-–—|]\s*(?:Home|About|Contact|Welcome).*$/i, "")
+            .replace(/\s*[-–—|].*$/, "")
+            .trim();
+
+          if (!communityName || communityName.length < 3) continue;
+
+          const descEmails = extractEmailsFromText(snippet);
+          const descUrls = extractUrlsFromText(snippet);
+          const socialFromDesc = extractSocialChannelsFromUrls(descUrls);
+          const channels: Record<string, string> = { website: rawUrl.split("?")[0], ...socialFromDesc };
+
+          let leaderName = "";
+          const namePatterns = [
+            /(?:founded by|organized by|led by|created by|managed by|run by|hosted by)\s*[:\-–]?\s*([A-Z][a-z]+\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/i,
+            /([A-Z][a-z]+\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s*(?:is the|,\s*(?:founder|owner|president|director|leader|organizer))/i,
+          ];
+          for (const pattern of namePatterns) {
+            const nameMatch = fullText.match(pattern);
+            if (nameMatch && nameMatch[1] && nameMatch[1].length > 4 && nameMatch[1].length < 40) {
+              leaderName = nameMatch[1].trim();
+              break;
+            }
+          }
+
+          leads.push({
+            source: "google",
+            communityName,
+            communityType: detectCommunityType(fullText),
+            description: snippet.substring(0, 2000),
+            location: "",
+            website: rawUrl.split("?")[0],
+            email: descEmails[0] || "",
+            phone: "",
+            leaderName,
+            memberCount: 0,
+            subscriberCount: 0,
+            ownedChannels: channels,
+            monetizationSignals: detectMonetization(snippet),
+            engagementSignals: detectEngagement(snippet),
+            tripFitSignals: detectTripFit(fullText),
+            raw: result,
+          });
+        }
+      }
+
+      await appendAndSave(`Google Community Search: found ${leads.length} unique community websites so far`);
+    } catch (err: any) {
+      if (err.costUsd) {
+        await storage.incrementApifySpend(runId, err.costUsd);
+      }
+      await appendAndSave(`[WARN] Google Community Search batch failed: ${err.message}`);
+    }
+  }
+
+  if (leads.length > 0) {
+    await appendAndSave(`Google Community Search: crawling ${leads.length} websites for contact info...`);
+    try {
+      const startUrls: { url: string }[] = [];
+      const globs: { glob: string }[] = [];
+      for (const lead of leads) {
+        const baseUrl = (lead.website || "").replace(/\/+$/, "");
+        if (!baseUrl) continue;
+        startUrls.push({ url: baseUrl });
+        const subpages = ["/contact", "/about", "/about-us", "/contact-us", "/team", "/staff", "/leadership", "/board", "/connect", "/our-team", "/who-we-are"];
+        for (const page of subpages) {
+          startUrls.push({ url: `${baseUrl}${page}` });
+        }
+        const domain = extractDomain(baseUrl);
+        if (domain) {
+          for (const pat of ["contact", "about", "team", "board", "leadership", "staff"]) {
+            globs.push({ glob: `https://${domain}/${pat}*` });
+            globs.push({ glob: `https://www.${domain}/${pat}*` });
+          }
+        }
+      }
+
+      const { items: crawlResults, costUsd: crawlCost } = await runActorWithWallClockTimeout("apify~cheerio-scraper", {
+        startUrls: startUrls.slice(0, 500),
+        globs,
+        maxCrawlPages: Math.min(leads.length * 8, 500),
+        maxConcurrency: 10,
+        pageFunction: `async function pageFunction(context) {
+  const { $, request } = context;
+  var mailtos = [];
+  $('a[href^="mailto:"]').each(function() { var h = $(this).attr('href'); if (h) mailtos.push(h.replace('mailto:', '').split('?')[0].trim()); });
+  var footer = $('footer').text() || '';
+  var header = $('header').text() || '';
+  var bodyText = $('body').text();
+  var text = footer + ' ' + header + ' ' + bodyText;
+  var links = [];
+  $('a[href]').each(function() { var href = $(this).attr('href') || ''; if (href.includes('linkedin.com') || href.includes('instagram.com') || href.includes('facebook.com') || href.includes('twitter.com') || href.includes('youtube.com')) links.push(href); });
+  return { url: request.url, text: text.substring(0, 8000), mailtos: mailtos, links: links.slice(0, 50) };
+}`,
+      }, 300000);
+      await storage.incrementApifySpend(runId, crawlCost);
+
+      const personalDomains = ["gmail.com", "yahoo.com", "hotmail.com", "outlook.com", "aol.com", "icloud.com", "me.com", "protonmail.com", "proton.me", "live.com"];
+
+      for (const page of crawlResults) {
+        const pageUrl = page.url || "";
+        const pageDomain = extractDomain(pageUrl);
+        if (!pageDomain) continue;
+
+        const lead = leads.find(l => {
+          const leadDomain = extractDomain(l.website || "");
+          return leadDomain && (leadDomain === pageDomain || pageDomain.endsWith("." + leadDomain) || leadDomain.endsWith("." + pageDomain));
+        });
+        if (!lead || lead.email) continue;
+
+        const mailtoEmails: string[] = (page.mailtos || []).filter((e: string) => e && e.includes("@") && !isBlockedEmail(e));
+        const textEmails = extractEmailsFromText(page.text || "");
+        const allEmails = [...new Set([...mailtoEmails, ...textEmails])];
+
+        const validEmail = allEmails.find(e => {
+          if (isBlockedEmail(e)) return false;
+          const emailDomain = e.split("@")[1]?.toLowerCase();
+          if (!emailDomain) return false;
+          const siteBase = pageDomain.toLowerCase().replace(/^www\./, "");
+          const emailBase = emailDomain.replace(/^www\./, "");
+          return emailBase === siteBase || emailBase.endsWith("." + siteBase) || siteBase.endsWith("." + emailBase);
+        }) || allEmails.find(e => {
+          if (isBlockedEmail(e)) return false;
+          const emailDomain = e.split("@")[1]?.toLowerCase();
+          return emailDomain && personalDomains.includes(emailDomain);
+        }) || (mailtoEmails.length > 0 ? mailtoEmails[0] : undefined);
+
+        if (validEmail) lead.email = validEmail;
+
+        if (page.links) {
+          for (const link of page.links) {
+            const linkLower = (link || "").toLowerCase();
+            if (linkLower.includes("linkedin.com/in/") && !lead.ownedChannels?.linkedin) lead.ownedChannels.linkedin = link;
+            else if (linkLower.includes("instagram.com") && !lead.ownedChannels?.instagram) lead.ownedChannels.instagram = link;
+            else if (linkLower.includes("facebook.com") && !lead.ownedChannels?.facebook) lead.ownedChannels.facebook = link;
+            else if ((linkLower.includes("twitter.com") || linkLower.includes("x.com")) && !lead.ownedChannels?.twitter) lead.ownedChannels.twitter = link;
+            else if (linkLower.includes("youtube.com") && !lead.ownedChannels?.youtube) lead.ownedChannels.youtube = link;
+          }
+        }
+
+        if (!lead.leaderName && page.text) {
+          const namePatterns = [
+            /(?:founded by|organized by|led by|created by|managed by|run by|hosted by|president|director|chairman)\s*[:\-–]?\s*([A-Z][a-z]+\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/i,
+            /([A-Z][a-z]+\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s*(?:is the|,\s*(?:founder|president|director|chairman|organizer|leader))/i,
+          ];
+          for (const pattern of namePatterns) {
+            const nameMatch = (page.text || "").match(pattern);
+            if (nameMatch && nameMatch[1] && nameMatch[1].length > 4 && nameMatch[1].length < 40) {
+              lead.leaderName = nameMatch[1].trim();
+              break;
+            }
+          }
+        }
+      }
+
+      const withEmail = leads.filter(l => l.email).length;
+      const withName = leads.filter(l => l.leaderName).length;
+      await appendAndSave(`Google Community Search: after crawl — ${withEmail}/${leads.length} with email, ${withName}/${leads.length} with leader name`);
+    } catch (err: any) {
+      if (err.costUsd) await storage.incrementApifySpend(runId, err.costUsd);
+      await appendAndSave(`[WARN] Google Community Search website crawl failed: ${err.message}`);
+    }
+  }
+
+  await appendAndSave(`Google Community Search complete: ${leads.length} community websites found`);
   return leads;
 }
 
@@ -4098,13 +4385,13 @@ async function googleBridgeEnrichFacebookGroups(
   leads: PlatformLead[],
   appendAndSave: (msg: string) => Promise<void>,
 ): Promise<void> {
-  const groupLeads = leads.filter(l => (l.source === "facebook" || l.source === "meetup" || l.source === "linkedin") && !l.email && !l.ownedChannels?.website && !l.ownedChannels?.linkedin);
+  const groupLeads = leads.filter(l => (l.source === "facebook" || l.source === "meetup") && !l.email && !l.ownedChannels?.website && !l.ownedChannels?.linkedin);
   if (groupLeads.length === 0) {
-    await appendAndSave("Google Bridge: all Facebook/Meetup/LinkedIn leads already have website/LinkedIn or email");
+    await appendAndSave("Google Bridge: all Facebook/Meetup leads already have website/LinkedIn or email");
     return;
   }
 
-  await appendAndSave(`Google Bridge: searching for leaders/orgs behind ${groupLeads.length} Facebook/Meetup/LinkedIn groups...`);
+  await appendAndSave(`Google Bridge: searching for leaders/orgs behind ${groupLeads.length} Facebook/Meetup groups...`);
 
   const queries: { term: string; leadIdx: number }[] = [];
   for (const l of groupLeads) {
@@ -4118,18 +4405,6 @@ async function googleBridgeEnrichFacebookGroups(
       queries.push({ term: `"${l.leaderName}" "${groupName}" linkedin OR email`, leadIdx: idx });
     } else {
       queries.push({ term: `"${groupName}" organizer OR founder OR leader linkedin`, leadIdx: idx });
-    }
-
-    if (l.source === "linkedin") {
-      queries.push({ term: `"${groupName}" admin OR owner OR manager linkedin`, leadIdx: idx });
-      queries.push({ term: `"${groupName}" president OR director OR chairman contact`, leadIdx: idx });
-      queries.push({ term: `site:linkedin.com/in/ "${groupName}"`, leadIdx: idx });
-      if (!l.leaderName) {
-        const shortName = groupName.replace(/\s*(linkedin|group|network|association|community|club)\s*/gi, " ").trim();
-        if (shortName.length > 3 && shortName !== groupName) {
-          queries.push({ term: `"${shortName}" founder OR president OR executive director email`, leadIdx: idx });
-        }
-      }
     }
   }
 
@@ -4872,30 +5147,32 @@ async function crawlCreatorWebsitesForEmails(
     for (const [domain, url] of batch.entries) {
       const baseUrl = url.replace(/\/+$/, "");
       startUrls.push({ url: baseUrl });
-      const subpages = ["/contact", "/about", "/about-us", "/contact-us", "/team", "/staff", "/bio", "/press", "/people", "/our-team", "/meet-the-team", "/leadership"];
+      const subpages = ["/contact", "/about", "/about-us", "/contact-us", "/team", "/staff", "/bio", "/press", "/people", "/our-team", "/meet-the-team", "/leadership", "/board", "/board-of-directors", "/officers", "/connect", "/get-in-touch", "/reach-out", "/organizers", "/hosts", "/founders", "/who-we-are", "/our-story", "/info", "/support"];
       for (const page of subpages) {
         startUrls.push({ url: `${baseUrl}${page}` });
       }
-      globs.push({ glob: `https://${domain}/contact*` });
-      globs.push({ glob: `https://${domain}/about*` });
-      globs.push({ glob: `https://${domain}/team*` });
-      globs.push({ glob: `https://${domain}/staff*` });
-      globs.push({ glob: `https://${domain}/people*` });
-      globs.push({ glob: `https://www.${domain}/contact*` });
-      globs.push({ glob: `https://www.${domain}/about*` });
-      globs.push({ glob: `https://www.${domain}/team*` });
+      const globPatterns = ["contact", "about", "team", "staff", "people", "board", "leadership", "connect", "organizer", "host", "founder", "info", "support", "who-we-are"];
+      for (const pat of globPatterns) {
+        globs.push({ glob: `https://${domain}/${pat}*` });
+        globs.push({ glob: `https://www.${domain}/${pat}*` });
+      }
     }
 
     try {
       const { items: results, costUsd: actorCost } = await runActorWithWallClockTimeout("apify~cheerio-scraper", {
         startUrls,
         globs,
-        maxCrawlPages: 8 * batch.entries.length,
+        maxCrawlPages: 12 * batch.entries.length,
         maxConcurrency: 6,
         pageFunction: `async function pageFunction(context) {
   const { $, request } = context;
-  const text = $('body').text();
-  return { url: request.url, text: text.substring(0, 5000) };
+  const mailtos = [];
+  $('a[href^="mailto:"]').each(function() { const h = $(this).attr('href'); if (h) mailtos.push(h.replace('mailto:', '').split('?')[0].trim()); });
+  const footer = $('footer').text() || '';
+  const header = $('header').text() || '';
+  const bodyText = $('body').text();
+  const text = footer + ' ' + header + ' ' + bodyText;
+  return { url: request.url, text: text.substring(0, 8000), mailtos: mailtos };
 }`,
       }, 300000);
       await storage.incrementApifySpend(runId, actorCost);
@@ -4908,8 +5185,13 @@ async function crawlCreatorWebsitesForEmails(
         const pageDomain = extractDomain(pageUrl);
         if (!pageDomain || emailMap.has(pageDomain)) continue;
 
-        const emails = extractEmailsFromText(pageText);
-        const validEmail = emails.find((e) => {
+        const mailtoEmails: string[] = (result.mailtos || []).filter((e: string) => e && e.includes("@") && !isBlockedEmail(e));
+        const textEmails = extractEmailsFromText(pageText);
+        const allEmails = [...new Set([...mailtoEmails, ...textEmails])];
+
+        const personalDomains = ["gmail.com", "yahoo.com", "hotmail.com", "outlook.com", "aol.com", "icloud.com", "me.com", "protonmail.com", "proton.me", "live.com", "msn.com", "mail.com", "zoho.com", "ymail.com", "gmx.com"];
+
+        const domainMatchEmail = allEmails.find((e) => {
           if (isBlockedEmail(e)) return false;
           const emailDomain = e.split("@")[1]?.toLowerCase();
           if (!emailDomain) return false;
@@ -4921,8 +5203,24 @@ async function crawlCreatorWebsitesForEmails(
           if (siteWords.length >= 4 && emailWords.length >= 4 && (siteWords.includes(emailWords) || emailWords.includes(siteWords))) return true;
           return false;
         });
-        if (validEmail) {
-          emailMap.set(pageDomain, validEmail);
+
+        if (domainMatchEmail) {
+          emailMap.set(pageDomain, domainMatchEmail);
+          continue;
+        }
+
+        const personalEmail = allEmails.find((e) => {
+          if (isBlockedEmail(e)) return false;
+          const emailDomain = e.split("@")[1]?.toLowerCase();
+          return emailDomain && personalDomains.includes(emailDomain);
+        });
+        if (personalEmail) {
+          emailMap.set(pageDomain, personalEmail);
+          continue;
+        }
+
+        if (mailtoEmails.length > 0) {
+          emailMap.set(pageDomain, mailtoEmails[0]);
         }
       }
 
@@ -5034,12 +5332,8 @@ export async function runPipeline(runId: number): Promise<void> {
     if (enabledSources.includes("mighty")) {
       platformTasks.push({ name: "Mighty Networks", promise: scrapeMightyNetworks(runId, keywords, getMaxForPlatform("mighty"), (msg) => appendAndSave(msg), params.seedGeos || []) });
     }
-    if (enabledSources.includes("linkedin")) {
-      platformTasks.push({ name: "LinkedIn Groups", promise: scrapeLinkedInGroups(runId, keywords, getMaxForPlatform("linkedin"), (msg) => appendAndSave(msg), {
-        minMemberCount: params.minMemberCount || 0,
-        maxMemberCount: params.maxMemberCount || 0,
-        geos,
-      }) });
+    if (enabledSources.includes("google")) {
+      platformTasks.push({ name: "Google Community Search", promise: scrapeGoogleCommunitySearch(runId, keywords, geos, getMaxForPlatform("google"), (msg) => appendAndSave(msg)) });
     }
 
     if (platformTasks.length === 0) {
@@ -5078,16 +5372,11 @@ export async function runPipeline(runId: number): Promise<void> {
 
     const enrichGroup1: { name: string; promise: Promise<void> }[] = [];
 
-    const hasLinkedInLeads = allPlatformLeads.some(l => l.source === "linkedin" && !l.leaderName && l.ownedChannels?.linkedin_group);
-    if (hasLinkedInLeads) {
-      enrichGroup1.push({ name: "LinkedIn Group Pages", promise: enrichLinkedInGroupPages(runId, allPlatformLeads, appendAndSave) });
-    }
-
-    const hasGroupLeads = allPlatformLeads.some(l => l.source === "facebook" || l.source === "meetup" || l.source === "linkedin");
+    const hasGroupLeads = allPlatformLeads.some(l => l.source === "facebook" || l.source === "meetup");
     if (hasGroupLeads) {
-      const groupLeadsNeedingEnrich = allPlatformLeads.filter(l => (l.source === "facebook" || l.source === "meetup" || l.source === "linkedin") && !l.email && !l.ownedChannels?.website && !l.ownedChannels?.linkedin);
+      const groupLeadsNeedingEnrich = allPlatformLeads.filter(l => (l.source === "facebook" || l.source === "meetup") && !l.email && !l.ownedChannels?.website && !l.ownedChannels?.linkedin);
       if (groupLeadsNeedingEnrich.length > 0) {
-        await appendAndSave(`Google Bridge: ${groupLeadsNeedingEnrich.length} Facebook/Meetup/LinkedIn groups need leader/org lookup`, 29, "Step 1b: Parallel enrichment group 1");
+        await appendAndSave(`Google Bridge: ${groupLeadsNeedingEnrich.length} Facebook/Meetup groups need leader/org lookup`, 29, "Step 1b: Parallel enrichment group 1");
         enrichGroup1.push({ name: "Google Bridge", promise: googleBridgeEnrichFacebookGroups(runId, allPlatformLeads, appendAndSave) });
       }
     }
@@ -5261,7 +5550,6 @@ export async function runPipeline(runId: number): Promise<void> {
     if (enabledSources.includes("facebook")) skipDomains.push("facebook.com");
     if (enabledSources.includes("patreon")) skipDomains.push("patreon.com");
     if (enabledSources.includes("mighty")) skipDomains.push("mn.co", "mightynetworks.com");
-    if (enabledSources.includes("linkedin")) skipDomains.push("linkedin.com");
 
     const batchSize = 20;
     const queryBatches = [];
@@ -6172,13 +6460,9 @@ export async function runPipeline(runId: number): Promise<void> {
               await appendAndSave(`Expansion: deeper Mighty Networks search (${uniqueExpKws.length} queries)...`);
               const results = await scrapeMightyNetworks(runId, uniqueExpKws, maxExpLeads, (msg) => appendAndSave(msg), geos);
               newPlatformLeads.push(...results);
-            } else if (platform === "linkedin") {
-              await appendAndSave(`Expansion: deeper LinkedIn Groups search (${uniqueExpKws.length} queries)...`);
-              const results = await scrapeLinkedInGroups(runId, uniqueExpKws, maxExpLeads, (msg) => appendAndSave(msg), {
-                minMemberCount: params.minMemberCount || 0,
-                maxMemberCount: params.maxMemberCount || 0,
-                geos,
-              });
+            } else if (platform === "google") {
+              await appendAndSave(`Expansion: deeper Google Community Search (${uniqueExpKws.length} queries)...`);
+              const results = await scrapeGoogleCommunitySearch(runId, uniqueExpKws, geos, maxExpLeads, (msg) => appendAndSave(msg));
               newPlatformLeads.push(...results);
             } else if (platform === "podcast" && run.podcastEnabled !== false) {
               await appendAndSave(`Expansion: deeper podcast search (${uniqueExpKws.length} queries)...`);
@@ -6202,16 +6486,10 @@ export async function runPipeline(runId: number): Promise<void> {
 
         // --- Enrichment chain on PlatformLead[] before creating DB leads ---
 
-        // Step E0.5: LinkedIn group page scrape for admin names
-        const expLinkedInNoName = newPlatformLeads.filter(l => l.source === "linkedin" && !l.leaderName && l.ownedChannels?.linkedin_group);
-        if (expLinkedInNoName.length > 0 && !(await isBudgetExhausted(runId, 0.05))) {
-          try { await enrichLinkedInGroupPages(runId, newPlatformLeads, appendAndSave); } catch {}
-        }
-
-        // Step E1: Google Bridge for Facebook/LinkedIn groups
-        const expFbLeads = newPlatformLeads.filter(l => (l.source === "facebook" || l.source === "linkedin") && !l.email && !l.ownedChannels?.website && !l.ownedChannels?.linkedin);
+        // Step E1: Google Bridge for Facebook groups
+        const expFbLeads = newPlatformLeads.filter(l => l.source === "facebook" && !l.email && !l.ownedChannels?.website && !l.ownedChannels?.linkedin);
         if (expFbLeads.length > 0 && !(await isBudgetExhausted(runId, 0.10))) {
-          await appendAndSave(`Expansion: Google Bridge for ${expFbLeads.length} Facebook/LinkedIn groups...`);
+          await appendAndSave(`Expansion: Google Bridge for ${expFbLeads.length} Facebook groups...`);
           try {
             await googleBridgeEnrichFacebookGroups(runId, newPlatformLeads, appendAndSave);
           } catch (err: any) {
@@ -7162,16 +7440,11 @@ async function resumeFromCheckpoint(
     if (!completedSubs.has("fb_google_bridge")) {
       const enrichGroup1: { name: string; promise: Promise<void> }[] = [];
 
-      const hasLinkedInLeadsAuto = allPlatformLeads.some(l => l.source === "linkedin" && !l.leaderName && l.ownedChannels?.linkedin_group);
-      if (hasLinkedInLeadsAuto) {
-        enrichGroup1.push({ name: "LinkedIn Group Pages", promise: enrichLinkedInGroupPages(runId, allPlatformLeads, appendAndSave) });
-      }
-
-      const hasFbOrMeetupLeads = allPlatformLeads.some(l => l.source === "facebook" || l.source === "meetup" || l.source === "linkedin");
+      const hasFbOrMeetupLeads = allPlatformLeads.some(l => l.source === "facebook" || l.source === "meetup");
       if (hasFbOrMeetupLeads) {
-        const groupLeadsNeedingEnrich = allPlatformLeads.filter(l => (l.source === "facebook" || l.source === "meetup" || l.source === "linkedin") && !l.email && !l.ownedChannels?.website && !l.ownedChannels?.linkedin);
+        const groupLeadsNeedingEnrich = allPlatformLeads.filter(l => (l.source === "facebook" || l.source === "meetup") && !l.email && !l.ownedChannels?.website && !l.ownedChannels?.linkedin);
         if (groupLeadsNeedingEnrich.length > 0) {
-          await appendAndSave(`Resume: Google Bridge for ${groupLeadsNeedingEnrich.length} Facebook/Meetup/LinkedIn groups`, 32, "Resume: Google Bridge + Link Aggregators");
+          await appendAndSave(`Resume: Google Bridge for ${groupLeadsNeedingEnrich.length} Facebook/Meetup groups`, 32, "Resume: Google Bridge + Link Aggregators");
           enrichGroup1.push({ name: "Google Bridge", promise: googleBridgeEnrichFacebookGroups(runId, allPlatformLeads, appendAndSave) });
         }
       }
@@ -7739,13 +8012,9 @@ async function resumeFromCheckpoint(
               await appendAndSave(`Resume expansion: deeper Mighty Networks search (${uniqueExpKws.length} queries)...`);
               const results = await scrapeMightyNetworks(runId, uniqueExpKws, maxExpLeads, (msg) => appendAndSave(msg), resumeGeos);
               newPlatformLeads.push(...results);
-            } else if (platform === "linkedin") {
-              await appendAndSave(`Resume expansion: deeper LinkedIn Groups search (${uniqueExpKws.length} queries)...`);
-              const results = await scrapeLinkedInGroups(runId, uniqueExpKws, maxExpLeads, (msg) => appendAndSave(msg), {
-                minMemberCount: params.minMemberCount || 0,
-                maxMemberCount: params.maxMemberCount || 0,
-                geos: resumeGeos,
-              });
+            } else if (platform === "google") {
+              await appendAndSave(`Resume expansion: deeper Google Community Search (${uniqueExpKws.length} queries)...`);
+              const results = await scrapeGoogleCommunitySearch(runId, uniqueExpKws, resumeGeos, maxExpLeads, (msg) => appendAndSave(msg));
               newPlatformLeads.push(...results);
             } else if (platform === "podcast" && run2?.podcastEnabled !== false) {
               await appendAndSave(`Resume expansion: deeper podcast search (${uniqueExpKws.length} queries)...`);
@@ -7767,7 +8036,7 @@ async function resumeFromCheckpoint(
           break;
         }
 
-        const expFbLeads2 = newPlatformLeads.filter(l => (l.source === "facebook" || l.source === "linkedin") && !l.email && !l.ownedChannels?.website && !l.ownedChannels?.linkedin);
+        const expFbLeads2 = newPlatformLeads.filter(l => l.source === "facebook" && !l.email && !l.ownedChannels?.website && !l.ownedChannels?.linkedin);
         if (expFbLeads2.length > 0 && !(await isBudgetExhausted(runId, 0.10))) {
           try { await googleBridgeEnrichFacebookGroups(runId, newPlatformLeads, appendAndSave); } catch {}
         }
@@ -8461,8 +8730,8 @@ export async function resumeRun(runId: number): Promise<void> {
               } else if (platform === "mighty") {
                 const results = await scrapeMightyNetworks(runId, uniqueKws, maxExpLeads, (msg) => appendAndSave(msg), dbGeos);
                 newPlatformLeads.push(...results);
-              } else if (platform === "linkedin") {
-                const results = await scrapeLinkedInGroups(runId, uniqueKws, maxExpLeads, (msg) => appendAndSave(msg), { minMemberCount: params.minMemberCount || 0, maxMemberCount: params.maxMemberCount || 0, geos: dbGeos });
+              } else if (platform === "google") {
+                const results = await scrapeGoogleCommunitySearch(runId, uniqueKws, dbGeos, maxExpLeads, (msg) => appendAndSave(msg));
                 newPlatformLeads.push(...results);
               } else if (platform === "podcast" && dbRun2?.podcastEnabled !== false) {
                 const results = await scrapeApplePodcasts(runId, uniqueKws, maxExpLeads, (msg) => appendAndSave(msg), { minEpisodeCount: params.minEpisodeCount || 0, podcastCountry: params.podcastCountry || "US" });
@@ -8473,7 +8742,7 @@ export async function resumeRun(runId: number): Promise<void> {
 
           if (newPlatformLeads.length === 0) { await appendAndSave(`DB expansion: no new leads, stopping.`); break; }
 
-          const fbLeads2 = newPlatformLeads.filter(l => (l.source === "facebook" || l.source === "linkedin") && !l.email && !l.ownedChannels?.website && !l.ownedChannels?.linkedin);
+          const fbLeads2 = newPlatformLeads.filter(l => l.source === "facebook" && !l.email && !l.ownedChannels?.website && !l.ownedChannels?.linkedin);
           if (fbLeads2.length > 0 && !(await isBudgetExhausted(runId, 0.10))) { try { await googleBridgeEnrichFacebookGroups(runId, newPlatformLeads, appendAndSave); } catch {} }
           const rssLeads2 = newPlatformLeads.filter(l => l.ownedChannels?.rss?.startsWith("http") && !l.email);
           if (rssLeads2.length > 0) { try { await enrichFromRssFeeds(runId, newPlatformLeads, appendAndSave); } catch {} }

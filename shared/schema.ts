@@ -154,14 +154,13 @@ export const AVAILABLE_SOURCES = [
   { id: "podcast", label: "Podcasters", description: "Podcast hosts with episode counts & RSS emails" },
   { id: "substack", label: "Substack Writers", description: "Newsletter writers with subscriber bases & public emails" },
   { id: "mighty", label: "Mighty Networks", description: "Community builders with engaged, paying members" },
-  { id: "linkedin", label: "LinkedIn Groups", description: "Professional community leaders & alumni network organizers" },
-  { id: "google", label: "Google Search + Websites", description: "Generic website discovery" },
+  { id: "google", label: "Google Community Search", description: "Broad search for community/club/group websites with visible contact info" },
 ] as const;
 
-export type SourceId = "meetup" | "youtube" | "reddit" | "eventbrite" | "facebook" | "patreon" | "podcast" | "substack" | "mighty" | "linkedin" | "google";
+export type SourceId = "meetup" | "youtube" | "reddit" | "eventbrite" | "facebook" | "patreon" | "podcast" | "substack" | "mighty" | "google";
 export const DEFAULT_ENABLED_SOURCES: SourceId[] = ["patreon"];
 
-export const TEMPORARILY_DISABLED_SOURCES: SourceId[] = ["youtube", "reddit", "eventbrite", "google"];
+export const TEMPORARILY_DISABLED_SOURCES: SourceId[] = ["youtube", "reddit", "eventbrite"];
 
 export const AVAILABLE_ENRICHMENTS = [
   { id: "apollo", label: "Apollo.io", description: "Contact lookup by name, domain & LinkedIn URL (uses API credits)" },
@@ -174,7 +173,7 @@ export const runParamsSchema = z.object({
   seedGeos: z.array(z.string()).default([]),
   maxDiscoveredUrls: z.number().min(1).max(500).default(200),
   maxGoogleResultsPerQuery: z.number().min(1).max(100).default(10),
-  enabledSources: z.array(z.enum(["meetup", "youtube", "reddit", "eventbrite", "facebook", "patreon", "podcast", "substack", "mighty", "linkedin", "google"])).min(1, "At least one source must be selected").default(DEFAULT_ENABLED_SOURCES),
+  enabledSources: z.array(z.enum(["meetup", "youtube", "reddit", "eventbrite", "facebook", "patreon", "podcast", "substack", "mighty", "google"])).min(1, "At least one source must be selected").default(DEFAULT_ENABLED_SOURCES),
   minMemberCount: z.number().min(0).default(0),
   maxMemberCount: z.number().min(0).default(0),
   minPostCount: z.number().min(0).default(0),
@@ -218,7 +217,7 @@ export const PLATFORM_COST_PER_LEAD: Record<string, number> = {
   substack: 0.01,
   meetup: 0.01,
   mighty: 0.01,
-  linkedin: 0.01,
+  google: 0.01,
 };
 
 export const PLATFORM_EMAIL_YIELD: Record<string, number> = {
@@ -228,7 +227,7 @@ export const PLATFORM_EMAIL_YIELD: Record<string, number> = {
   substack: 0.40,
   meetup: 0.20,
   mighty: 0.30,
-  linkedin: 0.25,
+  google: 0.30,
 };
 
 export const PLATFORM_VALID_EMAIL_RATE: Record<string, number> = {
@@ -238,7 +237,7 @@ export const PLATFORM_VALID_EMAIL_RATE: Record<string, number> = {
   substack: 0.21,
   meetup: 0.40,
   mighty: 0.35,
-  linkedin: 0.45,
+  google: 0.40,
 };
 
 export const KEYWORD_PLATFORM_MAP: Record<string, SourceId[]> = {
@@ -248,32 +247,30 @@ export const KEYWORD_PLATFORM_MAP: Record<string, SourceId[]> = {
   "substack": ["substack"],
   "facebook group": ["facebook"],
   "fb group": ["facebook"],
-  "linkedin group": ["linkedin"],
-  "church": ["facebook", "patreon", "meetup"],
-  "ministry": ["facebook", "patreon"],
-  "faith": ["facebook", "patreon", "meetup"],
-  "run club": ["facebook", "patreon", "meetup"],
-  "running": ["facebook", "patreon", "podcast", "meetup", "linkedin"],
-  "hiking": ["facebook", "patreon", "podcast", "meetup"],
+  "church": ["facebook", "patreon", "meetup", "google"],
+  "ministry": ["facebook", "patreon", "google"],
+  "faith": ["facebook", "patreon", "meetup", "google"],
+  "run club": ["facebook", "patreon", "meetup", "google"],
+  "running": ["facebook", "patreon", "podcast", "meetup"],
+  "hiking": ["facebook", "patreon", "podcast", "meetup", "google"],
   "cycling": ["facebook", "patreon", "podcast", "meetup"],
-  "alumni": ["facebook", "meetup", "linkedin"],
-  "social club": ["facebook", "meetup"],
+  "alumni": ["facebook", "meetup", "google"],
+  "social club": ["facebook", "meetup", "google"],
   "meetup": ["meetup"],
   "yoga": ["patreon", "meetup", "podcast", "mighty"],
-  "fitness": ["patreon", "meetup", "podcast", "mighty", "linkedin"],
-  "outdoor": ["facebook", "meetup", "patreon", "mighty"],
+  "fitness": ["patreon", "meetup", "podcast", "mighty"],
+  "outdoor": ["facebook", "meetup", "patreon", "mighty", "google"],
   "photography": ["meetup", "patreon", "podcast"],
   "book club": ["meetup", "facebook", "mighty"],
-  "tech": ["meetup", "mighty", "linkedin"],
-  "networking": ["meetup", "facebook", "mighty", "linkedin"],
-  "community": ["mighty", "facebook", "meetup"],
-  "coaching": ["mighty", "patreon", "podcast", "linkedin"],
+  "tech": ["meetup", "mighty", "google"],
+  "networking": ["meetup", "facebook", "mighty", "google"],
+  "community": ["mighty", "facebook", "meetup", "google"],
+  "coaching": ["mighty", "patreon", "podcast"],
   "wellness": ["mighty", "patreon", "podcast"],
-  "leadership": ["mighty", "facebook", "linkedin"],
+  "leadership": ["mighty", "facebook", "google"],
   "membership": ["mighty", "patreon"],
-  "professional": ["linkedin", "meetup"],
-  "industry": ["linkedin"],
-  "association": ["linkedin", "facebook"],
+  "professional": ["meetup", "google"],
+  "association": ["facebook", "google"],
 };
 
 export const autonomousParamsSchema = z.object({
@@ -488,6 +485,21 @@ export const MIGHTY_RECOMMENDED_KEYWORDS = [
   { label: "Creative arts", keywords: ["art community", "creative", "painting"] },
   { label: "Membership community", keywords: ["membership", "paid community", "online community"] },
   { label: "Surfing & water sports", keywords: ["surf community", "diving", "water sports"] },
+] as const;
+
+export const GOOGLE_RECOMMENDED_KEYWORDS = [
+  { label: "Running clubs", keywords: ["running club", "run club", "marathon group"] },
+  { label: "Hiking clubs", keywords: ["hiking club", "hiking group", "trail club"] },
+  { label: "Travel groups", keywords: ["travel group", "group travel", "adventure travel club"] },
+  { label: "Church groups", keywords: ["church group", "faith community", "church travel"] },
+  { label: "Social clubs", keywords: ["social club", "social group", "community club"] },
+  { label: "Alumni groups", keywords: ["alumni association", "alumni group", "alumni network"] },
+  { label: "Women's groups", keywords: ["women's group", "women's club", "women's organization"] },
+  { label: "Cycling clubs", keywords: ["cycling club", "bike club", "bicycle group"] },
+  { label: "Yoga studios", keywords: ["yoga studio", "yoga community", "yoga retreat"] },
+  { label: "Photography clubs", keywords: ["photography club", "camera club", "photo group"] },
+  { label: "Outdoor adventure", keywords: ["outdoor adventure club", "outdoor recreation", "nature club"] },
+  { label: "Book clubs", keywords: ["book club", "reading group", "literary club"] },
 ] as const;
 
 export const LINKEDIN_RECOMMENDED_KEYWORDS = [

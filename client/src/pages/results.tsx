@@ -88,6 +88,7 @@ const PLATFORM_ICONS: Record<string, { icon: any; label: string; color: string }
   substack: { icon: SiSubstack, label: "Substack", color: "text-[#FF6719]" },
   meetup: { icon: SiMeetup, label: "Meetup", color: "text-[#ED1C40]" },
   mighty: { icon: Users, label: "Mighty Networks", color: "text-[#5469D4]" },
+  google: { icon: Globe, label: "Google Search", color: "text-[#4285F4]" },
   linktree: { icon: Link2, label: "Linktree", color: "text-[#43E55E]" },
   website: { icon: Globe, label: "Website", color: "text-muted-foreground" },
   newsletter: { icon: BookOpen, label: "Newsletter", color: "text-muted-foreground" },
