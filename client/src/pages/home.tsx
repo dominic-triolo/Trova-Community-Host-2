@@ -106,7 +106,7 @@ export default function Home() {
   const [mode, setMode] = useState<"manual" | "autonomous">("manual");
   const [autoBudget, setAutoBudget] = useState<number | "">(10);
   const [autoEmailTarget, setAutoEmailTarget] = useState<number | "">(50);
-  const [autoEnabledPlatforms, setAutoEnabledPlatforms] = useState<string[]>(["patreon", "facebook", "podcast", "substack", "meetup", "google"]);
+  const [autoEnabledPlatforms, setAutoEnabledPlatforms] = useState<string[]>(["patreon", "facebook", "substack", "meetup", "mighty", "google"]);
   const autoPodcastEnabled = autoEnabledPlatforms.includes("podcast");
   const [autoKeywords, setAutoKeywords] = useState<string[]>([]);
   const [autoCustomKeyword, setAutoCustomKeyword] = useState("");

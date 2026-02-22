@@ -16,8 +16,10 @@ import {
   Layers,
   CheckCircle,
   ArrowRight,
+  Globe,
+  Users,
 } from "lucide-react";
-import { SiFacebook, SiPatreon, SiSubstack } from "react-icons/si";
+import { SiFacebook, SiPatreon, SiSubstack, SiMeetup } from "react-icons/si";
 
 interface PlatformStat {
   platform: string;
@@ -138,7 +140,7 @@ export default function Documentation() {
               </p>
               <div className="grid gap-2">
                 {[
-                  { num: "1", text: "Finds community leaders by searching Patreon, Facebook Groups, Apple Podcasts, and Substack using your keywords" },
+                  { num: "1", text: "Finds community leaders by searching Patreon, Facebook Groups, Apple Podcasts, Substack, Meetup, Mighty Networks, and Google Community Search using your keywords" },
                   { num: "2", text: "Builds a social graph by following linked profiles across YouTube, Instagram, Twitter, personal websites, and link aggregator pages (Linktree, Beacons)" },
                   { num: "3", text: "Finds emails by crawling personal websites, using Apollo.io for professional contact lookup, and falling back to Leads Finder" },
                   { num: "4", text: "Verifies emails through MillionVerifier to confirm which ones are valid and deliverable" },
@@ -253,6 +255,76 @@ export default function Documentation() {
               <YieldBadge platform="substack" stats={platformStats} />
             </CardContent>
           </Card>
+
+          <Card>
+            <CardHeader className="flex flex-row items-center gap-2 pb-2">
+              <SiMeetup className="w-4 h-4 text-muted-foreground" />
+              <CardTitle className="text-base">Meetup Groups</CardTitle>
+              <Badge variant="outline" className="ml-auto text-xs">~$0.01/lead</Badge>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <ActorBadge name="apify~google-search-scraper + apify~cheerio-scraper" />
+              <p className="text-sm text-muted-foreground">
+                Searches Google for <code className="bg-muted px-1 rounded text-xs">site:meetup.com "[keyword]"</code> to find Meetup groups. Then scrapes each group page for organizer names, member counts, about text, and social links. Also crawls the <code className="bg-muted px-1 rounded text-xs">/members/?op=leaders</code> page for additional organizer information.
+              </p>
+              <div className="space-y-1.5">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Organizer Extraction</p>
+                <ul className="text-sm text-muted-foreground space-y-1 pl-4 list-disc">
+                  <li>Uses 12+ CSS selectors targeting organizer info, host cards, and group leader elements</li>
+                  <li>Text-based fallback patterns: "Organized by", "Hosted by", "Led by", "Founded by"</li>
+                  <li>Extracts member counts, about text, and social links from group pages</li>
+                  <li>Mailto link extraction from group descriptions</li>
+                </ul>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-muted-foreground">Default filter: minimum 50 members</span>
+              </div>
+              <YieldBadge platform="meetup" stats={platformStats} />
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="flex flex-row items-center gap-2 pb-2">
+              <Users className="w-4 h-4 text-muted-foreground" />
+              <CardTitle className="text-base">Mighty Networks</CardTitle>
+              <Badge variant="outline" className="ml-auto text-xs">~$0.01/lead</Badge>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <ActorBadge name="apify~google-search-scraper + apify~cheerio-scraper" />
+              <p className="text-sm text-muted-foreground">
+                Searches Google for <code className="bg-muted px-1 rounded text-xs">site:mightynetworks.com "[keyword]"</code> to find Mighty Networks community pages. Scrapes each community landing page for host names, emails, websites, social links, and community descriptions.
+              </p>
+              <YieldBadge platform="mighty" stats={platformStats} />
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="flex flex-row items-center gap-2 pb-2">
+              <Globe className="w-4 h-4 text-muted-foreground" />
+              <CardTitle className="text-base">Google Community Search</CardTitle>
+              <Badge variant="outline" className="ml-auto text-xs">~$0.01/lead</Badge>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <ActorBadge name="apify~google-search-scraper + apify~cheerio-scraper" />
+              <p className="text-sm text-muted-foreground">
+                Broad Google search for community, club, and group websites across the open web. Uses 4 query templates per keyword (club/group/community, organization/association, leader/founder/organizer, join us/become member) combined with geographic locations.
+              </p>
+              <div className="space-y-1.5">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Website Crawling</p>
+                <ul className="text-sm text-muted-foreground space-y-1 pl-4 list-disc">
+                  <li>Crawls up to 12 pages per discovered site across 23 URL patterns (contact, about, team, board, officers, etc.)</li>
+                  <li>Extracts emails from mailto links and page content, prioritizing footer and header sections</li>
+                  <li>Accepts domain-matching emails first, then personal email addresses (gmail, yahoo, etc.) as fallback</li>
+                  <li>Discovers leader names, social links, and organization descriptions</li>
+                  <li>Filters out social media domains (facebook, twitter, instagram, etc.) to focus on org websites</li>
+                </ul>
+              </div>
+              <p className="text-sm text-muted-foreground">
+                <strong>Geographic targeting:</strong> Combine keywords with locations (e.g., "running club" + "Denver, CO") for hyper-local community discovery.
+              </p>
+              <YieldBadge platform="google" stats={platformStats} />
+            </CardContent>
+          </Card>
         </section>
 
         <Separator />
@@ -327,8 +399,9 @@ export default function Documentation() {
             <StepCard
               step="3"
               title="Website Contact Crawl"
-              description="Crawls personal websites and slug-probed domains, specifically hitting contact and about pages to find email addresses. Validates that discovered emails match the website's domain."
+              description="Crawls personal websites and slug-probed domains across 23 subpage patterns (contact, about, team, board, officers, organizers, hosts, founders, etc.) to find email addresses. Extracts mailto links and prioritizes footer/header content. Accepts domain-matching emails first, then personal emails (gmail, yahoo, etc.) as fallback."
               actor="apify~cheerio-scraper"
+              details={["Crawls up to 12 pages per batch", "8000 char text capture with footer/header prioritization", "Supports 15+ URL glob patterns"]}
             />
 
             <div className="flex justify-center">
@@ -475,7 +548,9 @@ export default function Documentation() {
                   <li>Uses historical valid-email yield rates per platform (requires 5+ leads from past runs for accuracy)</li>
                   <li>Over-allocates discovery to compensate for validation loss (raw emails that turn out invalid)</li>
                   <li>Bidirectional estimation: fill budget to see estimated emails, or fill email target to auto-calculate cost</li>
+                  <li>All platforms enabled by default except Podcast (toggle individually as needed)</li>
                   <li>Podcast toggle requires $3+ budget (high yield but expensive at $0.03/lead)</li>
+                  <li>Google Community Search included for broad website-based discovery across the open web</li>
                 </ul>
               </div>
               <div className="space-y-1.5">
@@ -513,7 +588,7 @@ export default function Documentation() {
                   <tbody className="divide-y">
                     {[
                       { actor: "louisdeconinck~patreon-scraper", purpose: "Patreon creator search", cost: "~$0.03/lead" },
-                      { actor: "apify~google-search-scraper", purpose: "Google Search (Facebook, Substack, contact search)", cost: "Variable" },
+                      { actor: "apify~google-search-scraper", purpose: "Google Search (Facebook, Substack, Meetup, Mighty Networks, Google Community, contact search)", cost: "Variable" },
                       { actor: "apify~cheerio-scraper", purpose: "Website/RSS/aggregator scraping", cost: "Low" },
                       { actor: "benthepythondev/podcast-intelligence-aggregator", purpose: "Apple Podcasts search", cost: "$30/1K results" },
                       { actor: "apify/instagram-profile-scraper", purpose: "Instagram bio scraping", cost: "$1.60/1K" },
