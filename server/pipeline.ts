@@ -5645,11 +5645,12 @@ export async function runPipeline(runId: number): Promise<void> {
         try {
           await appendAndSave(`Extracting ${batch.length} websites (batch ${batchNum}/${totalBatches})`);
 
-          const { items, costUsd: actorCost } = await runActorAndGetResults("apify~cheerio-scraper", {
+          const { items, costUsd: actorCost } = await runActorWithWallClockTimeout("apify~cheerio-scraper", {
             startUrls: batch.map((u) => ({ url: u })),
             maxRequestsPerCrawl: batch.length * 4,
             maxConcurrency: 30,
             maxRequestRetries: 1,
+            timeoutSecs: 300,
             linkSelector: "a[href]",
             pseudoUrls: batch.map((baseUrl) => {
               const base = new URL(baseUrl);
@@ -5748,7 +5749,7 @@ export async function runPipeline(runId: number): Promise<void> {
                 schemaEmails: schemaEmails,
               };
             }`,
-          }, 180000);
+          }, 360000);
           await storage.incrementApifySpend(runId, actorCost);
 
           const mainPages = new Map<string, any>();
