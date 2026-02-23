@@ -8854,22 +8854,25 @@ export async function resumeRun(runId: number): Promise<void> {
         }
       }
 
-      const finalEmailCount = await storage.countLeadsByRunWithEmail(runId);
-      const finalValidCount = await storage.countLeadsByRunWithValidEmail(runId);
-      const totalLeads = (await storage.listLeadsByRun(runId)).length;
-
-      await storage.updateRun(runId, {
-        status: "succeeded",
-        progress: 100,
-        step: "Complete",
-        finishedAt: new Date(),
-        leadsWithEmail: finalEmailCount,
-        leadsWithValidEmail: finalValidCount,
-        logs: appendLog(currentLogs, `Resume complete! ${totalLeads} leads, ${finalEmailCount} with email, ${finalValidCount} validated.`),
-      });
-
-      log(`Resume of run ${runId} completed successfully`, "pipeline");
+    } else {
+      await appendAndSave("Scoring: already completed, skipping");
     }
+
+    const finalEmailCount = await storage.countLeadsByRunWithEmail(runId);
+    const finalValidCount = await storage.countLeadsByRunWithValidEmail(runId);
+    const totalLeads = (await storage.listLeadsByRun(runId)).length;
+
+    await storage.updateRun(runId, {
+      status: "succeeded",
+      progress: 100,
+      step: "Complete",
+      finishedAt: new Date(),
+      leadsWithEmail: finalEmailCount,
+      leadsWithValidEmail: finalValidCount,
+      logs: appendLog(currentLogs, `Resume complete! ${totalLeads} leads, ${finalEmailCount} with email, ${finalValidCount} validated.`),
+    });
+
+    log(`Resume of run ${runId} completed successfully`, "pipeline");
   } catch (err: any) {
     if (err instanceof RunCancelledError || cancelledRunIds.has(runId)) {
       log(`Resume of run ${runId} stopped by user`, "pipeline");
