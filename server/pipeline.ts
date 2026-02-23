@@ -4467,11 +4467,13 @@ async function googleBridgeEnrichFacebookGroups(
   }
 
   const batchSize = 20;
-  const concurrentBridgeBatches = 20;
+  const concurrentBridgeBatches = 10;
   const enrichedLeadIndices = new Set<number>();
-  const CIRCUIT_BREAKER_THRESHOLD = 5;
-  let consecutiveFailures = 0;
+  const CIRCUIT_BREAKER_THRESHOLD = 8;
+  let totalFailures = 0;
   let circuitBroken = false;
+  const bridgeStartTime = Date.now();
+  const BRIDGE_TIME_LIMIT_MS = 10 * 60 * 1000;
 
   const completedBatchNums = await loadIntraStepProgress(runId, "google_bridge");
   const allBridgeBatches: { queries: typeof queries; batchNum: number }[] = [];
@@ -4490,6 +4492,7 @@ async function googleBridgeEnrichFacebookGroups(
   async function processBridgeBatch(batchInfo: { queries: typeof queries; batchNum: number }): Promise<void> {
     if (circuitBroken) return;
     if (completedBatchNums.has(batchInfo.batchNum)) return;
+    if (Date.now() - bridgeStartTime > BRIDGE_TIME_LIMIT_MS) return;
     const batch = batchInfo.queries;
     await appendAndSave(`Google Bridge: batch ${batchInfo.batchNum}/${totalBatches} (${batch.length} searches)...`);
 
@@ -4523,7 +4526,6 @@ async function googleBridgeEnrichFacebookGroups(
         }
       }
 
-      consecutiveFailures = 0;
       const totalOrganic = Array.from(resultsByQuery.values()).reduce((sum, arr) => sum + arr.length, 0);
       await appendAndSave(`Google Bridge: batch ${batchInfo.batchNum} got ${results.length} query results, ${totalOrganic} organic results`);
 
@@ -4638,20 +4640,24 @@ async function googleBridgeEnrichFacebookGroups(
       if (err.costUsd) {
         await storage.incrementApifySpend(runId, err.costUsd);
       }
-      consecutiveFailures++;
+      totalFailures++;
       await appendAndSave(`[WARN] Google Bridge batch ${batchInfo.batchNum} failed: ${err.message}`);
-      if (consecutiveFailures >= CIRCUIT_BREAKER_THRESHOLD) {
+      if (totalFailures >= CIRCUIT_BREAKER_THRESHOLD) {
         circuitBroken = true;
-        await appendAndSave(`[WARN] Google Bridge circuit breaker tripped after ${consecutiveFailures} consecutive failures — skipping remaining batches`);
+        await appendAndSave(`[WARN] Google Bridge circuit breaker tripped after ${totalFailures} total failures — skipping remaining batches`);
       }
     }
   }
 
   for (let i = 0; i < allBridgeBatches.length; i += concurrentBridgeBatches) {
     if (circuitBroken) break;
+    if (Date.now() - bridgeStartTime > BRIDGE_TIME_LIMIT_MS) {
+      await appendAndSave(`[WARN] Google Bridge time limit (10 min) reached — skipping remaining ${allBridgeBatches.length - i} batches`);
+      break;
+    }
     const concurrentSlice = allBridgeBatches.slice(i, i + concurrentBridgeBatches);
     await Promise.allSettled(concurrentSlice.map((b, idx) =>
-      new Promise<void>(resolve => setTimeout(() => processBridgeBatch(b).then(resolve).catch(resolve), idx * 1000))
+      new Promise<void>(resolve => setTimeout(() => processBridgeBatch(b).then(resolve).catch(resolve), idx * 2000))
     ));
   }
 
