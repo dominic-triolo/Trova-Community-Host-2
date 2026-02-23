@@ -33,6 +33,11 @@ The application design emphasizes resilience with features like heartbeats, auto
 - **LinkedIn Groups**: Removed (poor results — hard-capped at 1 result per keyword). LinkedIn profile enrichment preserved in social graph.
 
 ## Recent Changes (Feb 2026)
+- **Broad keyword sub-category expansion**: Maps broad terms (outdoors→15 sub-categories like hiking/camping/kayaking, fitness→yoga/crossfit/running/cycling, etc.) to generate diverse queries during initial discovery AND expansion rounds. Synonym normalization handles plural/singular forms.
+- **Platform saturation detection**: Tracks net new results per platform per expansion round. Requires 2 consecutive low-yield rounds (0 results or <5% of previous when previous >10) before marking saturated. Prevents wasting budget on depleted platforms during expansion.
+- **Meetup timeout increased**: From 3 minutes to 6 minutes (MEETUP_TIMEOUT_MS=360_000) for large batch Cheerio page scraping.
+- **Auto-resume website crawl recovery**: Resume path now includes website crawl step before Apollo, identifying leads with websites but no email and crawling them. Fixes SIGTERM during expansion round website crawls.
+- **Increased max query limits**: Facebook/Meetup default to 200 max queries, Google Community Search uses MAX_QUERIES=80.
 - **Google Community Search added**: New discovery source using broad Google searches for community/club/group websites with geographic targeting
 - **LinkedIn Groups removed**: Removed as discovery source due to poor results (1 result per keyword cap, 10 groups → 1 valid email yield)
 - **Website crawl enhanced**: Expanded to 23 subpages, mailto link extraction, personal email domain fallback (gmail, yahoo, etc.), 12 pages per batch, 8000 char text capture

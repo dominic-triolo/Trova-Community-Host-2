@@ -16,7 +16,54 @@ export const resumingRunIds = new Set<number>();
 const MAX_CONCURRENT_ACTORS = 62;
 const HEARTBEAT_INTERVAL_MS = 60_000;
 const PLATFORM_TIMEOUT_MS = 180_000;
+const MEETUP_TIMEOUT_MS = 360_000;
 const MIN_BUDGET_FOR_APIFY_CALL = 0.02;
+
+const BROAD_KEYWORD_SUBCATEGORIES: Record<string, string[]> = {
+  "outdoors": ["hiking", "camping", "kayaking", "climbing", "backpacking", "trail running", "fishing", "mountain biking", "paddleboarding", "canoeing", "rock climbing", "birdwatching", "nature walks", "wilderness", "outdoor adventure"],
+  "outdoor": ["hiking", "camping", "kayaking", "climbing", "backpacking", "trail running", "fishing", "mountain biking", "paddleboarding", "canoeing", "rock climbing", "birdwatching", "nature walks", "wilderness", "outdoor adventure"],
+  "fitness": ["yoga", "crossfit", "running", "cycling", "pilates", "weightlifting", "HIIT", "martial arts", "swimming", "dance fitness", "bootcamp", "strength training"],
+  "sports": ["basketball", "soccer", "tennis", "volleyball", "softball", "ultimate frisbee", "pickleball", "golf", "flag football", "rugby"],
+  "wellness": ["yoga", "meditation", "mindfulness", "holistic health", "nutrition", "self-care", "mental health", "breathwork", "sound healing", "wellness retreat"],
+  "adventure": ["hiking", "climbing", "kayaking", "skydiving", "scuba diving", "surfing", "paragliding", "mountain biking", "backpacking", "adventure travel"],
+  "travel": ["group travel", "adventure travel", "backpacking", "road trips", "cultural travel", "solo travel", "travel photography", "budget travel", "luxury travel", "eco travel"],
+  "creative": ["photography", "painting", "pottery", "writing", "filmmaking", "music", "crafts", "illustration", "graphic design", "creative writing"],
+  "arts": ["painting", "sculpture", "pottery", "drawing", "printmaking", "watercolor", "mixed media", "art walks", "gallery tours", "art workshops"],
+  "social": ["social club", "networking", "happy hour", "singles", "young professionals", "expats", "new in town", "friends", "meetup", "social events"],
+  "food": ["cooking", "baking", "wine tasting", "beer brewing", "supper club", "food tour", "restaurant hop", "culinary", "vegan", "farm to table"],
+  "music": ["live music", "jam sessions", "open mic", "songwriting", "choir", "band", "music production", "DJ", "classical music", "jazz"],
+  "tech": ["coding", "web development", "AI", "data science", "cybersecurity", "startup", "product management", "UX design", "blockchain", "robotics"],
+  "faith": ["church", "bible study", "young adults ministry", "prayer group", "worship", "faith community", "spiritual growth", "christian fellowship"],
+  "parenting": ["moms group", "dads group", "parents", "playgroup", "homeschool", "new parents", "family activities", "kids activities"],
+};
+
+function normalizeSynonymKey(keyword: string): string {
+  return keyword.toLowerCase().trim().replace(/s$/, "").replace(/'/g, "");
+}
+
+function expandBroadKeywords(keywords: string[]): string[] {
+  const expanded = new Set<string>();
+  for (const kw of keywords) {
+    expanded.add(kw);
+    const normalized = normalizeSynonymKey(kw);
+    const subcats = BROAD_KEYWORD_SUBCATEGORIES[normalized] || BROAD_KEYWORD_SUBCATEGORIES[kw.toLowerCase().trim()];
+    if (subcats) {
+      for (const sub of subcats) expanded.add(sub);
+    }
+  }
+  return Array.from(expanded);
+}
+
+function lookupSynonyms(keyword: string, synonymMap: Record<string, string[]>): string[] {
+  const kwLower = keyword.toLowerCase().trim();
+  if (synonymMap[kwLower]) return synonymMap[kwLower];
+  const normalized = normalizeSynonymKey(keyword);
+  if (synonymMap[normalized]) return synonymMap[normalized];
+  for (const key of Object.keys(synonymMap)) {
+    if (normalizeSynonymKey(key) === normalized) return synonymMap[key];
+  }
+  return [];
+}
 
 function startHeartbeat(runId: number): () => void {
   const update = () => {
@@ -841,7 +888,7 @@ function mergeCrossPlatformLeads(leads: PlatformLead[]): number {
   return mergedCount;
 }
 
-function expandMeetupKeywords(keywords: string[], geos: string[], maxQueries: number = 100): string[] {
+function expandMeetupKeywords(keywords: string[], geos: string[], maxQueries: number = 200): string[] {
   const synonymMap: Record<string, string[]> = {
     "hiking": ["hiking group", "hiking club", "trail hiking", "hiking meetup"],
     "running": ["run club", "running group", "running club", "marathon training"],
@@ -862,6 +909,8 @@ function expandMeetupKeywords(keywords: string[], geos: string[], maxQueries: nu
     "dance": ["dance group", "salsa meetup", "dance community"],
   };
 
+  const allKeywords = expandBroadKeywords(keywords);
+
   const TOP_US_CITIES = [
     "New York", "Los Angeles", "Chicago", "Houston", "Phoenix",
     "Philadelphia", "San Antonio", "San Diego", "Dallas", "Austin",
@@ -878,11 +927,10 @@ function expandMeetupKeywords(keywords: string[], geos: string[], maxQueries: nu
     }
   };
 
-  for (const kw of keywords) {
+  for (const kw of allKeywords) {
     addQuery(`site:meetup.com "${kw}"`);
 
-    const kwLower = kw.toLowerCase().trim();
-    const synonyms = synonymMap[kwLower] || [];
+    const synonyms = lookupSynonyms(kw, synonymMap);
     for (const syn of synonyms) {
       addQuery(`site:meetup.com "${syn}"`);
     }
@@ -892,10 +940,9 @@ function expandMeetupKeywords(keywords: string[], geos: string[], maxQueries: nu
     addQuery(`site:meetup.com ${kw} community`);
   }
 
-  const allSearchTerms = [...keywords];
-  for (const kw of keywords) {
-    const kwLower = kw.toLowerCase().trim();
-    const synonyms = synonymMap[kwLower] || [];
+  const allSearchTerms = [...allKeywords];
+  for (const kw of allKeywords) {
+    const synonyms = lookupSynonyms(kw, synonymMap);
     for (const syn of synonyms) allSearchTerms.push(syn);
   }
 
@@ -1859,7 +1906,7 @@ function extractFbGroupUrl(rawUrl: string): string {
   }
 }
 
-function expandFacebookKeywords(keywords: string[], geos: string[], maxQueries: number = 100): string[] {
+function expandFacebookKeywords(keywords: string[], geos: string[], maxQueries: number = 200): string[] {
   const synonymMap: Record<string, string[]> = {
     "book club": ["book group", "reading club", "reading group", "book lovers", "readers group", "literature club", "book discussion"],
     "hiking": ["hiking group", "hiking club", "hikers group", "trail club", "outdoor hiking", "day hikes"],
@@ -1883,6 +1930,8 @@ function expandFacebookKeywords(keywords: string[], geos: string[], maxQueries: 
     "cycling": ["cycling group", "cycling club", "biking group", "bike club", "cyclists group"],
   };
 
+  const allKeywords = expandBroadKeywords(keywords);
+
   const TOP_US_CITIES = [
     "New York", "Los Angeles", "Chicago", "Houston", "Phoenix",
     "Philadelphia", "San Antonio", "San Diego", "Dallas", "Austin",
@@ -1899,11 +1948,10 @@ function expandFacebookKeywords(keywords: string[], geos: string[], maxQueries: 
     }
   };
 
-  for (const kw of keywords) {
+  for (const kw of allKeywords) {
     addQuery(`site:facebook.com/groups "${kw}"`);
 
-    const kwLower = kw.toLowerCase().trim();
-    const synonyms = synonymMap[kwLower] || [];
+    const synonyms = lookupSynonyms(kw, synonymMap);
     for (const syn of synonyms) {
       addQuery(`site:facebook.com/groups "${syn}"`);
     }
@@ -1914,10 +1962,9 @@ function expandFacebookKeywords(keywords: string[], geos: string[], maxQueries: 
     addQuery(`site:facebook.com/groups ${kw} network`);
   }
 
-  const allSearchTerms = [...keywords];
-  for (const kw of keywords) {
-    const kwLower = kw.toLowerCase().trim();
-    const synonyms = synonymMap[kwLower] || [];
+  const allSearchTerms = [...allKeywords];
+  for (const kw of allKeywords) {
+    const synonyms = lookupSynonyms(kw, synonymMap);
     for (const syn of synonyms) allSearchTerms.push(syn);
   }
 
@@ -3272,12 +3319,13 @@ async function scrapeMightyNetworks(
     "photography": ["photography", "photo", "photographers"],
   };
 
+  const broadExpanded = expandBroadKeywords(keywords);
   const expandedKeywords = new Set<string>();
-  for (const kw of keywords) {
+  for (const kw of broadExpanded) {
     expandedKeywords.add(kw);
     const kwLower = kw.toLowerCase();
     for (const [trigger, expansions] of Object.entries(MIGHTY_KEYWORD_EXPANSIONS)) {
-      if (kwLower.includes(trigger)) {
+      if (kwLower.includes(trigger) || normalizeSynonymKey(kw) === normalizeSynonymKey(trigger)) {
         for (const exp of expansions) {
           if (exp.toLowerCase() !== kwLower) expandedKeywords.add(exp);
         }
@@ -3309,7 +3357,7 @@ async function scrapeMightyNetworks(
     }
   }
 
-  const MAX_QUERIES = 40;
+  const MAX_QUERIES = 80;
   const uniqueQueries = Array.from(new Set(googleQueries)).slice(0, MAX_QUERIES);
   await appendAndSave(`Mighty Networks: ${uniqueQueries.length} search queries (${allKeywords.length} keywords${geos.length > 0 ? `, ${geos.length} geos` : ""})`);
   const batchSize = 10;
@@ -5459,7 +5507,7 @@ export async function runPipeline(runId: number): Promise<void> {
     const getMaxForPlatform = (platform: string) => platformMaxLeads.get(platform) || defaultMaxPerPlatform;
 
     const platformTasks: { name: string; promise: Promise<PlatformLead[]> }[] = [];
-    const wrapPlatform = (name: string, fn: () => Promise<PlatformLead[]>) => {
+    const wrapPlatform = (name: string, fn: () => Promise<PlatformLead[]>, timeoutMs: number = PLATFORM_TIMEOUT_MS) => {
       platformTasks.push({
         name,
         promise: withTimeout(
@@ -5470,14 +5518,14 @@ export async function runPipeline(runId: number): Promise<void> {
             }
             return fn();
           })(),
-          PLATFORM_TIMEOUT_MS,
+          timeoutMs,
           name,
         ),
       });
     };
 
     if (enabledSources.includes("meetup")) {
-      wrapPlatform("Meetup", () => scrapeMeetupGroups(runId, keywords, geos, getMaxForPlatform("meetup"), (msg) => appendAndSave(msg)));
+      wrapPlatform("Meetup", () => scrapeMeetupGroups(runId, keywords, geos, getMaxForPlatform("meetup"), (msg) => appendAndSave(msg)), MEETUP_TIMEOUT_MS);
     }
     if (enabledSources.includes("youtube")) {
       wrapPlatform("YouTube", () => scrapeYouTubeChannels(runId, keywords, getMaxForPlatform("youtube"), (msg) => appendAndSave(msg)));
@@ -6563,6 +6611,9 @@ export async function runPipeline(runId: number): Promise<void> {
     if (isAutonomousRun && globalEmailTarget > 0 && validEmailCount < globalEmailTarget) {
       let expansionRound = 0;
       const usedExpansionKeywords = new Set<string>();
+      const saturatedPlatforms = new Set<string>();
+      const platformPreviousCounts = new Map<string, number>();
+      const platformLowRounds = new Map<string, number>();
 
       const EXPANSION_SUFFIX_POOLS = [
         ["community leader", "group organizer"],
@@ -6574,6 +6625,8 @@ export async function runPipeline(runId: number): Promise<void> {
         ["group leader near me", "community events"],
         ["online community", "membership group"],
       ];
+
+      const broadSubcats = expandBroadKeywords(keywords).filter(kw => !keywords.includes(kw));
 
       while (true) {
         if (cancelledRunIds.has(runId)) throw new RunCancelledError(runId);
@@ -6597,6 +6650,12 @@ export async function runPipeline(runId: number): Promise<void> {
           break;
         }
 
+        const activePlatforms = enabledSources.filter(p => !saturatedPlatforms.has(p));
+        if (activePlatforms.length === 0) {
+          await appendAndSave(`Expansion: all platforms saturated. ${currentValidCount}/${globalEmailTarget} valid emails.`);
+          break;
+        }
+
         expansionRound++;
         await appendAndSave(
           `Expansion round ${expansionRound}: ${currentValidCount}/${globalEmailTarget} valid emails (${deficit} short). $${remainingBudget.toFixed(2)} remaining. Running deeper discovery + enrichment...`,
@@ -6607,9 +6666,11 @@ export async function runPipeline(runId: number): Promise<void> {
         const suffixPoolIndex = Math.min(expansionRound - 1, EXPANSION_SUFFIX_POOLS.length - 1);
         const expandSuffixes = EXPANSION_SUFFIX_POOLS[suffixPoolIndex];
         const expandedKws = keywords.flatMap(kw => expandSuffixes.map(s => `${kw} ${s}`));
-        const uniqueExpKws = Array.from(new Set(expandedKws))
+        const subcatSlice = broadSubcats.slice((expansionRound - 1) * 4, expansionRound * 4);
+        const allExpKws = [...expandedKws, ...subcatSlice];
+        const uniqueExpKws = Array.from(new Set(allExpKws))
           .filter(kw => !usedExpansionKeywords.has(kw))
-          .slice(0, 8);
+          .slice(0, 10);
 
         if (uniqueExpKws.length === 0) {
           await appendAndSave(`Expansion: all keyword variations exhausted after ${expansionRound - 1} rounds. ${currentValidCount}/${globalEmailTarget} valid emails.`);
@@ -6619,7 +6680,7 @@ export async function runPipeline(runId: number): Promise<void> {
 
         let newPlatformLeads: PlatformLead[] = [];
 
-        for (const platform of enabledSources) {
+        for (const platform of activePlatforms) {
           if (cancelledRunIds.has(runId)) throw new RunCancelledError(runId);
           if (await isBudgetExhausted(runId, 0.10)) {
             await appendAndSave(`Expansion: budget limit reached, stopping discovery.`);
@@ -6627,6 +6688,7 @@ export async function runPipeline(runId: number): Promise<void> {
           }
 
           const maxExpLeads = Math.min(Math.ceil(deficit * 4), 500);
+          const beforeCount = newPlatformLeads.length;
           try {
             if (platform === "patreon") {
               await appendAndSave(`Expansion: deeper Patreon search (${uniqueExpKws.length} queries)...`);
@@ -6666,6 +6728,24 @@ export async function runPipeline(runId: number): Promise<void> {
             }
           } catch (err: any) {
             await appendAndSave(`Expansion: ${platform} search error: ${err.message}`);
+          }
+
+          const platformNewCount = newPlatformLeads.length - beforeCount;
+          const previousCount = platformPreviousCounts.get(platform) || 0;
+          platformPreviousCounts.set(platform, platformNewCount);
+
+          const isLowYield = platformNewCount === 0 || (previousCount > 10 && platformNewCount < previousCount * 0.05);
+          if (isLowYield) {
+            const consecutiveLow = (platformLowRounds.get(platform) || 0) + 1;
+            platformLowRounds.set(platform, consecutiveLow);
+            if (consecutiveLow >= 2) {
+              saturatedPlatforms.add(platform);
+              await appendAndSave(`Expansion: ${platform} saturated (${platformNewCount} new results, ${consecutiveLow} consecutive low rounds), skipping in future rounds`);
+            } else {
+              await appendAndSave(`Expansion: ${platform} low yield (${platformNewCount} new results vs ${previousCount} previous), monitoring`);
+            }
+          } else {
+            platformLowRounds.set(platform, 0);
           }
         }
 
@@ -8600,6 +8680,48 @@ export async function resumeRun(runId: number): Promise<void> {
     });
 
     await appendAndSave(`Loaded ${leads.length} leads from run ${runId}`, 55, "Resume: Running enrichment chain");
+
+    if (shouldRunStep(lastCompleted, PIPELINE_STEPS.WEBSITE_CRAWL)) {
+      const dbLeads = await storage.listLeadsByRun(runId);
+      const leadsNeedingCrawl = dbLeads.filter(l => {
+        if (l.email) return false;
+        const channels = (l.ownedChannels as Record<string, string>) || {};
+        const website = channels.website || l.website || "";
+        return website && website.startsWith("http");
+      });
+
+      if (leadsNeedingCrawl.length > 0) {
+        await appendAndSave(`Resume: website crawl recovery for ${leadsNeedingCrawl.length} leads without email...`, 52, "Resume: Website crawl");
+        const platformLeads: PlatformLead[] = leadsNeedingCrawl.map(l => {
+          const channels = (l.ownedChannels as Record<string, string>) || {};
+          return {
+            url: l.sourceUrl || "",
+            name: l.communityName || "",
+            leaderName: l.leaderName || "",
+            email: "",
+            ownedChannels: channels,
+            platform: (l.source as any) || "unknown",
+          };
+        });
+
+        const websiteEmailMap = await crawlCreatorWebsitesForEmails(runId, platformLeads, appendAndSave);
+        let crawlRecovered = 0;
+        for (const lead of leadsNeedingCrawl) {
+          const channels = (lead.ownedChannels as Record<string, string>) || {};
+          const website = channels.website || lead.website || "";
+          const domain = extractDomain(website);
+          if (domain && websiteEmailMap.has(domain)) {
+            const foundEmail = websiteEmailMap.get(domain)!;
+            if (foundEmail && !isBlockedEmail(foundEmail)) {
+              await storage.updateLead(lead.id, { email: foundEmail });
+              crawlRecovered++;
+            }
+          }
+        }
+        await appendAndSave(`Resume: website crawl recovered ${crawlRecovered} emails from ${leadsNeedingCrawl.length} leads`);
+      }
+      await markStepComplete(runId, PIPELINE_STEPS.WEBSITE_CRAWL);
+    }
 
     if (shouldRunStep(lastCompleted, PIPELINE_STEPS.APOLLO)) {
       if (params.enableApollo !== false) {
