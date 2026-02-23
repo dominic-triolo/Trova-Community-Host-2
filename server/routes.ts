@@ -463,19 +463,42 @@ export async function registerRoutes(
         return res.status(403).json({ message: "Unauthorized" });
       }
 
+      const rerunAll = req.body.rerunAll === true;
       const allLeads = await storage.listLeads();
       let updatedFirstName = 0;
+      let clearedFirstName = 0;
       let updatedResearch = 0;
+      let fixedSource = 0;
 
       for (const lead of allLeads) {
         const updates: any = {};
 
-        if (!lead.firstName && lead.leaderName) {
+        if (rerunAll && lead.leaderName) {
+          const fn = extractHighConfidenceFirstName(lead.leaderName);
+          if (fn && fn !== lead.firstName) {
+            updates.firstName = fn;
+            updatedFirstName++;
+          } else if (!fn && lead.firstName) {
+            updates.firstName = "";
+            clearedFirstName++;
+          }
+        } else if (!lead.firstName && lead.leaderName) {
           const fn = extractHighConfidenceFirstName(lead.leaderName);
           if (fn) {
             updates.firstName = fn;
             updatedFirstName++;
           }
+        }
+
+        if (!lead.source && lead.website) {
+          const w = lead.website.toLowerCase();
+          if (w.includes("patreon.com")) updates.source = "patreon";
+          else if (w.includes("meetup.com")) updates.source = "meetup";
+          else if (w.includes("facebook.com")) updates.source = "facebook";
+          else if (w.includes("substack.com")) updates.source = "substack";
+          else if (w.includes(".mn.co")) updates.source = "mighty";
+          else updates.source = "google";
+          if (updates.source) fixedSource++;
         }
 
         if (!lead.researchSummary) {
@@ -484,7 +507,7 @@ export async function registerRoutes(
             communityType: lead.communityType || "",
             leaderName: lead.leaderName || "",
             description: (lead.raw as any)?.description || (lead.raw as any)?.about || "",
-            source: lead.source || "",
+            source: lead.source || updates.source || "",
             website: lead.website || "",
             location: lead.location || "",
             ownedChannels: (lead.ownedChannels as Record<string, string>) || {},
@@ -507,7 +530,9 @@ export async function registerRoutes(
       res.json({
         total: allLeads.length,
         updatedFirstName,
+        clearedFirstName,
         updatedResearch,
+        fixedSource,
       });
     } catch (err: any) {
       res.status(500).json({ message: err.message });

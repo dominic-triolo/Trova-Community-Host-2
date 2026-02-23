@@ -191,52 +191,111 @@ function extractDomain(url: string): string {
   }
 }
 
+const COMMON_FIRST_NAMES = new Set([
+  "aaron","abby","abigail","adam","adrian","aiden","aimee","al","alan","albert","alec","alejandra","alejandro","alex","alexa","alexander","alexandra","alexis","ali","alice","alicia","alina","alison","allison","ally","alyssa","amanda","amber","amelia","amy","ana","anastasia","andrea","andrew","andy","angel","angela","angie","anita","ann","anna","anne","annette","annie","anthony","anton","antonio","april","archie","aria","ariana","ariel","arlene","arthur","ashley","ashton","audrey","austin",
+  "bailey","barbara","barry","beau","bec","becky","belinda","bella","ben","benjamin","bennett","bernadette","bernard","beth","bethany","betty","bev","beverley","beverly","bex","bill","billy","blake","bob","bobby","bonnie","brad","bradley","brandon","brenda","brendan","brent","brett","brian","brianna","bridget","brittany","brooke","bruce","bryan","bryce",
+  "caitlin","caleb","cameron","camille","candace","cara","carey","carl","carla","carlos","carmen","carol","carolina","caroline","carolyn","carrie","casey","cassandra","catherine","cathy","cecilia","chad","charlene","charles","charlie","charlotte","chase","chelsea","cheryl","chloe","chris","christian","christina","christine","christopher","christy","chuck","cindy","cj","claire","clara","clarence","clark","claudia","clay","cliff","clifford","clint","clinton","cody","colby","cole","colleen","collin","connor","connie","corey","courtney","craig","crystal","curtis","cynthia",
+  "dale","dallas","damian","damon","dan","dana","daniel","daniela","daniella","danielle","danny","daphne","dara","darlene","darren","darryl","dave","david","dawn","dean","deanna","deb","debbie","deborah","debra","dee","deidre","delaney","denise","dennis","derek","desiree","devin","devon","diana","diane","dianna","dianne","dick","dina","dolores","dominic","dominique","don","donald","donna","donnie","dora","doreen","doris","dorothy","dot","doug","douglas","drew","duane","dustin","dwight","dylan",
+  "earl","ed","eddie","edgar","edith","edmund","edna","eduardo","edward","eileen","elaine","eleanor","elena","eli","eliana","elijah","elisa","elisabeth","elise","eliza","elizabeth","ella","ellen","ellie","elliot","elliott","emily","emma","enrique","eric","erica","ericka","erik","erika","erin","ernest","ernie","esther","ethan","eugene","eva","evan","evelyn","ezra",
+  "faith","faye","felicia","felix","fern","fernando","fiona","flora","florence","ford","fran","frances","francesca","francis","francisco","frank","frankie","fred","freddie","frederick",
+  "gabe","gabriel","gabriela","gabriella","gabrielle","gail","garrett","gary","gavin","gene","genevieve","geoffrey","george","georgina","gerald","geraldine","gerry","gigi","gillian","gina","ginger","gladys","glen","glenda","glenn","gloria","grace","gracie","graham","grant","greg","gregg","gregory","gretchen","guy",
+  "hailey","haley","hank","hannah","harold","harriet","harry","harvey","hazel","heather","heidi","helen","helena","henry","herb","herbert","herman","hilary","hillary","holden","holly","hope","howard","hubert","hugh","hugo","hunter",
+  "ian","ida","ilene","imani","ingrid","irene","iris","irma","isaac","isabel","isabella","isabelle","ivan","ivy",
+  "jack","jackie","jackson","jacob","jacqueline","jade","jaime","jake","james","jamie","jan","jana","jane","janelle","janet","janice","janie","janine","jared","jasmine","jason","jasper","javier","jay","jayne","jean","jeanette","jeanne","jeff","jeffery","jeffrey","jen","jenna","jennie","jennifer","jenny","jeremiah","jeremy","jerilyn","jerome","jerry","jess","jesse","jessica","jessie","jill","jillian","jim","jimmy","jo","joan","joann","joanna","joanne","jocelyn","jodi","jodie","jody","joe","joel","joey","johanna","john","johnny","jon","jonathan","jonathon","jordan","jorge","jose","joseph","josephine","josh","joshua","josie","joy","joyce","juan","juanita","judith","judy","julia","julian","juliana","julianne","julie","juliet","julio","june","justin","justina","justine",
+  "kaitlin","kaitlyn","kara","karen","kari","karina","karl","karla","kate","katelyn","katherine","kathleen","kathryn","kathy","katie","katrina","kay","kayla","keith","kelli","kellie","kelly","kelsey","ken","kendra","kenneth","kenny","kent","keri","kerri","kerry","kevin","kim","kimberly","kimo","kirby","kirk","kirsten","kris","krista","kristen","kristi","kristie","kristin","kristina","kristine","kristy","kurt","kyla","kyle",
+  "lacey","lance","lane","lara","larry","laura","lauren","laurie","laverne","lawrence","lea","leah","leanne","lee","leigh","lena","leon","leonard","leonardo","leroy","leslie","liam","lianne","libby","lillian","lillie","lily","linda","lindsay","lindsey","lisa","liz","liza","lizzy","lloyd","logan","lois","lonnie","loretta","lori","lorraine","louie","louis","louisa","louise","luca","lucas","lucia","lucille","lucy","luis","luke","lydia","lynda","lynette","lynn","lynne",
+  "mabel","mack","mackenzie","macy","maddison","madeline","madison","mae","maggie","makenna","malcolm","mallory","mandy","manuel","marc","marcia","marco","marcus","margaret","margie","margo","maria","marian","marianne","marie","marilyn","marina","mario","marion","marisa","marissa","marjorie","mark","marlene","marsha","marshall","martha","martin","marty","marvin","mary","mason","mathew","matt","matthew","maureen","maurice","max","maxine","maxwell","maya","mckenzie","meagan","meg","megan","meghan","melanie","melinda","melissa","melody","mercedes","meredith","mia","micah","michael","michaela","michele","michelle","mickey","miguel","mike","mildred","miles","millie","milo","mindy","miranda","miriam","misty","mitchell","molly","mona","monica","monique","morgan","muriel","myra","myrna","myrtle",
+  "nadine","nancy","naomi","natalia","natalie","natasha","nathan","nathaniel","neal","ned","neil","nelly","nelson","neville","nicholas","nick","nicki","nicola","nicole","nikki","nina","noah","noel","noelle","nora","norma","norman",
+  "ole","olive","olivia","omar","orlando","oscar","owen",
+  "pablo","paige","pam","pamela","pat","patricia","patrick","patsy","patti","patty","paul","paula","paulette","pauline","pearl","pedro","peggy","penny","perry","pete","peter","phil","philip","phillip","phyllis","pierre","polly","priscilla",
+  "quincy","quinn",
+  "rachel","rafael","ralph","ramona","ramoni","randall","randi","randy","raquel","raul","ray","raymond","reagan","rebecca","reese","regina","reginald","rena","renee","rex","rhonda","ricardo","rich","richard","rick","ricky","riley","rita","rob","robbie","robert","roberta","robin","rocco","rochelle","rocky","rod","roderick","rodney","roger","roland","roman","ron","ronald","ronnie","rory","rosa","rosalie","rose","rosemary","rosie","ross","roxanne","roy","ruby","russ","russell","ruth","ryan",
+  "sabrina","sadie","sally","sam","samantha","samuel","sandra","sandy","santiago","sara","sarah","sasha","saul","savannah","scott","sean","selena","serena","sergio","seth","shaina","shamika","shana","shane","shannon","shari","sharon","shaun","shawn","shawna","sheila","shelby","sheldon","shelia","shelley","shelly","sheri","sherri","sherry","sheryl","shirley","sibylline","sid","sierra","silvia","simone","skylar","sonia","sonya","sophia","sophie","stacey","staci","stacie","stacy","stan","stanley","stella","steph","stephanie","stephen","steve","steven","stuart","sue","sullivan","summer","susan","susanna","susannah","susanne","susie","suzanne","suzette","suzy","sven","sydney","sylvia",
+  "tabitha","tamara","tami","tammy","tanya","tara","tasha","tatiana","taylor","ted","teresa","teri","terrance","terrence","terri","terry","tess","tessa","thad","theo","theodore","theresa","therese","thomas","tiffany","tim","timothy","tina","tj","todd","tom","tommy","toni","tony","tonya","tracey","traci","tracy","travis","trent","trevor","trey","tricia","trish","trisha","tristan","troy","trudy","tucker","tyler","tyrone",
+  "ulysses","ursula",
+  "val","valarie","valentina","valerie","vanessa","vance","verna","veronica","vicki","vickie","vicky","victor","victoria","vincent","viola","violet","virginia","vivian","viviana",
+  "wade","wallace","wally","walter","wanda","warren","wayne","wendell","wendy","wes","wesley","whitney","wilbur","will","willard","william","willie","wilma","wilson","winnie","winston","woody","wyatt",
+  "xavier","yolanda","yvette","yvonne","zachary","zach","zack","zane","zara","zoe","zoey",
+]);
+
+function isLikelyFirstName(word: string): boolean {
+  return COMMON_FIRST_NAMES.has(word.toLowerCase());
+}
+
 export function extractHighConfidenceFirstName(leaderName: string): string {
-  if (!leaderName || leaderName.trim().length < 3) return "";
+  if (!leaderName || leaderName.trim().length < 2) return "";
   const cleaned = leaderName.replace(/[\n\r]+/g, " ").trim();
+
+  if (/^(join|sign|contact|click|subscribe|welcome|login|sales|privacy|terms|resources|home|about)/i.test(cleaned)) return "";
+  if (cleaned.length > 80) return "";
+
+  const embeddedPatterns = [
+    /\bwith\s+([A-Z][a-z]{2,})\s+([A-Z][a-z]{2,})/,
+    /\bby\s+([A-Z][a-z]{2,})\s+([A-Z][a-z]{2,})/,
+    /\bfrom\s+([A-Z][a-z]{2,})\s+([A-Z][a-z]{2,})/,
+    /\bfeaturing\s+([A-Z][a-z]{2,})/i,
+  ];
+  for (const pat of embeddedPatterns) {
+    const m = pat.exec(cleaned);
+    if (m && m[1] && isLikelyFirstName(m[1])) return m[1];
+  }
+
   const words = cleaned.split(/\s+/);
-  if (words.length !== 2) return "";
-  if (!words.every(w => /^[A-Z][a-z]+$/.test(w))) return "";
-  if (words[0].length < 3 || words[1].length < 2) return "";
-  const nonPersonWords = new Set([
-    "the", "and", "for", "with", "of", "in", "on", "now", "us", "we", "our", "your", "my",
-    "join", "sign", "contact", "click", "subscribe", "welcome", "about", "home", "get", "buy",
-    "shop", "learn", "read", "view", "see", "not", "all", "new", "out", "up", "off", "how",
-    "just", "big", "old", "hot", "top", "pro", "fun", "red", "zen", "one", "two",
-    "bike", "trail", "bay", "run", "hike", "surf", "camp", "yoga", "trek", "wild", "fit",
-    "club", "team", "group", "community", "network", "collective", "tribe", "hub", "crew",
-    "outdoor", "outdoors", "adventure", "adventures", "touring", "running", "hiking", "cycling",
-    "travel", "fitness", "wellness", "coaching", "podcast", "creative", "digital", "online",
-    "wales", "texas", "mesa", "paso", "area", "north", "south", "east", "west", "mountain",
-    "church", "ministry", "faith", "sacred", "divine", "global", "world", "international",
-    "studio", "media", "productions", "academy", "school", "foundation", "institute",
-    "video", "games", "spirit", "forest", "house", "random", "beer", "tape", "duct", "comfy",
-    "cozy", "witch", "penguin", "bird", "songs", "prof", "extremely", "accurate", "gooners",
-    "university", "college", "city", "town", "county", "state", "lake", "river", "park",
-    "daily", "weekly", "super", "ultra", "mega", "mini", "tiny", "magic", "golden", "silver",
-    "little", "true", "pure", "bold", "bright", "dark", "deep", "high", "long", "great", "grand",
-    "lost", "secret", "hidden", "ancient", "royal", "holy", "free", "love", "peace",
-    "privacy", "policy", "terms", "login", "account", "logout", "register", "password",
-    "best", "lonely", "planet", "midlife", "marathoner", "backpacker", "backpacking", "around",
-    "halfway", "anywhere", "everywhere", "somewhere", "nowhere", "bigfoot",
-    "reader", "writer", "blogger", "vlogger", "gamer", "maker", "builder", "seeker",
-    "explorer", "nomad", "wanderer", "rambling", "roaming", "drifting",
-    "solo", "solo", "happy", "crazy", "funny", "lucky", "lazy",
-    "mile", "miles", "step", "steps", "page", "pages", "word", "words",
-    "improved", "health", "treasure", "books", "book", "flourish", "bedouins",
-    "simple", "modern", "classic", "essential", "ultimate", "basic", "complete",
-    "extra", "bonus", "special", "general", "total", "full", "real",
-    "rare", "earth", "sanctuary", "asia", "nasty", "backpack", "member", "directory",
-    "traveling", "suwanee", "take", "family", "families", "friends", "sisters", "brothers",
-    "nature", "animals", "sky", "ocean", "moon", "sun", "star", "fire", "water",
-    "morning", "evening", "night", "sunrise", "sunset", "dawn", "dusk",
-    "southern", "northern", "eastern", "western", "central", "upper", "lower",
-    "iron", "steel", "stone", "rock", "sand", "ice", "snow", "rain", "storm",
-    "bear", "wolf", "fox", "hawk", "eagle", "deer", "elk", "moose",
-    "meditation", "mind", "body", "soul", "heart", "zen", "karma", "dharma",
-  ]);
-  if (words.some(w => nonPersonWords.has(w.toLowerCase()))) return "";
-  return words[0];
+
+  if (words.length === 2 && /^[A-Z][a-z]+$/.test(words[0]) && /^[A-Z][a-z]+$/.test(words[1])) {
+    if (isLikelyFirstName(words[0])) return words[0];
+  }
+
+  if (words.length === 3 && words.every(w => /^[A-Z][a-z]+$/.test(w))) {
+    if (isLikelyFirstName(words[0])) return words[0];
+  }
+
+  const quotedNameMatch = cleaned.match(/^"?([A-Z][a-z]{2,})\s+(?:"[^"]*"\s+)?([A-Z][a-z]{2,})/);
+  if (quotedNameMatch && isLikelyFirstName(quotedNameMatch[1])) return quotedNameMatch[1];
+
+  const nameBeforeBrand = cleaned.match(/^([A-Z][a-z]{2,})\s+([A-Z][a-z]{2,})\s+(?:[-–—|]|Mc|mc)/);
+  if (nameBeforeBrand && isLikelyFirstName(nameBeforeBrand[1])) return nameBeforeBrand[1];
+
+  if (words.length === 1) {
+    const w = words[0];
+    if (/^[A-Z][a-z]{2,}$/.test(w) && isLikelyFirstName(w)) return w;
+
+    const camelMatch = w.match(/^([A-Z][a-z]{2,})(?=[A-Z])/);
+    if (camelMatch && isLikelyFirstName(camelMatch[1])) return camelMatch[1];
+  }
+
+  const handlePatterns = [
+    /^([a-z]{3,})(?:_|-|\d)/,
+    /^([a-z]{3,})[A-Z]/,
+  ];
+  if (words.length === 1) {
+    for (const pat of handlePatterns) {
+      const m = pat.exec(cleaned.toLowerCase());
+      if (m && m[1] && isLikelyFirstName(m[1])) {
+        return m[1].charAt(0).toUpperCase() + m[1].slice(1);
+      }
+    }
+    const lower = cleaned.toLowerCase();
+    if (lower.length >= 12 && /^[a-z]+$/.test(lower)) {
+      for (let len = 4; len <= Math.min(8, lower.length - 5); len++) {
+        const candidate = lower.substring(0, len);
+        const remainder = lower.substring(len);
+        if (isLikelyFirstName(candidate) && remainder.length >= 5 && !isLikelyFirstName(remainder)) {
+          return candidate.charAt(0).toUpperCase() + candidate.slice(1);
+        }
+      }
+    }
+  }
+
+  if (words.length >= 2) {
+    const first = words[0].replace(/[^a-zA-Z]/g, "");
+    if (/^[A-Z][a-z]{2,}$/.test(first) && isLikelyFirstName(first)) {
+      const second = words[1].replace(/[^a-zA-Z]/g, "");
+      if (/^[A-Z][a-z]+$/.test(second)) return first;
+    }
+  }
+
+  return "";
 }
 
 const SOURCE_DISPLAY: Record<string, string> = {
@@ -471,6 +530,17 @@ function buildGoogleQueries(params: RunParams): string[] {
   return unique.slice(0, 200);
 }
 
+const VALID_TLDS = new Set([
+  "com","org","net","edu","gov","mil","int","io","co","us","uk","ca","au","de","fr","es","it","nl","be","at","ch",
+  "jp","cn","kr","in","br","mx","ar","cl","za","nz","ru","pl","se","no","dk","fi","ie","pt","cz","hu","ro","bg",
+  "hr","sk","si","lt","lv","ee","is","lu","mt","cy","gr","tr","il","ae","sg","hk","tw","th","my","ph","id","vn",
+  "info","biz","name","pro","museum","coop","aero","travel","jobs","mobi","cat","asia","tel","xxx",
+  "app","dev","page","blog","shop","store","site","online","tech","design","art","yoga","club","community",
+  "me","tv","cc","ws","fm","am","ly","to","gg","ai","xyz","live","world","media","agency","studio","digital",
+  "social","network","email","space","zone","life","today","news","health","fitness","wellness","center",
+  "academy","school","church","foundation","group",
+]);
+
 function cleanExtractedEmail(raw: string): string | null {
   let e = raw.trim();
   const atIdx = e.indexOf("@");
@@ -490,25 +560,32 @@ function cleanExtractedEmail(raw: string): string | null {
     }
   }
   const dotParts = domain.split(".");
-  const tld = dotParts[dotParts.length - 1].toLowerCase();
-  if (tld.length > 10) {
-    const truncated = tld.match(/^([a-z]{2,6})/);
-    if (truncated) {
-      dotParts[dotParts.length - 1] = truncated[1];
+  let tld = dotParts[dotParts.length - 1].toLowerCase();
+  if (VALID_TLDS.has(tld)) {
+  } else if (tld.length > 6) {
+    const knownTldMatch = tld.match(/^(com|org|net|edu|gov|co|io|me|tv|uk|us|ca|au|de|fr|gg|ai|app|dev|xyz)/);
+    if (knownTldMatch) {
+      dotParts[dotParts.length - 1] = knownTldMatch[1];
       domain = dotParts.join(".");
     } else {
       return null;
     }
+  } else if (tld.length > 10) {
+    return null;
   }
   const result = `${local}@${domain}`.toLowerCase();
   const badExtensions = [".png", ".jpg", ".gif", ".jpeg", ".svg", ".webp", ".css", ".js", ".php", ".html", ".htm", ".xml", ".json", ".pdf", ".doc", ".zip"];
   if (badExtensions.some(ext => result.endsWith(ext))) return null;
   if (!/^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,10}$/.test(result)) return null;
+
+  const finalTld = result.split(".").pop() || "";
+  if (!VALID_TLDS.has(finalTld) && finalTld.length > 6) return null;
+
   return result;
 }
 
 function extractEmailsFromText(text: string): string[] {
-  const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+  const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,10}\b/g;
   const matches = text.match(emailRegex) || [];
   const cleaned: string[] = [];
   for (const raw of matches) {
@@ -2990,10 +3067,13 @@ async function scrapeSubstackWriters(
           }
 
           if (pageData.emails?.length > 0) {
-            const validEmail = pageData.emails.find((e: string) => !isBlockedEmail(e));
-            if (validEmail && !lead.email) {
-              lead.email = cleanEmail(validEmail);
-              enrichedCount++;
+            for (const rawEmail of pageData.emails) {
+              if (lead.email) break;
+              const cleaned = cleanExtractedEmail(rawEmail);
+              if (cleaned && !isBlockedEmail(cleaned)) {
+                lead.email = cleaned;
+                enrichedCount++;
+              }
             }
           }
 
