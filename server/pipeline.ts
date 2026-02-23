@@ -13,6 +13,7 @@ export const activeRunIds = new Set<number>();
 export const cancelledRunIds = new Set<number>();
 export const resumingRunIds = new Set<number>();
 
+const MAX_CONCURRENT_ACTORS = 62;
 const HEARTBEAT_INTERVAL_MS = 60_000;
 
 function startHeartbeat(runId: number): () => void {
@@ -4227,7 +4228,7 @@ async function googleSearchEnrichCreators(
   }
 
   const batchSize = 20;
-  const concurrentSearchBatches = 5;
+  const concurrentSearchBatches = 20;
   const enrichedLeadIndices = new Set<number>();
   const CIRCUIT_BREAKER_THRESHOLD = 5;
   let consecutiveSearchFailures = 0;
@@ -4409,7 +4410,7 @@ async function googleBridgeEnrichFacebookGroups(
   }
 
   const batchSize = 20;
-  const concurrentBridgeBatches = 5;
+  const concurrentBridgeBatches = 20;
   const enrichedLeadIndices = new Set<number>();
   const CIRCUIT_BREAKER_THRESHOLD = 5;
   let consecutiveFailures = 0;
@@ -5127,7 +5128,7 @@ async function crawlCreatorWebsitesForEmails(
   await appendAndSave(`Website crawl: found ${websiteEntries.length} unique personal websites to crawl`);
 
   const batchSize = 10;
-  const concurrentBatches = 5;
+  const concurrentBatches = 20;
   const allBatches: { entries: [string, string][]; batchNum: number }[] = [];
   const totalBatches = Math.ceil(websiteEntries.length / batchSize);
 
