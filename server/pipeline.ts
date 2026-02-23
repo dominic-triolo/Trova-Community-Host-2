@@ -8295,11 +8295,13 @@ export async function restartRun(runId: number): Promise<void> {
   const run = await storage.getRun(runId);
   if (!run) throw new Error(`Run ${runId} not found`);
 
+  const previousSpend = run.apifySpendUsd || 0;
+
   await storage.updateRun(runId, {
     status: "queued",
     progress: 0,
     step: "Restarting...",
-    logs: "",
+    logs: previousSpend > 0 ? `[${new Date().toLocaleTimeString("en-US", { hour12: false })}] Restarting run (preserving previous Apify spend: $${previousSpend.toFixed(2)})\n` : "",
     lastCompletedStep: "",
     startedAt: null,
     finishedAt: null,
@@ -8307,7 +8309,7 @@ export async function restartRun(runId: number): Promise<void> {
     leadsExtracted: 0,
     leadsWithEmail: 0,
     leadsWithValidEmail: 0,
-    apifySpendUsd: 0,
+    apifySpendUsd: previousSpend,
     checkpoint: null,
     completedSubSteps: [],
   });
