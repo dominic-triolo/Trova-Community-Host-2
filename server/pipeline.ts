@@ -5232,7 +5232,8 @@ async function crawlCreatorWebsitesForEmails(
   const text = footer + ' ' + header + ' ' + bodyText;
   return { url: request.url, text: text.substring(0, 8000), mailtos: mailtos };
 }`,
-      }, 300000);
+        requestHandlerTimeoutSecs: 30,
+      }, 300000, undefined, true);
       await storage.incrementApifySpend(runId, actorCost);
 
       for (const result of results) {
@@ -5693,7 +5694,7 @@ export async function runPipeline(runId: number): Promise<void> {
     let extractedPages: any[] = [];
 
     if (websiteUrls.length > 0) {
-      const extractBatchSize = 10;
+      const extractBatchSize = 5;
       const totalBatches = Math.ceil(websiteUrls.length / extractBatchSize);
 
       for (let i = 0; i < websiteUrls.length; i += extractBatchSize) {
@@ -5705,9 +5706,10 @@ export async function runPipeline(runId: number): Promise<void> {
           const { items, costUsd: actorCost } = await runActorWithWallClockTimeout("apify~cheerio-scraper", {
             startUrls: batch.map((u) => ({ url: u })),
             maxRequestsPerCrawl: batch.length * 4,
-            maxConcurrency: 30,
+            maxConcurrency: 20,
             maxRequestRetries: 1,
             timeoutSecs: 300,
+            requestHandlerTimeoutSecs: 30,
             linkSelector: "a[href]",
             pseudoUrls: batch.map((baseUrl) => {
               const base = new URL(baseUrl);
@@ -5806,7 +5808,7 @@ export async function runPipeline(runId: number): Promise<void> {
                 schemaEmails: schemaEmails,
               };
             }`,
-          }, 360000);
+          }, 360000, undefined, true);
           await storage.incrementApifySpend(runId, actorCost);
 
           const mainPages = new Map<string, any>();
@@ -5839,7 +5841,7 @@ export async function runPipeline(runId: number): Promise<void> {
           if (err.costUsd) {
             await storage.incrementApifySpend(runId, err.costUsd);
           }
-          await appendAndSave(`[ERROR] Web extraction batch ${batchNum} failed: ${err.message}`);
+          await appendAndSave(`[WARN] Web extraction batch ${batchNum} timed out: ${err.message}`);
         }
 
         const progress = 50 + Math.round((batchNum / totalBatches) * 15);

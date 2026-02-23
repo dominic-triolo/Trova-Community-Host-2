@@ -202,13 +202,15 @@ export async function runActorWithWallClockTimeout(
   input: Record<string, any>,
   wallClockMs: number,
   perResultCostUsd?: number,
+  collectPartialOnTimeout: boolean = false,
 ): Promise<ActorRunOutput> {
-  log(`[APIFY] Starting actor ${actorId} (wall-clock limit: ${Math.round(wallClockMs / 1000)}s)`, "apify");
+  log(`[APIFY] Starting actor ${actorId} (wall-clock limit: ${Math.round(wallClockMs / 1000)}s${collectPartialOnTimeout ? ", partial-collect enabled" : ""})`, "apify");
   const apifyRunId = await startActorRun(actorId, input);
   activeApifyRunIds.add(apifyRunId);
   log(`[APIFY] Run ${apifyRunId} started, waiting...`, "apify");
 
   let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+  let lastKnownCostUsd = 0;
 
   try {
     const waitPromise = waitForRun(apifyRunId, wallClockMs);
@@ -228,8 +230,12 @@ export async function runActorWithWallClockTimeout(
     if (timeoutHandle) clearTimeout(timeoutHandle);
 
     log(`[APIFY] Run ${apifyRunId} finished: ${result.status} (cost: $${result.usageTotalUsd.toFixed(4)})`, "apify");
+    lastKnownCostUsd = result.usageTotalUsd;
 
     if (result.status !== "SUCCEEDED") {
+      if (collectPartialOnTimeout) {
+        return await collectPartialResults(apifyRunId, actorId, result.status, result.usageTotalUsd, perResultCostUsd);
+      }
       const err: any = new Error(`Actor run ${apifyRunId} ended with status: ${result.status}`);
       err.costUsd = result.usageTotalUsd;
       throw err;
@@ -241,10 +247,65 @@ export async function runActorWithWallClockTimeout(
     return { items, costUsd };
   } catch (err) {
     if (timeoutHandle) clearTimeout(timeoutHandle);
+
+    if (collectPartialOnTimeout) {
+      try {
+        const partial = await collectPartialResults(apifyRunId, actorId, "WALL_CLOCK_TIMEOUT", lastKnownCostUsd, perResultCostUsd);
+        return partial;
+      } catch (fetchErr) {
+        log(`[APIFY] Failed to fetch partial results from ${apifyRunId}: ${(fetchErr as Error).message}`, "apify");
+      }
+    }
+
     throw err;
   } finally {
     activeApifyRunIds.delete(apifyRunId);
   }
+}
+
+async function fetchRunCost(runId: string): Promise<number> {
+  try {
+    const token = getToken();
+    const res = await fetch(`${APIFY_BASE}/actor-runs/${runId}?token=${token}`);
+    if (res.ok) {
+      const data = await res.json();
+      return data.data?.usageTotalUsd ?? data.data?.usageUsd ?? 0;
+    }
+  } catch {}
+  return 0;
+}
+
+async function collectPartialResults(
+  runId: string,
+  actorId: string,
+  status: string,
+  knownCostUsd: number,
+  perResultCostUsd?: number,
+): Promise<ActorRunOutput> {
+  await sleep(3000);
+
+  let costUsd = knownCostUsd;
+  if (costUsd === 0) {
+    costUsd = await fetchRunCost(runId);
+  }
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const partialItems = await getDatasetItems(runId);
+    if (partialItems.length > 0) {
+      const finalCost = perResultCostUsd ? partialItems.length * perResultCostUsd : costUsd;
+      log(`[APIFY] Collected ${partialItems.length} partial results from ${status} run ${runId} (cost: $${finalCost.toFixed(4)}, attempt ${attempt + 1})`, "apify");
+      return { items: partialItems, costUsd: finalCost };
+    }
+    if (attempt < 2) {
+      log(`[APIFY] No partial results yet from ${runId}, retrying in 3s (attempt ${attempt + 1}/3)...`, "apify");
+      await sleep(3000);
+    }
+  }
+
+  log(`[APIFY] No partial results available from ${status} run ${runId} after 3 attempts`, "apify");
+  const err: any = new Error(`Actor ${actorId} ${status} with no results (run ${runId})`);
+  err.costUsd = costUsd;
+  throw err;
 }
 
 function sleep(ms: number): Promise<void> {
