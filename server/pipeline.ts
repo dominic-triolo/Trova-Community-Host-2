@@ -128,6 +128,34 @@ function isBlockedEmail(email: string): boolean {
   return BLOCKED_EMAIL_DOMAINS.some((d) => lower.endsWith(`@${d}`));
 }
 
+const NAME_BLOCKLIST = new Set([
+  "about", "home", "contact", "welcome", "events", "calendar", "news", "blog", "faq", "faqs",
+  "mission", "vision", "bylaws", "employment", "meeting", "agendas", "parks", "recreation",
+  "coming", "soon", "update", "switching", "getting", "started", "learn", "more", "click",
+  "here", "read", "view", "sign", "join", "donate", "volunteer", "subscribe", "register",
+  "login", "menu", "search", "close", "open", "next", "previous", "back", "forward",
+  "terms", "privacy", "policy", "disclaimer", "copyright", "reserved", "rights",
+  "facebook", "twitter", "instagram", "youtube", "linkedin", "pinterest", "tiktok",
+  "association", "organization", "society", "foundation", "alliance", "coalition",
+  "committee", "commission", "department", "division", "bureau", "office", "agency",
+  "city", "town", "county", "state", "national", "federal", "government", "municipal",
+  "trail", "trails", "hiking", "running", "walking", "outdoor", "outdoors", "adventure",
+  "active", "member", "members", "membership", "annual", "board", "directors",
+]);
+
+function isValidPersonName(name: string): boolean {
+  if (!name || name.length < 4 || name.length > 40) return false;
+  const words = name.split(/\s+/);
+  if (words.length < 2 || words.length > 3) return false;
+  for (const word of words) {
+    if (word.length < 2 || word.length > 15) return false;
+    if (!/^[A-Z][a-z]+$/.test(word)) return false;
+    if (NAME_BLOCKLIST.has(word.toLowerCase())) return false;
+  }
+  if (/[A-Z]{2,}/.test(name)) return false;
+  return true;
+}
+
 function cleanEmail(email: string | undefined): string {
   if (!email) return "";
   const cleaned = email.replace(/^u003e/i, "").trim();
@@ -2027,14 +2055,17 @@ async function scrapeGoogleCommunitySearch(
 
           let leaderName = "";
           const namePatterns = [
-            /(?:founded by|organized by|led by|created by|managed by|run by|hosted by)\s*[:\-–]?\s*([A-Z][a-z]+\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/i,
-            /([A-Z][a-z]+\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s*(?:is the|,\s*(?:founder|owner|president|director|leader|organizer))/i,
+            /(?:founded by|organized by|led by|created by|managed by|run by|hosted by)\s*[:\-–]?\s*([A-Z][a-z]{1,14}\s+[A-Z][a-z]{1,14}(?:\s+[A-Z][a-z]{1,14})?)/,
+            /([A-Z][a-z]{1,14}\s+[A-Z][a-z]{1,14}(?:\s+[A-Z][a-z]{1,14})?)\s*[,\-–]\s*(?:founder|owner|president|director|leader|organizer)/,
           ];
           for (const pattern of namePatterns) {
             const nameMatch = fullText.match(pattern);
-            if (nameMatch && nameMatch[1] && nameMatch[1].length > 4 && nameMatch[1].length < 40) {
-              leaderName = nameMatch[1].trim();
-              break;
+            if (nameMatch && nameMatch[1]) {
+              const candidate = nameMatch[1].trim();
+              if (isValidPersonName(candidate)) {
+                leaderName = candidate;
+                break;
+              }
             }
           }
 
@@ -2099,13 +2130,26 @@ async function scrapeGoogleCommunitySearch(
   const { $, request } = context;
   var mailtos = [];
   $('a[href^="mailto:"]').each(function() { var h = $(this).attr('href'); if (h) mailtos.push(h.replace('mailto:', '').split('?')[0].trim()); });
+
+  var siteName = $('meta[property="og:site_name"]').attr('content') || '';
+  var pageTitle = $('title').text().trim() || '';
+  var h1Text = $('h1').first().text().trim() || '';
+
+  $('nav, [role="navigation"], .nav, .navbar, .menu, .sidebar, #sidebar, .breadcrumb, .header-nav, .site-nav, .navigation').remove();
+
+  var mainContent = '';
+  var mainEl = $('main, [role="main"], article, .content, .post-content, .entry-content, .page-content, #content');
+  if (mainEl.length > 0) {
+    mainContent = mainEl.text().replace(/\\s+/g, ' ').substring(0, 6000);
+  }
+
   var footer = $('footer').text() || '';
-  var header = $('header').text() || '';
   var bodyText = $('body').text();
-  var text = footer + ' ' + header + ' ' + bodyText;
+  var text = (mainContent || bodyText).substring(0, 8000);
+
   var links = [];
   $('a[href]').each(function() { var href = $(this).attr('href') || ''; if (href.includes('linkedin.com') || href.includes('instagram.com') || href.includes('facebook.com') || href.includes('twitter.com') || href.includes('youtube.com')) links.push(href); });
-  return { url: request.url, text: text.substring(0, 8000), mailtos: mailtos, links: links.slice(0, 50) };
+  return { url: request.url, text: text, footerText: footer.substring(0, 2000), mailtos: mailtos, links: links.slice(0, 50), siteName: siteName, pageTitle: pageTitle, h1: h1Text };
 }`,
       }, 300000);
       await storage.incrementApifySpend(runId, crawlCost);
@@ -2153,16 +2197,29 @@ async function scrapeGoogleCommunitySearch(
           }
         }
 
+        if (page.siteName && page.siteName.length >= 3 && page.siteName.length <= 80) {
+          const sn = page.siteName.trim();
+          const currentName = lead.communityName || "";
+          if (currentName.length > 50 || /\b(how to|best|top \d|guide|tips|ways to)\b/i.test(currentName) || currentName.split(" ").length > 8) {
+            lead.communityName = sn;
+          }
+        }
+
         if (!lead.leaderName && page.text) {
+          const cleanedText = (page.text || "").replace(/[\n\r\t]+/g, " ").replace(/\s{3,}/g, " ");
           const namePatterns = [
-            /(?:founded by|organized by|led by|created by|managed by|run by|hosted by|president|director|chairman)\s*[:\-–]?\s*([A-Z][a-z]+\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/i,
-            /([A-Z][a-z]+\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s*(?:is the|,\s*(?:founder|president|director|chairman|organizer|leader))/i,
+            /(?:founded by|organized by|led by|created by|managed by|run by|hosted by)\s*[:\-–]?\s*([A-Z][a-z]{1,14}\s+[A-Z][a-z]{1,14}(?:\s+[A-Z][a-z]{1,14})?)/,
+            /(?:president|director|chairman|executive director|founder|organizer|coordinator)[:\s\-–]+([A-Z][a-z]{1,14}\s+[A-Z][a-z]{1,14}(?:\s+[A-Z][a-z]{1,14})?)/,
+            /([A-Z][a-z]{1,14}\s+[A-Z][a-z]{1,14}(?:\s+[A-Z][a-z]{1,14})?)\s*[,\-–]\s*(?:founder|president|director|chairman|organizer|leader|executive director|coordinator)/,
           ];
           for (const pattern of namePatterns) {
-            const nameMatch = (page.text || "").match(pattern);
-            if (nameMatch && nameMatch[1] && nameMatch[1].length > 4 && nameMatch[1].length < 40) {
-              lead.leaderName = nameMatch[1].trim();
-              break;
+            const nameMatch = cleanedText.match(pattern);
+            if (nameMatch && nameMatch[1]) {
+              const candidate = nameMatch[1].trim();
+              if (isValidPersonName(candidate)) {
+                lead.leaderName = candidate;
+                break;
+              }
             }
           }
         }
