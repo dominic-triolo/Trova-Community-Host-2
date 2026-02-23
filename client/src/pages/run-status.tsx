@@ -11,6 +11,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { useState, useEffect } from "react";
 import {
   ArrowLeft,
   CheckCircle2,
@@ -29,7 +30,37 @@ import {
   Play,
   RotateCcw,
   Sparkles,
+  Timer,
 } from "lucide-react";
+
+function formatDuration(ms: number): string {
+  const totalSeconds = Math.floor(ms / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+}
+
+function RunTimer({ startedAt, finishedAt, status }: { startedAt: string | null; finishedAt: string | null; status: string }) {
+  const isActive = status === "running" || status === "queued";
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    if (!isActive) return;
+    const interval = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(interval);
+  }, [isActive]);
+
+  if (!startedAt) return <span className="text-lg font-semibold" data-testid="text-run-time">--</span>;
+
+  const start = new Date(startedAt).getTime();
+  const end = finishedAt ? new Date(finishedAt).getTime() : now;
+  const duration = Math.max(0, end - start);
+
+  return <span className="text-lg font-semibold" data-testid="text-run-time">{formatDuration(duration)}</span>;
+}
 
 function StatusBadge({ status }: { status: string }) {
   const variants: Record<string, { variant: "default" | "secondary" | "destructive" | "outline"; icon: typeof Clock }> = {
@@ -326,6 +357,13 @@ export default function RunStatus() {
                 <span className="text-sm font-normal text-muted-foreground"> / ${((run as any).budgetUsd || 0).toFixed(2)}</span>
               )}
             </p>
+          </Card>
+          <Card className="p-3 space-y-1">
+            <div className="flex items-center gap-1.5 text-muted-foreground">
+              <Timer className="w-3.5 h-3.5" />
+              <span className="text-xs">Run Time</span>
+            </div>
+            <RunTimer startedAt={(run as any).startedAt} finishedAt={(run as any).finishedAt} status={run.status} />
           </Card>
         </div>
 

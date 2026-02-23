@@ -15,7 +15,28 @@ import {
   Activity,
   AlertTriangle,
   StopCircle,
+  Timer,
 } from "lucide-react";
+
+function formatDuration(ms: number): string {
+  const totalSeconds = Math.floor(ms / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+}
+
+function getRunDuration(run: Run): string | null {
+  const startedAt = (run as any).startedAt;
+  if (!startedAt) return null;
+  const start = new Date(startedAt).getTime();
+  const finishedAt = (run as any).finishedAt;
+  const isActive = run.status === "running" || run.status === "queued";
+  const end = finishedAt ? new Date(finishedAt).getTime() : (isActive ? Date.now() : start);
+  return formatDuration(Math.max(0, end - start));
+}
 
 function statusIcon(status: string) {
   switch (status) {
@@ -103,6 +124,12 @@ export default function RunsList() {
                         <p>{(run as any).leadsWithEmail || 0} emails{(run as any).leadsWithValidEmail > 0 && ` (${(run as any).leadsWithValidEmail} valid)`}</p>
                         {((run as any).apifySpendUsd > 0) && (
                           <p>${((run as any).apifySpendUsd || 0).toFixed(2)} Apify</p>
+                        )}
+                        {getRunDuration(run) && (
+                          <p className="flex items-center justify-end gap-1" data-testid={`text-run-time-${run.id}`}>
+                            <Timer className="w-3 h-3" />
+                            {getRunDuration(run)}
+                          </p>
                         )}
                       </div>
                       <ArrowRight className="w-4 h-4 text-muted-foreground" />
