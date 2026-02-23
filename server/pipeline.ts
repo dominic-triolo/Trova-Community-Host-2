@@ -15,6 +15,8 @@ export const resumingRunIds = new Set<number>();
 
 const MAX_CONCURRENT_ACTORS = 62;
 const HEARTBEAT_INTERVAL_MS = 60_000;
+const PLATFORM_TIMEOUT_MS = 180_000;
+const MIN_BUDGET_FOR_APIFY_CALL = 0.02;
 
 function startHeartbeat(runId: number): () => void {
   const update = () => {
@@ -53,6 +55,24 @@ async function isValidEmailTargetReached(runId: number): Promise<boolean> {
   if (!run || !run.emailTarget || run.emailTarget <= 0) return false;
   const validEmails = run.leadsWithValidEmail || 0;
   return validEmails >= run.emailTarget;
+}
+
+async function hasBudgetForApifyCall(runId: number, estimatedCost: number = MIN_BUDGET_FOR_APIFY_CALL): Promise<boolean> {
+  const { isAutonomous, budgetUsd, spentUsd } = await getRunBudgetInfo(runId);
+  if (!isAutonomous || budgetUsd <= 0) return true;
+  return (spentUsd + estimatedCost) <= budgetUsd * 1.05;
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${Math.round(ms / 1000)}s`));
+    }, ms);
+    promise.then(
+      (val) => { clearTimeout(timer); resolve(val); },
+      (err) => { clearTimeout(timer); reject(err); },
+    );
+  });
 }
 
 async function markStepComplete(runId: number, step: PipelineStep): Promise<void> {
@@ -5359,46 +5379,63 @@ export async function runPipeline(runId: number): Promise<void> {
     const getMaxForPlatform = (platform: string) => platformMaxLeads.get(platform) || defaultMaxPerPlatform;
 
     const platformTasks: { name: string; promise: Promise<PlatformLead[]> }[] = [];
+    const wrapPlatform = (name: string, fn: () => Promise<PlatformLead[]>) => {
+      platformTasks.push({
+        name,
+        promise: withTimeout(
+          (async () => {
+            if (!(await hasBudgetForApifyCall(runId))) {
+              await appendAndSave(`[SKIP] ${name}: budget exhausted, skipping`);
+              return [];
+            }
+            return fn();
+          })(),
+          PLATFORM_TIMEOUT_MS,
+          name,
+        ),
+      });
+    };
+
     if (enabledSources.includes("meetup")) {
-      platformTasks.push({ name: "Meetup", promise: scrapeMeetupGroups(runId, keywords, geos, getMaxForPlatform("meetup"), (msg) => appendAndSave(msg)) });
+      wrapPlatform("Meetup", () => scrapeMeetupGroups(runId, keywords, geos, getMaxForPlatform("meetup"), (msg) => appendAndSave(msg)));
     }
     if (enabledSources.includes("youtube")) {
-      platformTasks.push({ name: "YouTube", promise: scrapeYouTubeChannels(runId, keywords, getMaxForPlatform("youtube"), (msg) => appendAndSave(msg)) });
+      wrapPlatform("YouTube", () => scrapeYouTubeChannels(runId, keywords, getMaxForPlatform("youtube"), (msg) => appendAndSave(msg)));
     }
     if (enabledSources.includes("reddit")) {
-      platformTasks.push({ name: "Reddit", promise: scrapeRedditCommunities(runId, keywords, getMaxForPlatform("reddit"), (msg) => appendAndSave(msg)) });
+      wrapPlatform("Reddit", () => scrapeRedditCommunities(runId, keywords, getMaxForPlatform("reddit"), (msg) => appendAndSave(msg)));
     }
     if (enabledSources.includes("eventbrite")) {
-      platformTasks.push({ name: "Eventbrite", promise: scrapeEventbriteEvents(runId, keywords, geos, getMaxForPlatform("eventbrite"), (msg) => appendAndSave(msg)) });
+      wrapPlatform("Eventbrite", () => scrapeEventbriteEvents(runId, keywords, geos, getMaxForPlatform("eventbrite"), (msg) => appendAndSave(msg)));
     }
     if (enabledSources.includes("facebook")) {
-      platformTasks.push({ name: "Facebook", promise: scrapeFacebookGroups(runId, keywords, getMaxForPlatform("facebook"), (msg) => appendAndSave(msg), {
+      wrapPlatform("Facebook", () => scrapeFacebookGroups(runId, keywords, getMaxForPlatform("facebook"), (msg) => appendAndSave(msg), {
         minMemberCount: params.minMemberCount || 0,
         maxMemberCount: params.maxMemberCount || 0,
         geos,
-      }) });
+      }));
     }
     if (enabledSources.includes("patreon")) {
-      platformTasks.push({ name: "Patreon", promise: scrapePatreonCreators(runId, keywords, getMaxForPlatform("patreon"), (msg) => appendAndSave(msg), {
+      wrapPlatform("Patreon", () => scrapePatreonCreators(runId, keywords, getMaxForPlatform("patreon"), (msg) => appendAndSave(msg), {
         minMemberCount: params.minMemberCount || 0,
         maxMemberCount: params.maxMemberCount || 0,
         minPostCount: params.minPostCount || 0,
-      }) });
+      }));
     }
     if (enabledSources.includes("podcast")) {
-      platformTasks.push({ name: "Podcasts", promise: scrapeApplePodcasts(runId, keywords, getMaxForPlatform("podcast"), (msg) => appendAndSave(msg), {
+      wrapPlatform("Podcasts", () => scrapeApplePodcasts(runId, keywords, getMaxForPlatform("podcast"), (msg) => appendAndSave(msg), {
         minEpisodeCount: params.minEpisodeCount || 0,
         podcastCountry: params.podcastCountry || "US",
-      }) });
+      }));
     }
     if (enabledSources.includes("substack")) {
-      platformTasks.push({ name: "Substack", promise: scrapeSubstackWriters(runId, keywords, getMaxForPlatform("substack"), (msg) => appendAndSave(msg)) });
+      wrapPlatform("Substack", () => scrapeSubstackWriters(runId, keywords, getMaxForPlatform("substack"), (msg) => appendAndSave(msg)));
     }
     if (enabledSources.includes("mighty")) {
-      platformTasks.push({ name: "Mighty Networks", promise: scrapeMightyNetworks(runId, keywords, getMaxForPlatform("mighty"), (msg) => appendAndSave(msg), params.seedGeos || []) });
+      wrapPlatform("Mighty Networks", () => scrapeMightyNetworks(runId, keywords, getMaxForPlatform("mighty"), (msg) => appendAndSave(msg), params.seedGeos || []));
     }
     if (enabledSources.includes("google")) {
-      platformTasks.push({ name: "Google Community Search", promise: scrapeGoogleCommunitySearch(runId, keywords, geos, getMaxForPlatform("google"), (msg) => appendAndSave(msg)) });
+      wrapPlatform("Google Community Search", () => scrapeGoogleCommunitySearch(runId, keywords, geos, getMaxForPlatform("google"), (msg) => appendAndSave(msg)));
     }
 
     if (platformTasks.length === 0) {
@@ -5625,6 +5662,10 @@ export async function runPipeline(runId: number): Promise<void> {
     for (let batchIdx = 0; batchIdx < queryBatches.length; batchIdx++) {
       const batch = queryBatches[batchIdx];
       if (allDiscoveredUrls.length >= params.maxDiscoveredUrls) break;
+      if (!(await hasBudgetForApifyCall(runId, 0.05))) {
+        await appendAndSave(`[SKIP] Google Search batch ${batchIdx + 1}: budget exhausted`);
+        break;
+      }
 
       try {
         await appendAndSave(`Google Search batch ${batchIdx + 1}/${queryBatches.length} (${batch.length} queries)`);
@@ -5706,6 +5747,10 @@ export async function runPipeline(runId: number): Promise<void> {
       for (let i = 0; i < websiteUrls.length; i += extractBatchSize) {
         const batch = websiteUrls.slice(i, i + extractBatchSize);
         const batchNum = Math.floor(i / extractBatchSize) + 1;
+        if (!(await hasBudgetForApifyCall(runId, 0.05))) {
+          await appendAndSave(`[SKIP] Web extraction batch ${batchNum}: budget exhausted`);
+          break;
+        }
         try {
           await appendAndSave(`Extracting ${batch.length} websites (batch ${batchNum}/${totalBatches})`);
 
@@ -6263,7 +6308,7 @@ export async function runPipeline(runId: number): Promise<void> {
         }).filter((d) => d && isEnrichableDomain(d))
       ));
 
-      if (domains.length > 0) {
+      if (domains.length > 0 && (await hasBudgetForApifyCall(runId, 0.10))) {
         try {
           const { items: finderResults, costUsd: actorCost } = await runActorAndGetResults("code_crafter~leads-finder", {
             company_domain: domains,

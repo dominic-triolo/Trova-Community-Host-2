@@ -174,6 +174,15 @@ export async function runActorAndGetResults(actorId: string, input: Record<strin
     log(`[APIFY] Run ${runId} finished: ${result.status} (cost: $${result.usageTotalUsd.toFixed(4)})`, "apify");
 
     if (result.status !== "SUCCEEDED") {
+      try {
+        const partial = await collectPartialResults(runId, actorId, result.status, result.usageTotalUsd, perResultCostUsd);
+        if (partial.items.length > 0) {
+          log(`[APIFY] Salvaged ${partial.items.length} partial results from failed run ${runId}`, "apify");
+          return partial;
+        }
+      } catch (partialErr) {
+        log(`[APIFY] Failed to collect partial results from ${runId}: ${(partialErr as Error).message}`, "apify");
+      }
       const err: any = new Error(`Actor run ${runId} ended with status: ${result.status}`);
       err.costUsd = result.usageTotalUsd;
       throw err;

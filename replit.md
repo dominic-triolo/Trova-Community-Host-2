@@ -41,7 +41,8 @@ The application design emphasizes resilience with features like heartbeats, auto
 - **Autonomous mode defaults**: All platforms enabled except Podcast by default
 - **Platform stats**: All 7 platforms (including Google) show yield rates and cost per email in autonomous mode
 - **Auto-resume resilience**: On server startup, auto-resumes both stale "running" runs AND recent "interrupted" runs (within 30 minutes of last activity) to survive production SIGTERM events. Both startup and watchdog auto-resume include restart fallback when no checkpoint exists.
-- **Apify concurrency increased**: Global limit 128 actors, MAX_CONCURRENT_ACTORS=62 per run (supports 2 simultaneous runs). Parallel batch concurrency 4x'd: concurrentSearchBatches=20, concurrentBridgeBatches=20, concurrentBatches(website crawl)=20. Peak per run ~21 actors.
+- **Apify concurrency increased**: Global limit 128 actors, MAX_CONCURRENT_ACTORS=62 per run (supports 2 simultaneous runs). Parallel batch concurrency 4x'd: concurrentSearchBatches=20, concurrentBridgeBatches=10, concurrentBatches(website crawl)=20. Peak per run ~21 actors.
+- **Pipeline resilience improvements**: Per-platform 3-minute timeout wrappers (platforms can't hang forever), universal partial result recovery on all Apify calls (salvages data from failed/timed-out actor runs), pre-call budget guards before every major Apify invocation (prevents wasted spend), Google Bridge 10-minute time cap and total-failure circuit breaker.
 
 ## External Dependencies
 - **Apify API:** Used extensively for data collection through various actors (`apify~google-search-scraper`, `apify~cheerio-scraper`, `streamers~youtube-scraper`, `louisdeconinck~patreon-scraper`, `apify/instagram-profile-scraper`, `apidojo/twitter-user-scraper`, `benthepythondev/podcast-intelligence-aggregator`, `code_crafter~leads-finder`).
